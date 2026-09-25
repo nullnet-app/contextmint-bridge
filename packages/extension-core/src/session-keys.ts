@@ -2,7 +2,7 @@
  * Per-mcpId session state on the extension side. Stores the AES-256-GCM
  * session key plus monotonic outbound seq and replay-rejecting inbound seq.
  *
- * Mirrors packages/server/src/session.ts on the MCP side, including the
+ * Mirrors chrischall/fetchproxy packages/server/src/session.ts on the MCP side, including the
  * two-call inbound gate: `claimInboundSeq` before the AES-GCM open, then
  * `commitInboundSeq` once it has authenticated or `releaseInboundSeq` when it
  * has not, so a frame that never authenticated cannot move the counter past
@@ -23,7 +23,7 @@
 
 /**
  * How many inbound seqs may be claimed but not yet resolved at one time.
- * See the same constant in packages/server/src/session.ts — the set is
+ * See the same constant in fetchproxy's packages/server/src/session.ts — the set is
  * self-draining, and this is the bound that keeps a flood of frames that
  * never open from turning it into a leak.
  */
@@ -31,7 +31,7 @@ const MAX_INFLIGHT_INBOUND_SEQS = 1024;
 
 /**
  * What {@link SessionEntry.claimInboundSeq} decided — the same three verdicts
- * as `InboundClaim` in packages/server/src/session.ts. `'saturated'` is logged
+ * as `InboundClaim` in fetchproxy's packages/server/src/session.ts. `'saturated'` is logged
  * by the caller, since otherwise a flood is indistinguishable from a replay.
  */
 export type InboundClaim = 'ok' | 'replay' | 'saturated';
@@ -50,7 +50,8 @@ export class SessionEntry {
   /**
    * Whether the caller holding this claim verdict should log saturation now —
    * true only on the transition into it, re-armed by the next `'ok'` claim.
-   * The same latch as `saturationWarningDue` in packages/server/src/session.ts
+   * The same latch as `saturationWarningDue` in fetchproxy's
+   * packages/server/src/session.ts
    * (#376), which says why.
    */
   saturationWarningDue(claim: InboundClaim): boolean {

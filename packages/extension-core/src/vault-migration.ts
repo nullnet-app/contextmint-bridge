@@ -46,7 +46,7 @@
  * content script planted BEFORE the upgrade — that storage was writable by
  * design until now. It imports what an existing user has, so no one has to
  * re-pair, and the exposure it closes is from the upgrade onward
- * (SECURITY.md §Defense 4).
+ * (chrischall/fetchproxy docs/SECURITY.md §Defense 4).
  *
  * Memoised per IndexedDB factory (= per profile) so the many callers that
  * need the vault ready — identity load, trust store, remote targets, popup —

@@ -13,7 +13,7 @@ import {
   PROTOCOL_VERSION,
   type RawKeyPair,
 } from '@fetchproxy/protocol';
-import { v3ServerHello } from '../../../server/tests/cross-version/v3-fixtures.js';
+import { v3ServerHello } from './v3-fixtures.js';
 import { loadOrCreateExtensionIdentity } from '../../src/extension-identity.js';
 import { freshVault } from '../helpers/vault.js';
 
@@ -21,13 +21,14 @@ import { freshVault } from '../helpers/vault.js';
  * Case 2 of the plan's Group 5: a v3 MCP meeting a v4 extension, held to the
  * FROZEN corpus.
  *
- * The corpus lives in the server package
- * (`packages/server/tests/cross-version/v3-fixtures.ts`) and is imported here
- * rather than copied, because two frozen corpora are two things to let drift
- * and the whole point of the freeze is that both ends of the bridge are
- * refusing the same bytes. That module imports nothing, so pulling it across a
- * package boundary drags no version of anything with it — which is the same
- * property its own suite asserts on its source.
+ * The corpus lives in chrischall/fetchproxy's server package
+ * (`packages/server/tests/cross-version/v3-fixtures.ts`). Before the extension
+ * moved to its own repo it was imported from there rather than copied; now
+ * `./v3-fixtures.ts` beside this file is a VENDORED verbatim copy, because the
+ * point of the freeze is that both ends of the bridge refuse the same bytes.
+ * That module imports nothing, so it drags no version of anything with it —
+ * the property its upstream suite asserts on its source. Never edit the copy;
+ * re-copy it whole if upstream ever extends the corpus.
  *
  * Why the case is here and not beside cases 1, 3 and 4: the harness is the
  * extension's service worker — a fake `WebSocket`, a stubbed `chrome.*`, and
