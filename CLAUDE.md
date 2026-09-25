@@ -71,6 +71,13 @@ fetchproxy's; compatibility is the protocol number, not a version comparison.
 delete it once v1.0.0 ships (`tests/release-workflow.test.ts` fails if it
 outlives a manifest of 1.0.0).
 
+## Icons
+
+The extension icons in `packages/extension-chrome/icons/` are copies of the
+ContextMint Bridge mark from `chrischall/nullnet-design-system`
+(`system/assets/contextmint-bridge-icon-*`), which is the source of truth.
+Never redraw or edit them here: change the design system, then re-copy.
+
 ## Testing
 
 Tests live in `packages/<pkg>/tests/` (plus root `tests/` for doc guards).
