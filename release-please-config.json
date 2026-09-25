@@ -1,0 +1,45 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "//": [
+    "release-as 1.0.0 forces the FIRST bridge release to 1.0.0 (a fresh product, not fetchproxy 3.x).",
+    "DELETE `release-as` once v1.0.0 is released, or every later release stays pinned to 1.0.0;",
+    "tests/release-workflow.test.ts fails if it survives past a manifest of 1.0.0.",
+    "bootstrap-sha is the last fetchproxy commit (release 3.2.2) before the split, so the first",
+    "changelog starts at the split instead of replaying fetchproxy's history."
+  ],
+  "bootstrap-sha": "e874c87e5746659474610fa443d026bc3f512791",
+  "packages": {
+    ".": {
+      "package-name": "contextmint-bridge",
+      "release-type": "node",
+      "release-as": "1.0.0",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "packages/extension-chrome/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages/extension-chrome/manifest.json",
+          "jsonpath": "$.version"
+        },
+        { "type": "json", "path": "packages/extension-core/package.json", "jsonpath": "$.version" }
+      ]
+    }
+  },
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "refactor", "section": "Refactor" },
+    { "type": "docs", "section": "Documentation" },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "build", "section": "Build", "hidden": true },
+    { "type": "ci", "section": "CI", "hidden": true },
+    { "type": "chore", "section": "Chores", "hidden": true }
+  ]
+}
