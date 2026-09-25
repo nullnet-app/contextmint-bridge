@@ -42,6 +42,7 @@ import {
 import type { ChromeApi } from '../chrome-api.js';
 import { bridgeSubprotocols, type RemoteTarget } from '../remote-targets.js';
 import { loadRemoteTargets } from '../vault-records.js';
+import { currentPlatform } from '../platform.js';
 // `MIN_SERVER_VERSION` — the `@fetchproxy/server` version at which protocol 4
 // lands — is named in the refusal below, because a version number with no
 // remedy beside it is a diagnosis the reader cannot act on. It lives in
@@ -207,7 +208,8 @@ function connectLink(link: Link): void {
       type: 'hello',
       protocolVersion: PROTOCOL_VERSION,
       role: 'extension',
-      platform: 'chrome',
+      // From the build's esbuild define, never a literal — see platform.ts.
+      platform: currentPlatform(),
       extensionId: 'fetchproxy',
       version: chrome.runtime.getManifest().version,
       identityX25519Pub: toB64(state.extIdentity.x25519Pub),
