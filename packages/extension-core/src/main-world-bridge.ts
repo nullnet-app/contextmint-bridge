@@ -168,11 +168,13 @@ async function injectNewlyCovered(
   after: string[],
 ): Promise<void> {
   const added = after.filter((p) => !before.includes(p));
-  const query = api().tabs?.query;
-  if (added.length === 0 || typeof s.executeScript !== 'function' || typeof query !== 'function') {
+  // Call tabs.query ON chrome.tabs, never detached: Safari's implementation
+  // needs its receiver and resolves undefined when called unbound.
+  const tabsApi = api().tabs;
+  if (added.length === 0 || typeof s.executeScript !== 'function' || typeof tabsApi?.query !== 'function') {
     return;
   }
-  const tabs = await query({});
+  const tabs = (await tabsApi.query({})) ?? [];
   for (const tab of tabs) {
     if (typeof tab.id !== 'number' || !isInjectableUrl(tab.url)) continue;
     const url = tab.url ?? '';
