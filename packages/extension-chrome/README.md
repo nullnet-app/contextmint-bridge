@@ -40,6 +40,16 @@ dist/
   icons/
 ```
 
+## Icons
+
+`icons/` (`16.png`, `32.png`, `48.png`, `128.png`, `icon.svg`) is the ContextMint
+Bridge "Cursor C" mark, copied from the nullnet design system — the source of
+truth is [`chrischall/nullnet-design-system`](https://github.com/chrischall/nullnet-design-system)
+`system/assets/contextmint-bridge-icon-{16,32,48,128}.png` and
+`contextmint-bridge-icon.svg`. Change the mark there, then re-copy the files
+here; never edit them in this repo. `tests/manifest-icons.test.ts` checks every
+icon the manifest declares exists and is a PNG of its declared size.
+
 ## Install (developer / sideload)
 
 The sideload steps live in the [repo README](../../README.md#install-developer--sideload):
