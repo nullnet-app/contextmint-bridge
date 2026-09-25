@@ -124,7 +124,7 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
   // like any other wrong answer.
   //
   // On the SPELLING rather than the bytes, like Rule B's gate at the host
-  // (`server/src/host.ts`, which carries the full reasoning and the repair):
+  // (chrischall/fetchproxy `packages/server/src/host.ts`, which carries the full reasoning and the repair):
   // `answersNoExtSession` decodes because it judges a value against a
   // CONSTANT with more than one valid spelling, while this comparison judges
   // two values that both came out of `toB64`, the cohort's single base64

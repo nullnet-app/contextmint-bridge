@@ -324,7 +324,8 @@ export async function handleServerHello(
     // X25519 hash, and auto-trusts with no prompt.
     //
     // The MCP side has held both keys to this rule since 1.12.0, and says why
-    // in `decideExtensionTrust` (`server/src/extension-trust.ts`): "Both keys,
+    // in `decideExtensionTrust` (chrischall/fetchproxy
+    // `packages/server/src/extension-trust.ts`): "Both keys,
     // not either: a rotation of one is a different extension, and accepting a
     // half-match would let an attacker keep the ECDH key it needs while
     // swapping the signing key it doesn't hold, or the reverse." That is the

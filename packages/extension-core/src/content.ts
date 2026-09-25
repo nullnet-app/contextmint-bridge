@@ -710,7 +710,7 @@ export function runInPageFetch(
           return;
         }
         // At least as strict as the WIRE's own check: `assertPositiveInt`
-        // (protocol/src/validate.ts) requires an integer > 0. A finite-number
+        // (@fetchproxy/protocol's src/validate.ts) requires an integer > 0. A finite-number
         // test would pass 0, a negative and a fractional status, and the frame
         // built from one is rejected inside the host's message handler — whose
         // catch closes the concentrator socket (1011) for every MCP sharing it.

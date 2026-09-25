@@ -130,7 +130,7 @@ describe('runInPageFetch (isolated → MAIN relay)', () => {
   /**
    * The isolated world's status check must be AT LEAST as strict as the wire's.
    *
-   * `assertPositiveInt` (protocol/src/validate.ts) requires an integer > 0. A
+   * `assertPositiveInt` (@fetchproxy/protocol's src/validate.ts) requires an integer > 0. A
    * check that only asks for a finite number lets 0, a negative and a
    * fractional status through — and the frame those build is rejected at the
    * server, inside the host's message handler, whose catch closes the

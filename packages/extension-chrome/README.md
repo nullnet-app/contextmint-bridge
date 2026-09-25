@@ -20,8 +20,8 @@ cd packages/extension-chrome
 npx tsx build.ts
 ```
 
-That is the **release** build: no sourcemaps, because the release workflow zips
-`dist/` with this same plain command, so whatever the default is, is what
+That is the **release** build: no sourcemaps, because the release zip is made
+from `dist/` built with this same plain command, so whatever the default is, is what
 ships. For a debuggable bundle add `--dev` (or run
 `npm --workspace=@fetchproxy/extension-chrome run build:dev`), which inlines
 the sourcemaps and takes `background.js` from ~147 KB to ~790 KB. Both halves
@@ -55,7 +55,7 @@ Each release also publishes a packaged `fetchproxy-extension-${VERSION}.zip` on 
 to one: extension **3.x** (3.0.0+) speaks fetchproxy **protocol 4** and pairs
 with `@fetchproxy/server` **3.x**; extension 2.x speaks protocol 3 and pairs
 with 2.x. Nothing negotiates down — a v4 extension that still accepted v3 would
-*be* the downgrade path, since a relay that can rewrite frames can rewrite the
+_be_ the downgrade path, since a relay that can rewrite frames can rewrite the
 version it advertises. A mismatched pair is refused at the hello, naming both
 numbers: this extension answers a v3 MCP on the wire with `protocol version
 mismatch: this browser extension speaks fetchproxy protocol 4, this MCP speaks
@@ -84,7 +84,7 @@ rule out when a change "did nothing".
 - `host_permissions: ["<all_urls>"]` — required because per-MCP domains are dynamic and enforced inside the extension, not statically in the manifest.
 - `content_scripts` registers the isolated-world dispatcher (`content.js`) at `<all_urls>`. Routing/allowlist enforcement happens inside the script once the background dispatches a request. The MAIN-world bridge (`capture-logger.js`) is deliberately **not** in the manifest: its `postMessage` bridges answer any page that asks, so on `<all_urls>` every site could detect the extension. The service worker registers it with `chrome.scripting.registerContentScripts` (already covered by `permissions: ["scripting"]`) only on the hosts of approved MCPs — see `extension-core/src/main-world-bridge.ts` and [`docs/SECURITY.md` §T7](https://github.com/chrischall/fetchproxy/blob/main/docs/SECURITY.md) in chrischall/fetchproxy.
 - `permissions: ["alarms"]` — used solely for the MV3 service-worker keepalive (`chrome.alarms` ticks every ~24s to wake the SW from idle so the WS bridge stays reachable between bursts of MCP traffic). No alarm payload, no scheduling beyond the single keepalive.
-- `permissions: ["downloads"]` — backs the `download` capability: `chrome.downloads.download` lets the BROWSER fetch a declared-domain URL with the user's real cookies + TLS/JA3 fingerprint, clearing a Cloudflare bot-challenge a page-level `fetch()` (cors) cannot. Only used when an MCP declares `download`; the extension returns the saved local file path (the bridge is loopback-only, so the MCP reads it from the same disk) and erases only the download *record*, leaving the file for the MCP to move.
+- `permissions: ["downloads"]` — backs the `download` capability: `chrome.downloads.download` lets the BROWSER fetch a declared-domain URL with the user's real cookies + TLS/JA3 fingerprint, clearing a Cloudflare bot-challenge a page-level `fetch()` (cors) cannot. Only used when an MCP declares `download`; the extension returns the saved local file path (the bridge is loopback-only, so the MCP reads it from the same disk) and erases only the download _record_, leaving the file for the MCP to move.
 - **`write_cookies` needs NO new permission**, but it is new `chrome.*` surface: `permissions: ["cookies"]` was already granted for `chrome.cookies.get` (the HttpOnly-visible read path), and the capability adds `chrome.cookies.set` on top of it. It is the only verb in the protocol that CHANGES browser state rather than reading it, and it is deliberately narrow: it overwrites the value of a cookie that already exists, on a declared domain, whose name is already in the MCP's declared `cookieKeys` — it cannot create cookies or reach one the MCP could not already read. See [`docs/SECURITY.md` §T-cookie-write](https://github.com/chrischall/fetchproxy/blob/main/docs/SECURITY.md#t-cookie-write--write_cookies-capability-misuse).
 - **`graphql` needs NO new permission.** The capability rides on infrastructure the manifest already ships: `capture-logger.js` is already registered (at runtime, via `permissions: ["scripting"]`) as a `world: MAIN`, `document_start` script on each approved MCP's hosts. `graphql` extends that same MAIN-world script into a request/response RPC bridge (isolated ⇄ MAIN via `window.postMessage`, gated by strict origin/type/source checks) that invokes the page's own `window.__APOLLO_CLIENT__` for a declared operation — no new manifest entry required.
 - `permissions: ["tabGroups"]` — backs the relay tab group. `ensureDomainTab` opens its tab with `active: false` (a relay tab is machinery, not somewhere the person asked to go, so it must not steal focus) and files it into one titled **"fetchproxy"** group via `chrome.tabs.group`; `tabGroups` is needed only for `chrome.tabGroups.query`/`update`, i.e. to FIND the existing group and set its title and colour. It reads and titles the extension's own group and nothing else — it cannot read page content, and the grouping is best-effort: a browser without the API, or a build without this permission, still gets its relay tab ungrouped.
@@ -101,12 +101,12 @@ upgrade.
 
 **What carries over:**
 
-| Item | Carries over? |
-|---|---|
-| MCP-side identity keys (`~/.fetchproxy/identity/`) | Yes — outside the extension |
-| MCP-captured sessions (e.g. `~/.honeybook-mcp/`) | Yes — outside the extension |
-| Extension identity keypair | No — CWS install starts fresh |
-| Per-MCP trust records | No — stored in the old extension's own IndexedDB |
+| Item                                               | Carries over?                                    |
+| -------------------------------------------------- | ------------------------------------------------ |
+| MCP-side identity keys (`~/.fetchproxy/identity/`) | Yes — outside the extension                      |
+| MCP-captured sessions (e.g. `~/.honeybook-mcp/`)   | Yes — outside the extension                      |
+| Extension identity keypair                         | No — CWS install starts fresh                    |
+| Per-MCP trust records                              | No — stored in the old extension's own IndexedDB |
 
 **What to do:**
 

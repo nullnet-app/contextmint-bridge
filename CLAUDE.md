@@ -19,20 +19,20 @@ and the protocol reference (`docs/PROTOCOL.md`) all still live in fetchproxy.
 
 ## Packages
 
-| Package | What it does |
-|---|---|
-| `packages/extension-core` (`@fetchproxy/extension-core`) | Browser-agnostic business logic: the service worker (`src/background/`), `handleServerHello` (the security-critical pair / auto-trust decision, `src/background/hello.ts`), the trust store and IndexedDB vault, session keys, the content scripts, popup rendering, badge logic. Tested under vitest with mocked `chrome.*` globals. `private`, never published. |
-| `packages/extension-chrome` (`@fetchproxy/extension-chrome`) | Thin Chrome MV3 wrapper: esbuild bundling (`build.ts`), `manifest.json`, icons. Produces `packages/extension-chrome/dist/` for sideloading and the release `.zip`. `private`, never published. |
+| Package                                                      | What it does                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/extension-core` (`@fetchproxy/extension-core`)     | Browser-agnostic business logic: the service worker (`src/background/`), `handleServerHello` (the security-critical pair / auto-trust decision, `src/background/hello.ts`), the trust store and IndexedDB vault, session keys, the content scripts, popup rendering, badge logic. Tested under vitest with mocked `chrome.*` globals. `private`, never published. |
+| `packages/extension-chrome` (`@fetchproxy/extension-chrome`) | Thin Chrome MV3 wrapper: esbuild bundling (`build.ts`), `manifest.json`, icons. Produces `packages/extension-chrome/dist/` for sideloading and the release `.zip`. `private`, never published.                                                                                                                                                                    |
 
 ## Commands
 
-| | |
-|---|---|
-| `npm test` | `vitest run` over the whole repo, all mocked, no network. Must stay green. |
-| `npm run typecheck` | `tsc -b packages/extension-core`. vitest does not typecheck, so run this beside `npm test`. extension-chrome is typechecked by its esbuild build instead. |
-| `npm run build` | `npm run build --workspaces --if-present`: extension-core's `tsc -b`, then extension-chrome's esbuild bundle. |
-| `npm run build --workspace=@fetchproxy/extension-chrome` | Rebuild just the unpacked extension after a source edit, then reload it in `chrome://extensions/`. **No sourcemaps** — release is the default because this is the command that gets zipped. |
-| `npm run build:dev --workspace=@fetchproxy/extension-chrome` | Same with inline sourcemaps, for DevTools. Never what ships. |
+|                                                              |                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`                                                   | `vitest run` over the whole repo, all mocked, no network. Must stay green.                                                                                                                                                            |
+| `npm run typecheck`                                          | `tsc -b packages/extension-core`. vitest does not typecheck, so run this beside `npm test`. extension-chrome is typechecked by its esbuild build instead.                                                                             |
+| `npm run build`                                              | `npm run build --workspaces --if-present`, in npm's alphabetical workspace order: extension-chrome's esbuild bundle (which bundles extension-core from source, so it does not need core built first), then extension-core's `tsc -b`. |
+| `npm run build --workspace=@fetchproxy/extension-chrome`     | Rebuild just the unpacked extension after a source edit, then reload it in `chrome://extensions/`. **No sourcemaps** — release is the default because this is the command that gets zipped.                                           |
+| `npm run build:dev --workspace=@fetchproxy/extension-chrome` | Same with inline sourcemaps, for DevTools. Never what ships.                                                                                                                                                                          |
 
 ## The protocol comes from npm
 
@@ -74,7 +74,7 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
 - **Writes prefer a relay tab that can inject `x-csrf-token`.** The content
   script sends the header from `window.__CSRF_TOKEN__`, asked of the MAIN-world
   logger on demand per approved fetch (`readPageCsrfToken` ⇄
-  `installCsrfBridge`; never written to the DOM), and only a site's *app*
+  `installCsrfBridge`; never written to the DOM), and only a site's _app_
   pages define that global. `handleFetchRequest` sends non-GETs with
   `requireCsrf` first; a token-less tab answers the typed soft miss
   (`lib/csrf-soft-miss.ts`) and the walk continues; only if EVERY tab misses
