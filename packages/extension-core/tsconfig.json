@@ -6,6 +6,5 @@
     "composite": true,
     "types": ["chrome"]
   },
-  "include": ["src/**/*"],
-  "references": [{ "path": "../protocol" }]
+  "include": ["src/**/*"]
 }
