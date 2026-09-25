@@ -168,15 +168,105 @@ describe('release-please config', () => {
     expect(config['include-component-in-tag']).toBe(false);
   });
 
-  it('only forces release-as 1.0.0 around the first release', () => {
-    // The first bridge release is 1.0.0 (a fresh product, not fetchproxy 3.x).
-    // `release-as` may survive into the release PR itself (which moves the
-    // manifest to 1.0.0), but once the manifest is past 1.0.0 it must be gone
-    // — it was meant to be deleted right after v1.0.0 shipped.
-    if (pkg['release-as'] !== undefined) {
-      expect(pkg['release-as']).toBe('1.0.0');
-      expect(['0.0.0', '1.0.0']).toContain(manifest['.']);
-    }
+  it('only forces release-as 1.0.0 until v1.0.0 has shipped', () => {
+    const problem = releaseAsProblem({
+      releaseAs: pkg['release-as'],
+      manifestVersion: manifest['.'],
+      changelog: existsSync(join(ROOT, 'CHANGELOG.md')) ? read('CHANGELOG.md') : '',
+      headRef: process.env['GITHUB_HEAD_REF'] ?? '',
+    });
+    expect(problem).toBeNull();
+  });
+});
+
+/**
+ * Why `"release-as": "1.0.0"` must not be in the release-please config right
+ * now, or null when it may be.
+ *
+ * It exists only to force the FIRST bridge release to 1.0.0 (a fresh product,
+ * not fetchproxy 3.x). It cannot be caught by the manifest outgrowing 1.0.0:
+ * while it is set, release-please pins every release to 1.0.0, so the
+ * manifest never moves past it. What does change is CHANGELOG.md — v1.0.0's
+ * release PR writes its first `## [1.0.0]` entry. That PR is the one place
+ * the entry and `release-as` may coexist (release-please cannot drop the
+ * config key itself); everywhere else — main right after it merges, and every
+ * later PR — it means v1.0.0 has shipped and the key must go.
+ */
+function releaseAsProblem(input: {
+  releaseAs: unknown;
+  manifestVersion: string;
+  changelog: string;
+  headRef: string;
+}): string | null {
+  const { releaseAs, manifestVersion, changelog, headRef } = input;
+  if (releaseAs === undefined) return null;
+  if (releaseAs !== '1.0.0') return `release-as is ${String(releaseAs)}, expected 1.0.0 or absent`;
+  if (manifestVersion !== '0.0.0' && manifestVersion !== '1.0.0') {
+    return `release-as 1.0.0 survived a manifest of ${manifestVersion}`;
+  }
+  const shipped = /^##\s+\[?1\.0\.0\]?(?:\s|\(|$)/m.test(changelog);
+  if (shipped && !headRef.startsWith('release-please--')) {
+    return 'CHANGELOG.md has a 1.0.0 entry, so v1.0.0 shipped: delete release-as from release-please-config.json';
+  }
+  return null;
+}
+
+describe('releaseAsProblem', () => {
+  const FIRST_ENTRY =
+    '# Changelog\n\n## [1.0.0](https://github.com/nullnet-app/contextmint-bridge/compare/v0.0.0...v1.0.0) (2026-09-26)\n\n### Features\n';
+  const base = { releaseAs: '1.0.0', manifestVersion: '0.0.0', changelog: '', headRef: '' };
+
+  it('allows no release-as at all', () => {
+    expect(releaseAsProblem({ ...base, releaseAs: undefined, changelog: FIRST_ENTRY })).toBeNull();
+  });
+
+  it('allows release-as 1.0.0 before the first release', () => {
+    expect(releaseAsProblem(base)).toBeNull();
+  });
+
+  it('allows it on the v1.0.0 release PR itself', () => {
+    expect(
+      releaseAsProblem({
+        ...base,
+        manifestVersion: '1.0.0',
+        changelog: FIRST_ENTRY,
+        headRef: 'release-please--branches--main',
+      }),
+    ).toBeNull();
+  });
+
+  it('fails on main once the v1.0.0 release PR has merged', () => {
+    expect(releaseAsProblem({ ...base, manifestVersion: '1.0.0', changelog: FIRST_ENTRY })).toMatch(
+      /delete release-as/,
+    );
+  });
+
+  it('fails on any other PR after v1.0.0 shipped', () => {
+    expect(
+      releaseAsProblem({
+        ...base,
+        manifestVersion: '1.0.0',
+        changelog: FIRST_ENTRY,
+        headRef: 'feat/something',
+      }),
+    ).toMatch(/delete release-as/);
+  });
+
+  it('recognises the unlinked heading release-please writes with no previous tag', () => {
+    expect(
+      releaseAsProblem({ ...base, manifestVersion: '1.0.0', changelog: '## 1.0.0 (2026-09-26)\n' }),
+    ).toMatch(/delete release-as/);
+  });
+
+  it('does not mistake a later version for 1.0.0', () => {
+    expect(
+      releaseAsProblem({ ...base, changelog: '## [1.0.01](x) (2026-09-26)\n## 11.0.0\n' }),
+    ).toBeNull();
+  });
+
+  it('fails on any pin other than 1.0.0, and on a manifest past 1.0.0', () => {
+    expect(releaseAsProblem({ ...base, releaseAs: '2.0.0' })).toMatch(/expected 1\.0\.0/);
+    expect(releaseAsProblem({ ...base, manifestVersion: '1.0.1' })).toMatch(/survived/);
   });
 });
 

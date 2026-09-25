@@ -3,7 +3,7 @@
   "//": [
     "release-as 1.0.0 forces the FIRST bridge release to 1.0.0 (a fresh product, not fetchproxy 3.x).",
     "DELETE `release-as` once v1.0.0 is released, or every later release stays pinned to 1.0.0;",
-    "tests/release-workflow.test.ts fails if it survives past a manifest of 1.0.0.",
+    "tests/release-workflow.test.ts fails once CHANGELOG.md has a 1.0.0 entry, except on the release PR itself.",
     "bootstrap-sha is the last fetchproxy commit (release 3.2.2) before the split, so the first",
     "changelog starts at the split instead of replaying fetchproxy's history."
   ],
