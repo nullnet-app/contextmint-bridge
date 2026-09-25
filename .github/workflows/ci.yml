@@ -12,6 +12,9 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+  # Push runs are never gated: main is built and tested on every merge.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
