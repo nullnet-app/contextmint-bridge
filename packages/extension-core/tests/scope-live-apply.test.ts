@@ -28,6 +28,9 @@ function scopeUpdateRecord(
     sessionStorageKeys: [],
     captureHeaders: [],
     indexedDbScopes: [],
+    domSelectors: [],
+    domListSelectors: [],
+    graphqlOps: [],
     localStoragePointers: [],
     sessionStoragePointers: [],
     previousScope: {
@@ -37,6 +40,9 @@ function scopeUpdateRecord(
       sessionStorageKeys: [],
       captureHeaders: [],
       indexedDbScopes: [],
+      domSelectors: [],
+      domListSelectors: [],
+      graphqlOps: [],
       localStoragePointers: [],
       sessionStoragePointers: [],
     },
@@ -68,7 +74,7 @@ describe('liveScopeApplications', () => {
     const rec = scopeUpdateRecord({ mcpIds: ['m-live', 'm-dead'] });
     const apps = liveScopeApplications(rec, (id) => id === 'm-live');
     expect(apps.map((a) => a.mcpId)).toEqual(['m-live']);
-    expect(apps[0].scope.capabilities).toContain('capture_redirect');
+    expect(apps[0]!.scope.capabilities).toContain('capture_redirect');
   });
 
   it('returns nothing when no targeted session is live', () => {

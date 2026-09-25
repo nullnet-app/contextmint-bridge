@@ -61,6 +61,7 @@ describe('TrustStore (identity-hash keyed)', () => {
     await s1.put('hash1', {
       serverName: 'opentable-mcp',
       domains: ['opentable.com'],
+      capabilities: ['fetch'],
       identityX25519Pub: 'AAAA',
       identityEd25519Pub: 'BBBB',
     });
@@ -73,6 +74,7 @@ describe('TrustStore (identity-hash keyed)', () => {
     await s1.put('hash1', {
       serverName: 'opentable-mcp',
       domains: ['opentable.com'],
+      capabilities: ['fetch'],
       identityX25519Pub: 'AAAA',
       identityEd25519Pub: 'BBBB',
     });
@@ -283,17 +285,17 @@ describe('TrustStore.approvedDomains (audit #1003: where the MAIN-world bridge m
 
   it('is the union of every live record\'s domains, deduped', async () => {
     const store = new TrustStore('3.1.0');
-    await store.put('h1', { serverName: 'a', domains: ['a.com', 'shared.com'], identityX25519Pub: 'X', identityEd25519Pub: 'Y' });
-    await store.put('h2', { serverName: 'b', domains: ['shared.com', 'b.com'], identityX25519Pub: 'X', identityEd25519Pub: 'Y' });
+    await store.put('h1', { serverName: 'a', domains: ['a.com', 'shared.com'], capabilities: ['fetch'], identityX25519Pub: 'X', identityEd25519Pub: 'Y' });
+    await store.put('h2', { serverName: 'b', domains: ['shared.com', 'b.com'], capabilities: ['fetch'], identityX25519Pub: 'X', identityEd25519Pub: 'Y' });
     expect((await store.approvedDomains()).sort()).toEqual(['a.com', 'b.com', 'shared.com']);
   });
 
   it('leaves out records a major-version bump invalidated, as get() does', async () => {
     await new TrustStore('2.9.0').put('old', {
-      serverName: 'old', domains: ['stale.com'], identityX25519Pub: 'X', identityEd25519Pub: 'Y',
+      serverName: 'old', domains: ['stale.com'], capabilities: ['fetch'], identityX25519Pub: 'X', identityEd25519Pub: 'Y',
     });
     const store = new TrustStore('3.0.0');
-    await store.put('new', { serverName: 'n', domains: ['live.com'], identityX25519Pub: 'X', identityEd25519Pub: 'Y' });
+    await store.put('new', { serverName: 'n', domains: ['live.com'], capabilities: ['fetch'], identityX25519Pub: 'X', identityEd25519Pub: 'Y' });
     expect(await store.approvedDomains()).toEqual(['live.com']);
   });
 });

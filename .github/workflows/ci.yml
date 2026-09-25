@@ -26,7 +26,7 @@ jobs:
     with:
       node-version: '26'
       build-command: npm run build
-      test-command: npm test
+      test-command: npm run typecheck && npm test
       gate-mode: status
 
   # Canary against fetchproxy's unreleased protocol. `@fetchproxy/protocol` is

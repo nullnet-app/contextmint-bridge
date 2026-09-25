@@ -17,7 +17,9 @@ import { SCOPE_TABLES, clearSessionScopeFor } from '../src/background/session-sc
 // Deriving from the namespace closes that: a new exported Map is picked up with
 // no edit to this file, so forgetting `SCOPE_TABLES` is the only way to
 // fail, which is exactly the mistake worth catching.
-const ALL_SCOPE_MAPS: [string, Map<string, unknown>][] = Object.entries(sessionScope)
+const ALL_SCOPE_MAPS: [string, Map<string, unknown>][] = (
+  Object.entries(sessionScope) as [string, unknown][]
+)
   .filter((entry): entry is [string, Map<string, unknown>] => entry[1] instanceof Map)
   .sort(([a], [b]) => a.localeCompare(b));
 

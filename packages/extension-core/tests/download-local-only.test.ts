@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import type { InnerRequestDownload } from '@fetchproxy/protocol';
 
 /**
  * `download` is the one verb that cannot cross a remote bridge.
@@ -24,10 +25,10 @@ const { handleDownloadRequest, DOWNLOAD_LOCAL_ONLY_ERROR } = await import(
 const { bindMcpToLink, localLink, remoteLink, unbindAll } = await import('../src/background/links.js');
 
 const MCP_ID = 'alltrails-mcp:2.1.3:aaaaaaaaaaaaaaaa';
-const request = {
-  type: 'request' as const,
-  op: 'download' as const,
-  id: 'req-1',
+const request: InnerRequestDownload = {
+  type: 'request',
+  op: 'download',
+  id: 1,
   init: { url: 'https://alltrails.com/map.gpx' },
 };
 
@@ -46,7 +47,7 @@ describe('download over a remote bridge', () => {
     await handleDownloadRequest(MCP_ID, request, ['alltrails.com']);
 
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.inner).toMatchObject({ ok: false, op: 'download', id: 'req-1' });
+    expect(sent[0]!.inner).toMatchObject({ ok: false, op: 'download', id: 1 });
     expect(sent[0]!.inner.error).toBe(DOWNLOAD_LOCAL_ONLY_ERROR);
     expect(String(sent[0]!.inner.error)).toMatch(/local-only/);
   });
