@@ -11,7 +11,7 @@ import {
 // with no listener, and `chrome.tabs.sendMessage` to it fails with "Receiving
 // end does not exist" until a human reloads it.
 //
-// That is not hypothetical: Transporter 2.2.1 -> 2.3.0 did it, and every MCP
+// That is not hypothetical: 2.2.1 -> 2.3.0 (then named Transporter) did it, and every MCP
 // that reads from a long-lived tab broke at once for anyone who had one open.
 // Two different servers looked independently broken on the same night, which
 // sent the debugging into key derivation and a revoke/re-pair that discarded a

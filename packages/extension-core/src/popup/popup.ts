@@ -1,5 +1,5 @@
 /**
- * Popup UI for the Transporter extension. Three modes:
+ * Popup UI for the ContextMint Bridge extension. Three modes:
  *
  *   - pending-pair: a new MCP is asking to pair. Show the SAS pair code
  *     prominently with Approve / Cancel buttons (Cancel default-focused).

@@ -1,16 +1,16 @@
-# Privacy Policy — Transporter (fetchproxy)
+# Privacy Policy — ContextMint Bridge (fetchproxy)
 
-**Last updated: 2026-05-26**
+**Last updated: 2026-09-25**
 
-Transporter is a Chrome extension that bridges local MCP (Model Context Protocol) servers to your signed-in browser tabs. All communication is confined to your local machine. This policy describes exactly what data Transporter processes, stores, and shares.
+ContextMint Bridge is a Chrome extension that bridges local MCP (Model Context Protocol) servers to your signed-in browser tabs. All communication is confined to your local machine. This policy describes exactly what data ContextMint Bridge processes, stores, and shares.
 
 ---
 
-## 1. What Transporter Does
+## 1. What ContextMint Bridge Does
 
-Transporter acts as a relay between Node.js MCP servers running on your computer and web pages you have open in Chrome. When an MCP server makes a request, Transporter executes that request inside the browser tab you have open — carrying your existing session cookies and authentication — and returns the result to the MCP server over a local WebSocket connection.
+ContextMint Bridge acts as a relay between Node.js MCP servers running on your computer and web pages you have open in Chrome. When an MCP server makes a request, ContextMint Bridge executes that request inside the browser tab you have open — carrying your existing session cookies and authentication — and returns the result to the MCP server over a local WebSocket connection.
 
-No data leaves your machine through Transporter. Every connection is `127.0.0.1` only.
+No data leaves your machine through ContextMint Bridge. Every connection is `127.0.0.1` only.
 
 ---
 
@@ -18,11 +18,11 @@ No data leaves your machine through Transporter. Every connection is `127.0.0.1`
 
 ### 2.1 HTTP Requests and Responses
 
-When an MCP server calls `fetch()` through Transporter, the extension makes the HTTP request from inside your browser tab. The request and response are passed over a local, encrypted WebSocket to the MCP server. Transporter does not log, cache, or retain request or response content after it is forwarded.
+When an MCP server calls `fetch()` through ContextMint Bridge, the extension makes the HTTP request from inside your browser tab. The request and response are passed over a local, encrypted WebSocket to the MCP server. ContextMint Bridge does not log, cache, or retain request or response content after it is forwarded.
 
 ### 2.2 Session Data (Cookies, Storage, IndexedDB)
 
-Depending on the capabilities an MCP server declares and you approve at pair time, Transporter may read — and, for one capability, modify:
+Depending on the capabilities an MCP server declares and you approve at pair time, ContextMint Bridge may read — and, for one capability, modify:
 
 | Capability | What it reads or changes |
 |---|---|
@@ -36,7 +36,7 @@ Depending on the capabilities an MCP server declares and you approve at pair tim
 **All session data reads — and the one write — are:**
 - Scoped to the domains the MCP server explicitly declared in its hello frame.
 - Gated on your explicit approval at pair time — you see the requested capabilities and domains before any access is granted.
-- Passed directly to the requesting MCP server over the local encrypted WebSocket. Transporter does not store, forward, or log the content of cookies or storage values.
+- Passed directly to the requesting MCP server over the local encrypted WebSocket. ContextMint Bridge does not store, forward, or log the content of cookies or storage values.
 
 ---
 
@@ -46,11 +46,11 @@ All persistent data is stored on your device, in the extension's `chrome.storage
 
 ### 3.1 Extension Identity
 
-Transporter generates a long-term Ed25519 signing keypair and an X25519 key-exchange keypair the first time it starts. These keys are used to authenticate the extension to MCP servers. They are stored in the extension's own IndexedDB, which websites and the extension's content scripts cannot access, and the private keys are held as non-extractable keys: the browser can sign with them, but will not hand their bytes to anyone, including the extension itself. (Earlier versions kept them in `chrome.storage.local`; the first start after upgrading moves them and deletes the old copy.)
+ContextMint Bridge generates a long-term Ed25519 signing keypair and an X25519 key-exchange keypair the first time it starts. These keys are used to authenticate the extension to MCP servers. They are stored in the extension's own IndexedDB, which websites and the extension's content scripts cannot access, and the private keys are held as non-extractable keys: the browser can sign with them, but will not hand their bytes to anyone, including the extension itself. (Earlier versions kept them in `chrome.storage.local`; the first start after upgrading moves them and deletes the old copy.)
 
 ### 3.2 Trust Records
 
-When you approve an MCP server at pair time, Transporter stores a trust record containing:
+When you approve an MCP server at pair time, ContextMint Bridge stores a trust record containing:
 - The MCP server's public keys.
 - The server name.
 - The approved capability set and domain list.
@@ -68,7 +68,7 @@ While a pair confirmation is in progress (the 8-digit code dialog is showing), a
 
 **None.**
 
-Transporter contains no telemetry, no analytics, no crash reporting, no remote configuration, no feature flags, and no A/B testing. It reports nothing to its developer or to any third party. The only network connections the extension is involved in are:
+ContextMint Bridge contains no telemetry, no analytics, no crash reporting, no remote configuration, no feature flags, and no A/B testing. It reports nothing to its developer or to any third party. The only network connections the extension is involved in are:
 
 - The local WebSocket connection to `127.0.0.1:37149` (MCP server connections on your own machine).
 - HTTP requests made inside your browser tabs at the explicit direction of an approved MCP server.
@@ -78,7 +78,7 @@ Transporter contains no telemetry, no analytics, no crash reporting, no remote c
 
 ## 5. Permissions
 
-Transporter requests several Chrome permissions. Each is required for core functionality — none is used for data collection. See [permission justifications](store-assets/permission-justifications.md) for the full per-permission justification.
+ContextMint Bridge requests several Chrome permissions. Each is required for core functionality — none is used for data collection. See [permission justifications](store-assets/permission-justifications.md) for the full per-permission justification.
 
 ---
 
@@ -86,7 +86,7 @@ Transporter requests several Chrome permissions. Each is required for core funct
 
 You can revoke an MCP server's trust at any time:
 
-1. Click the Transporter icon in the Chrome toolbar to open the popup.
+1. Click the ContextMint Bridge icon in the Chrome toolbar to open the popup.
 2. Find the MCP server entry.
 3. Click **Revoke**.
 
@@ -96,7 +96,7 @@ After revocation, the MCP server must complete a new pair flow (including user a
 
 ## 7. Uninstalling
 
-Uninstalling the Transporter extension removes all data stored in `chrome.storage.local` and in the extension's IndexedDB, including the extension's identity keypair and all trust records. Chrome handles this automatically on uninstall.
+Uninstalling the ContextMint Bridge extension removes all data stored in `chrome.storage.local` and in the extension's IndexedDB, including the extension's identity keypair and all trust records. Chrome handles this automatically on uninstall.
 
 **Note:** MCP-side identity files (stored at `~/.fetchproxy/identity/<server-name>.json` on your computer) are not part of the extension and are not removed when you uninstall. You can delete them manually if desired.
 
@@ -104,13 +104,13 @@ Uninstalling the Transporter extension removes all data stored in `chrome.storag
 
 ## 8. Children's Privacy
 
-Transporter is a developer tool. It is not directed at children and does not knowingly collect any information from anyone.
+ContextMint Bridge is a developer tool. It is not directed at children and does not knowingly collect any information from anyone.
 
 ---
 
 ## 9. Changes to This Policy
 
-If this policy changes materially, the updated policy will be published at this URL with a revised **Last updated** date. Because Transporter stores no account information, no individual notifications are sent.
+If this policy changes materially, the updated policy will be published at this URL with a revised **Last updated** date. Because ContextMint Bridge stores no account information, no individual notifications are sent.
 
 ---
 
