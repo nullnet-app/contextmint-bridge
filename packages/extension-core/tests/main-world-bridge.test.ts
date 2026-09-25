@@ -157,6 +157,23 @@ describe('syncMainWorldBridge', () => {
     ]);
   });
 
+  it('calls tabs.query bound to chrome.tabs, as Safari requires', async () => {
+    // Safari's chrome.tabs.query resolves undefined when called detached from
+    // chrome.tabs (seen live as "undefined is not an object (evaluating 'tab
+    // of tabs')" in doSync), so the open-tab injection silently never ran.
+    const tabs = [{ id: 2, url: 'https://b.com/' }];
+    const reg = [{ id: MAIN_BRIDGE_SCRIPT_ID, js: [MAIN_BRIDGE_FILE], matches: ['*://*.a.com/*'], runAt: 'document_start', world: 'MAIN' }];
+    const fake = installFakeChrome({ registered: reg, tabs });
+    const tabsApi = (globalThis as unknown as { chrome: { tabs: Record<string, unknown> } }).chrome.tabs;
+    tabsApi.query = async function (this: unknown) {
+      return this === tabsApi ? tabs : undefined;
+    };
+    await syncMainWorldBridge(['a.com', 'b.com'], { injectIntoOpenTabs: true });
+    expect(fake.injections).toEqual([
+      { tabId: 2, files: [MAIN_BRIDGE_FILE], world: 'MAIN', injectImmediately: true },
+    ]);
+  });
+
   it('no-ops without the dynamic scripting API rather than throwing', async () => {
     (globalThis as { chrome?: unknown }).chrome = { scripting: {} };
     await expect(syncMainWorldBridge(['a.com'])).resolves.toBeUndefined();
