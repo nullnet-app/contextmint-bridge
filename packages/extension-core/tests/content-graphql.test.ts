@@ -29,7 +29,11 @@ beforeAll(async () => {
   (globalThis as { chrome?: unknown }).chrome = {
     runtime: { onMessage: { addListener: () => {} } },
   };
-  ({ runGraphqlQuery } = await import('../src/content.js'));
+  // The local RelayWindow / GraphqlResult mirror the relay's contract as a
+  // test sees it (a fake window, a narrowed result), not content.ts's types.
+  ({ runGraphqlQuery } = (await import('../src/content.js')) as unknown as {
+    runGraphqlQuery: typeof runGraphqlQuery;
+  });
 });
 
 function makeFakeWindow(): {
@@ -67,7 +71,7 @@ describe('runGraphqlQuery (isolated-world → MAIN-world relay)', () => {
     );
 
     expect(posted).toHaveLength(1);
-    const req = posted[0];
+    const req = posted[0]!;
     expect(req.__fetchproxy).toBe('graphql-req');
     expect(req.operationName).toBe('RestaurantsAvailability');
     expect(req.variables).toEqual({ partySize: 2 });
@@ -81,7 +85,7 @@ describe('runGraphqlQuery (isolated-world → MAIN-world relay)', () => {
   it('relays an ok:false error (the "not yet observed" case) back through', async () => {
     const { win, posted, dispatch } = makeFakeWindow();
     const p = runGraphqlQuery({ operationName: 'X', variables: {} }, win, 1000);
-    const reqId = posted[0].reqId;
+    const reqId = posted[0]!.reqId;
 
     dispatch({
       __fetchproxy: 'graphql-res',
@@ -105,7 +109,7 @@ describe('runGraphqlQuery (isolated-world → MAIN-world relay)', () => {
   it('ignores responses with a mismatched reqId or wrong source', async () => {
     const { win, posted, dispatch } = makeFakeWindow();
     const p = runGraphqlQuery({ operationName: 'X', variables: {} }, win, 1000);
-    const reqId = posted[0].reqId;
+    const reqId = posted[0]!.reqId;
 
     dispatch({ __fetchproxy: 'graphql-res', reqId: reqId + 999, ok: true, data: { which: 'wrong' } });
     dispatch(
@@ -121,7 +125,7 @@ describe('runGraphqlQuery (isolated-world → MAIN-world relay)', () => {
     const { win, posted } = makeFakeWindow();
     void runGraphqlQuery({ operationName: 'A', variables: {} }, win, 50);
     void runGraphqlQuery({ operationName: 'B', variables: {} }, win, 50);
-    expect(posted[1].reqId).toBe(posted[0].reqId + 1);
+    expect(posted[1]!.reqId).toBe(posted[0]!.reqId + 1);
   });
 
   it('rejects oversized variables without posting to the MAIN world', async () => {
@@ -151,7 +155,7 @@ describe('runGraphqlQuery (isolated-world → MAIN-world relay)', () => {
     // catch-all, that closes the bridge for every MCP on the concentrator.
     const { win, posted, dispatch } = makeFakeWindow();
     const p = runGraphqlQuery({ operationName: 'X', variables: {} }, win, 1000);
-    const reqId = posted[0].reqId;
+    const reqId = posted[0]!.reqId;
 
     dispatch({ __fetchproxy: 'graphql-res', reqId, ok: true, data: spoofedData });
 
@@ -163,7 +167,7 @@ describe('runGraphqlQuery (isolated-world → MAIN-world relay)', () => {
   it('rejects an oversized response instead of resolving with it', async () => {
     const { win, posted, dispatch } = makeFakeWindow();
     const p = runGraphqlQuery({ operationName: 'X', variables: {} }, win, 1000);
-    const reqId = posted[0].reqId;
+    const reqId = posted[0]!.reqId;
     const huge = 'x'.repeat(5 * 1024 * 1024 + 1); // just over MAX_RESPONSE_BODY_BYTES (5 MB)
 
     dispatch({ __fetchproxy: 'graphql-res', reqId, ok: true, data: { huge } });
@@ -176,7 +180,7 @@ describe('runGraphqlQuery (isolated-world → MAIN-world relay)', () => {
   it('removes its message listener after settling', async () => {
     const { win, posted, dispatch } = makeFakeWindow();
     const p = runGraphqlQuery({ operationName: 'X', variables: {} }, win, 1000);
-    const reqId = posted[0].reqId;
+    const reqId = posted[0]!.reqId;
     dispatch({ __fetchproxy: 'graphql-res', reqId, ok: true, data: 1 });
     await p;
     // A late duplicate must not throw or double-settle — listener is gone.

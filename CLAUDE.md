@@ -26,13 +26,13 @@ and the protocol reference (`docs/PROTOCOL.md`) all still live in fetchproxy.
 
 ## Commands
 
-|                                                              |                                                                                                                                                                                                                                       |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm test`                                                   | `vitest run` over the whole repo, all mocked, no network. Must stay green.                                                                                                                                                            |
-| `npm run typecheck`                                          | `tsc -b packages/extension-core`. vitest does not typecheck, so run this beside `npm test`. extension-chrome is typechecked by its esbuild build instead.                                                                             |
-| `npm run build`                                              | `npm run build --workspaces --if-present`, in npm's alphabetical workspace order: extension-chrome's esbuild bundle (which bundles extension-core from source, so it does not need core built first), then extension-core's `tsc -b`. |
-| `npm run build --workspace=@fetchproxy/extension-chrome`     | Rebuild just the unpacked extension after a source edit, then reload it in `chrome://extensions/`. **No sourcemaps** — release is the default because this is the command that gets zipped.                                           |
-| `npm run build:dev --workspace=@fetchproxy/extension-chrome` | Same with inline sourcemaps, for DevTools. Never what ships.                                                                                                                                                                          |
+|                                                              |                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`                                                   | `vitest run` over the whole repo, all mocked, no network. Must stay green.                                                                                                                                                                                           |
+| `npm run typecheck`                                          | `tsc -b packages/extension-core` (source), then `tsc -p tsconfig.tests.json` (every test file, plus `build.ts` and `vitest.config.ts`). vitest does not typecheck, so CI runs this before `npm test`. extension-chrome's source is typechecked by its esbuild build. |
+| `npm run build`                                              | `npm run build --workspaces --if-present`, in npm's alphabetical workspace order: extension-chrome's esbuild bundle (which bundles extension-core from source, so it does not need core built first), then extension-core's `tsc -b`.                                |
+| `npm run build --workspace=@fetchproxy/extension-chrome`     | Rebuild just the unpacked extension after a source edit, then reload it in `chrome://extensions/`. **No sourcemaps** — release is the default because this is the command that gets zipped.                                                                          |
+| `npm run build:dev --workspace=@fetchproxy/extension-chrome` | Same with inline sourcemaps, for DevTools. Never what ships.                                                                                                                                                                                                         |
 
 ## The protocol comes from npm
 
@@ -68,8 +68,11 @@ The bridge's version line is its own (it started at 1.0.0), independent of
 fetchproxy's; compatibility is the protocol number, not a version comparison.
 
 `"release-as": "1.0.0"` in the config exists only for the first release:
-delete it once v1.0.0 ships (`tests/release-workflow.test.ts` fails if it
-outlives a manifest of 1.0.0).
+delete it once v1.0.0 ships. `tests/release-workflow.test.ts` enforces that
+from CHANGELOG.md, not the manifest (which `release-as` pins at 1.0.0): a
+`1.0.0` changelog entry beside `release-as` is allowed only on the release PR
+itself (a `release-please--*` head branch), so main goes red the moment the
+v1.0.0 release PR merges, until a follow-up deletes the key.
 
 ## Icons
 

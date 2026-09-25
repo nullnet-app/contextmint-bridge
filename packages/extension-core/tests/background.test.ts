@@ -838,7 +838,7 @@ describe('handleServerHello', () => {
 async function buildHelloWithIdentity(
   x25519Pub: Uint8Array,
   ed25519Pub: Uint8Array,
-  ed25519Priv: CryptoKey,
+  ed25519Priv: Uint8Array,
   mcpId: string,
   serverName: string,
   domains: string[],
@@ -1232,7 +1232,7 @@ describe('multi-instance pending-pair dedup (0.6.0+)', () => {
       kind: 'pair' as const,
       identityHash: r1.identityHash,
       mcpIds: [mcpId1, mcpId2],
-      sessionNonces: {
+      sessionNonces: <Record<string, string>>{
         [mcpId1]: Buffer.from(r1.sessionNonce).toString('base64'),
         [mcpId2]: Buffer.from(r2.sessionNonce).toString('base64'),
       },
@@ -1343,7 +1343,7 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
     const pendingKey = `${identityHash}:${hash}`;
 
     // A scope-update record occupying the key (trusted identity, scope grew).
-    const scopeUpdateEntry = {
+    const scopeUpdateEntry: import('../src/background/pending-records.js').PendingScopeUpdateRecord = {
       key: pendingKey,
       kind: 'scope-update' as const,
       identityHash,
@@ -1359,6 +1359,9 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
       sessionStorageKeys: [],
       captureHeaders: [],
       indexedDbScopes: [],
+      domSelectors: [],
+      domListSelectors: [],
+      graphqlOps: [],
       localStoragePointers: [],
       sessionStoragePointers: [],
       previousScope: {
@@ -1368,6 +1371,9 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
         sessionStorageKeys: [],
         captureHeaders: [],
         indexedDbScopes: [],
+        domSelectors: [],
+        domListSelectors: [],
+        graphqlOps: [],
         localStoragePointers: [],
         sessionStoragePointers: [],
       },
@@ -1376,7 +1382,7 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
     // A new needs-pair PendingPairRecord for a second mcpId on the same identity.
     const mcpId2 = 'repro-mcp:1.0.0:0000000000000002';
     const sessionNonceB64 = 'nonce001==';
-    const pairRecord = {
+    const pairRecord: import('../src/background/pending-records.js').PendingPairRecord = {
       key: pendingKey,
       kind: 'pair' as const,
       identityHash,
@@ -1384,6 +1390,7 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
       version: '1.0.0',
       mcpIds: [mcpId2],
       sessionNonces: { [mcpId2]: sessionNonceB64 },
+      sessionPubs: {},
       domains: ['repro.example'],
       capabilities: ['fetch'],
       cookieKeys: [],
@@ -1391,6 +1398,9 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
       sessionStorageKeys: [],
       captureHeaders: [],
       indexedDbScopes: [],
+      domSelectors: [],
+      domListSelectors: [],
+      graphqlOps: [],
       localStoragePointers: [],
       sessionStoragePointers: [],
       pairCode: 'ABC-123',
@@ -1399,7 +1409,7 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
     };
 
     // Seed the dict with the scope-update entry.
-    const existing: Record<string, typeof scopeUpdateEntry | typeof pairRecord> = {
+    const existing: Record<string, import('../src/background/pending-records.js').AnyPendingRecord> = {
       [pendingKey]: scopeUpdateEntry,
     };
 
@@ -1407,7 +1417,7 @@ describe('needs-pair supersedes queued scope-update at same key (finding 2)', ()
     // It must replace the scope-update entry with a pair entry, carrying over
     // mcpIds from the evicted scope-update entry.
     applyNeedsPairRecord(
-      existing as Record<string, import('../src/background.js').AnyPendingRecord>,
+      existing,
       pendingKey,
       pairRecord,
     );

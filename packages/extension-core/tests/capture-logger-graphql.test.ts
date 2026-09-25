@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, vi, type Mock } from 'vitest';
 
 // capture-logger.ts runs MAIN-world side effects (CSRF sync + Apollo bridge
 // install) at module load. Those are guarded off under vitest so the import
@@ -57,13 +57,13 @@ function makeFakeWindow(): {
 }
 
 interface FakeClient {
-  link: { request: ReturnType<typeof vi.fn> };
-  query: ReturnType<typeof vi.fn>;
+  link: { request: Mock<(...args: unknown[]) => unknown> };
+  query: Mock<(...args: unknown[]) => Promise<unknown>>;
 }
 
 function makeClient(data: unknown): FakeClient {
   return {
-    link: { request: vi.fn(() => 'ORIGINAL_LINK_RESULT') },
+    link: { request: vi.fn((..._args: unknown[]) => 'ORIGINAL_LINK_RESULT') },
     query: vi.fn(async () => ({ data })),
   };
 }
@@ -146,7 +146,7 @@ describe('installApolloBridge (MAIN-world Apollo bridge)', () => {
     // protocol validation server-side and tears down the whole WS bridge.
     const { win, posted, dispatch } = makeFakeWindow();
     const client: FakeClient = {
-      link: { request: vi.fn(() => 'ORIGINAL_LINK_RESULT') },
+      link: { request: vi.fn((..._args: unknown[]) => 'ORIGINAL_LINK_RESULT') },
       query: vi.fn(async () => ({ data: null, errors: [{ message: 'session expired' }] })),
     };
     win.__APOLLO_CLIENT__ = client;
@@ -167,7 +167,7 @@ describe('installApolloBridge (MAIN-world Apollo bridge)', () => {
   it('treats a resolved {data:undefined} with no errors as ok:false, not ok:true', async () => {
     const { win, posted, dispatch } = makeFakeWindow();
     const client: FakeClient = {
-      link: { request: vi.fn(() => 'ORIGINAL_LINK_RESULT') },
+      link: { request: vi.fn((..._args: unknown[]) => 'ORIGINAL_LINK_RESULT') },
       query: vi.fn(async () => ({ data: undefined })),
     };
     win.__APOLLO_CLIENT__ = client;

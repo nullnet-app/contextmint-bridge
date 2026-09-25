@@ -39,7 +39,7 @@ describe('version-mismatch — what may reach the popup', () => {
       });
       const rec = out['local\u0000alltrails-mcp'];
       expect(rec).toEqual(refusal);
-      expect(Object.keys(rec).sort()).toEqual([
+      expect(Object.keys(rec!).sort()).toEqual([
         'at',
         'extensionProtocol',
         'linkId',

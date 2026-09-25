@@ -28,7 +28,11 @@ beforeAll(async () => {
     runtime: { onMessage: { addListener: () => {} } },
   };
   ({ runInPageFetch } = await import('../src/content.js'));
-  ({ installFetchBridge } = await import('../src/capture-logger.js'));
+  // FakeMainWin is deliberately looser than FetchBridgeWindow: these tests
+  // hand the bridge windows whose fetch misbehaves in ways the type forbids.
+  ({ installFetchBridge } = (await import('../src/capture-logger.js')) as unknown as {
+    installFetchBridge: typeof installFetchBridge;
+  });
 });
 
 interface FakeWin {

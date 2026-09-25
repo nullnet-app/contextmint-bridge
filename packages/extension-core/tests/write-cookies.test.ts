@@ -131,17 +131,17 @@ describe('pair popup — write_cookies is presented as a write', () => {
     const entry = CAPABILITY_DISPLAY.write_cookies;
 
     expect(entry).toBeDefined();
-    expect(entry.warn).toBe(true);
-    expect(entry.label).toMatch(/overwrite/i);
-    expect(entry.label).toMatch(/signed-in session/i);
+    expect(entry!.warn).toBe(true);
+    expect(entry!.label).toMatch(/overwrite/i);
+    expect(entry!.label).toMatch(/signed-in session/i);
   });
 
   it('does not read as another read verb', async () => {
     const { CAPABILITY_DISPLAY } = await import('../src/popup/popup.js');
 
-    expect(CAPABILITY_DISPLAY.write_cookies.label).not.toMatch(/^read/i);
+    expect(CAPABILITY_DISPLAY.write_cookies!.label).not.toMatch(/^read/i);
     // Every read verb's label starts with "Read"; this one must not be
     // mistakable for one at a glance in the popup list.
-    expect(CAPABILITY_DISPLAY.read_cookies.label).toMatch(/^Read/);
+    expect(CAPABILITY_DISPLAY.read_cookies!.label).toMatch(/^Read/);
   });
 });

@@ -82,7 +82,7 @@ function makeFakeWindow(): {
 
 function makeClient(data: unknown) {
   return {
-    link: { request: vi.fn(() => 'ORIGINAL_LINK_RESULT') },
+    link: { request: vi.fn((..._args: unknown[]) => 'ORIGINAL_LINK_RESULT') },
     query: vi.fn(async () => ({ data })),
   };
 }

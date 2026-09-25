@@ -21,7 +21,7 @@ import * as pendingRecords from '../src/background/pending-records.js';
 /** Names declared with `export interface` / `export type` in a module's source. */
 function exportedTypeNames(relativePath: string): string[] {
   const source = readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf8');
-  return [...source.matchAll(/^export (?:interface|type) (\w+)/gm)].map((m) => m[1]).sort();
+  return [...source.matchAll(/^export (?:interface|type) (\w+)/gm)].map((m) => m[1]!).sort();
 }
 
 describe('background module surfaces', () => {
