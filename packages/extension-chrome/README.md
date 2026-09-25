@@ -1,6 +1,6 @@
 # @fetchproxy/extension-chrome
 
-Chrome MV3 build target for the [fetchproxy](https://github.com/chrischall/fetchproxy) browser extension.
+Chrome MV3 build target for **ContextMint Bridge**, the [fetchproxy](https://github.com/chrischall/fetchproxy) browser extension.
 
 Workspace-internal. The shared TypeScript lives in [`packages/extension-core`](../extension-core); this package owns the per-browser bits: the MV3 `manifest.json`, the icons, and the esbuild step that produces a loadable unpacked extension at `dist/`.
 
@@ -42,11 +42,11 @@ dist/
 
 ## Install (developer / sideload)
 
-1. Open `chrome://extensions` in Chrome.
-2. Toggle "Developer mode" (top right).
-3. "Load unpacked" → pick `packages/extension-chrome/dist/`.
-4. After **every** later pull: rebuild (above), then press **Reload** on the
-   extension's card — see the requirement below.
+The sideload steps live in the [repo README](../../README.md#install-developer--sideload):
+build (above), then "Load unpacked" → `packages/extension-chrome/dist/` in
+`chrome://extensions` with Developer mode on. After **every** later pull:
+rebuild, then press **Reload** on the extension's card — see the requirement
+below.
 
 Each release also publishes a packaged `fetchproxy-extension-${VERSION}.zip` on the [GitHub Releases](https://github.com/chrischall/fetchproxy/releases) page — the same `dist/` zipped up, suitable for sideloading without building from source.
 
@@ -90,11 +90,11 @@ rule out when a change "did nothing".
 - `permissions: ["tabGroups"]` — backs the relay tab group. `ensureDomainTab` opens its tab with `active: false` (a relay tab is machinery, not somewhere the person asked to go, so it must not steal focus) and files it into one titled **"fetchproxy"** group via `chrome.tabs.group`; `tabGroups` is needed only for `chrome.tabGroups.query`/`update`, i.e. to FIND the existing group and set its title and colour. It reads and titles the extension's own group and nothing else — it cannot read page content, and the grouping is best-effort: a browser without the API, or a build without this permission, still gets its relay tab ungrouped.
 - **`chrome.runtime.onInstalled` needs NO new permission**, but it is new `chrome.*` surface. Chrome tears the content scripts out of every already-open tab when the extension updates and injects no new ones — `content_scripts` only covers navigations from that point on — so every tab a person already had open is left with no listener, and every MCP reading from a long-lived tab breaks at once until they reload it by hand. Nothing tells them to. On `onInstalled` with reason `update` (and only that reason: `install` has no pre-existing tabs and `chrome_update` does not tear scripts down) the background re-injects each script the manifest declares, in its declared world, into the open tabs its `matches` cover, via `chrome.scripting.executeScript` — `permissions: ["scripting"]` was already granted. It is best-effort: restricted pages (`chrome://`, the Web Store, a tab mid-navigation) legitimately refuse injection, so failures are swallowed per tab. It reads no page content; it only puts back what the manifest already said belonged there.
 
-See the [top-level README](https://github.com/chrischall/fetchproxy#readme) for the architecture and the [protocol reference](https://github.com/chrischall/fetchproxy/blob/main/docs/PROTOCOL.md) for the wire format.
+See the [repo README](../../README.md) for what the extension is, fetchproxy's [top-level README](https://github.com/chrischall/fetchproxy#readme) for the architecture and the [protocol reference](https://github.com/chrischall/fetchproxy/blob/main/docs/PROTOCOL.md) for the wire format.
 
 ## Migrating from the unpacked dev install
 
-The Chrome Web Store version of the extension (listed as **Transporter**)
+The Chrome Web Store version of the extension (listed as **ContextMint Bridge**)
 gets a new extension ID assigned by Google. Chrome treats it as a
 separate extension from the sideloaded "Load unpacked" version — not an
 upgrade.
@@ -110,7 +110,7 @@ upgrade.
 
 **What to do:**
 
-1. Install Transporter from the Chrome Web Store.
+1. Install ContextMint Bridge from the Chrome Web Store.
 2. Remove the sideloaded extension from `chrome://extensions`.
 3. Each MCP will trigger a fresh pair prompt on its next connection.
    Verify the 8-digit code and click Approve.

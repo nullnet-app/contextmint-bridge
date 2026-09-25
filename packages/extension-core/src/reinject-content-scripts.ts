@@ -11,11 +11,12 @@
  *
  * That is a bad failure to leave armed, because it fires for EVERY user with a
  * tab open on EVERY release, hits every MCP at once, and looks nothing like an
- * extension problem from the MCP's side. Transporter 2.2.1 -> 2.3.0 did exactly
- * this: two unrelated MCP servers began failing the same evening with no deploy
- * of their own, which read as a shared-library bug and sent the debugging into
- * session-key derivation, then into a revoke/re-pair that discarded a working
- * pairing and changed the state being diagnosed. One reload fixed it.
+ * extension problem from the MCP's side. The 2.2.1 -> 2.3.0 update (the
+ * extension was then named Transporter) did exactly this: two unrelated MCP
+ * servers began failing the same evening with no deploy of their own, which
+ * read as a shared-library bug and sent the debugging into session-key
+ * derivation, then into a revoke/re-pair that discarded a working pairing and
+ * changed the state being diagnosed. One reload fixed it.
  *
  * `sendToFirstResponsiveTab` already tolerates an orphaned tab by trying the
  * next match, but that only helps when a SECOND tab on the same origin happens

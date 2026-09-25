@@ -2,13 +2,18 @@
 
 ---
 
-## Transporter — Route MCP Requests Through Your Signed-In Browser
+## ContextMint Bridge — Route MCP Requests Through Your Signed-In Browser
 
-Transporter is a bridge for developers and power users running AI coding tools
-(Claude, Cursor, Windsurf, or any MCP-compatible assistant). It lets a local MCP
-server make authenticated HTTP requests through your real, already-signed-in
-browser tab — so the same session cookies, TLS fingerprint, and browser identity
-you use every day carry the request, not a headless bot.
+ContextMint Bridge is the browser bridge for ContextMint and for developers and
+power users running AI tools (Claude, Cursor, Windsurf, or any MCP-compatible
+assistant). It lets an MCP server on your machine make authenticated HTTP
+requests through your real, already-signed-in browser tab — so the same session
+cookies, TLS fingerprint, and browser identity you use every day carry the
+request, not a headless bot.
+
+**You don't need ContextMint to use it.** It works with ContextMint and with any
+fetchproxy-based MCP server or the `fpx` command-line tool running on your
+machine. The protocol and npm packages behind it are called fetchproxy.
 
 ### The problem it solves
 
@@ -18,17 +23,18 @@ block them. Even when you have a valid session token, these defences can reject
 automated requests that don't look like a real browser.
 
 MCP servers run as local Node.js processes. They can fetch URLs, but they can't
-impersonate a signed-in Chrome tab. Transporter closes that gap: the MCP server
-asks Transporter to make the fetch, Transporter relays it through the page's own
-`fetch()` call, and the response comes back over a localhost WebSocket. The network
-request leaves the machine from Chrome, with your session — not from Node.
+impersonate a signed-in Chrome tab. ContextMint Bridge closes that gap: the MCP
+server asks the extension to make the fetch, the extension relays it through the
+page's own `fetch()` call, and the response comes back over a localhost
+WebSocket. The network request leaves the machine from Chrome, with your
+session — not from Node.
 
 ### How it works
 
-1. **Install the extension.** Transporter opens a local WebSocket listener on
-   `127.0.0.1:37149`.
+1. **Install the extension.** ContextMint Bridge connects to a local WebSocket on
+   `127.0.0.1:37149`, where MCP servers on your machine listen.
 
-2. **An MCP server connects.** On first contact, Transporter shows a pair prompt
+2. **An MCP server connects.** On first contact, ContextMint Bridge shows a pair prompt
    in the extension popup displaying an 8-digit code (e.g. `4829-3176`). The same code
    appears in the MCP server's logs.
 
@@ -40,7 +46,7 @@ request leaves the machine from Chrome, with your session — not from Node.
    You see them in the approval UI.
 
 5. **Fetches flow through your tab.** The MCP server calls `fetchproxy.fetch(url)`.
-   Transporter finds the matching signed-in tab, runs a content-script `fetch()`
+   ContextMint Bridge finds the matching signed-in tab, runs a content-script `fetch()`
    inside that page's context, and returns the response — with cookies, HttpOnly
    headers, and the full TLS session intact.
 
@@ -48,7 +54,7 @@ All traffic stays on your machine. Nothing is sent to any external server. The
 WebSocket port is bound to loopback only (`127.0.0.1`), not accessible from the
 network.
 
-### What Transporter can do (with explicit user approval)
+### What ContextMint Bridge can do (with explicit user approval)
 
 - **Fetch URLs** through a signed-in tab on an approved domain.
 - **Read cookies** for declared origins via the `chrome.cookies` API (including
@@ -59,7 +65,7 @@ network.
   `webRequest` API — one-shot, never modifies requests.
 
 Each capability is declared by the MCP server at pair time. If the server later
-asks for a capability it didn't declare, Transporter forces a re-pair with a
+asks for a capability it didn't declare, ContextMint Bridge forces a re-pair with a
 visible diff so you can decide whether to approve the change.
 
 ### Security model
@@ -88,7 +94,7 @@ visible diff so you can decide whether to approve the change.
 
 ### Who it's for
 
-Transporter is a developer tool. It is most useful if you:
+ContextMint Bridge is a developer tool. It is most useful if you:
 
 - Run AI coding assistants (Claude Desktop, Cursor, Windsurf) with MCP servers
   that need to talk to web services you're already logged into.
@@ -99,9 +105,10 @@ Transporter is a developer tool. It is most useful if you:
 
 ### Open source
 
-Transporter is MIT-licensed and fully open source.
+ContextMint Bridge is MIT-licensed and fully open source.
 
-- **Repository:** github.com/chrischall/fetchproxy
+- **Extension source:** github.com/nullnet-app/contextmint-bridge
+- **Protocol, server and `fpx`:** github.com/chrischall/fetchproxy
 - **npm packages:** `@fetchproxy/server`, `@fetchproxy/protocol`, `@fetchproxy/bootstrap`
 
 The extension source, protocol specification, and security threat model are all

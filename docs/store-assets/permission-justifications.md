@@ -2,14 +2,16 @@
 
 ---
 
-## Permission Justifications
+## Permission Justifications — ContextMint Bridge
 
 ### `storage`
 
-Used to persist trust records (paired MCP server identities and their approved
-capability sets), the extension's own long-term Ed25519/X25519 identity keypair,
-and transient pending-pair state while a pairing is in progress. No data is ever
-sent off the machine; all stored values remain in `chrome.storage.local` on the
+Used for non-secret extension state: the pairing queue and the popup's
+approve/cancel decisions (in `chrome.storage.session`, which content scripts
+cannot read), and a note of recent protocol-version mismatches the popup explains
+(in `chrome.storage.local`). The extension's identity keypair and the trust
+records for paired MCP servers are kept in the extension's own IndexedDB, not in
+`chrome.storage`. No data is ever sent off the machine; everything stays on the
 user's device.
 
 ---
@@ -17,10 +19,12 @@ user's device.
 ### `tabs`
 
 Required to locate the user's signed-in tab on the MCP server's declared domain
-when routing a fetch request. Transporter iterates open tabs and selects one whose
+when routing a fetch request. ContextMint Bridge iterates open tabs and selects one whose
 hostname is the declared domain or a subdomain of it (host-or-subdomain matching).
-Tab URLs are checked only at request time and are not stored or transmitted. No
-tab is opened, closed, or navigated without an explicit user action in the popup.
+Tab URLs are checked only at request time and are not stored or transmitted.
+The only tab the extension ever opens is a background tab on a domain the user
+approved for a paired MCP server, when no tab on that domain is open; it never
+closes or navigates the user's tabs.
 
 ---
 
@@ -29,7 +33,7 @@ tab is opened, closed, or navigated without an explicit user action in the popup
 Required to inject the content script that executes a `fetch()` call (or a
 targeted storage read) inside the page's own context. Running inside the page
 context is what gives the request the page's session cookies, TLS session, and
-browser identity — the core capability Transporter provides. The injected script
+browser identity — the core capability ContextMint Bridge provides. The injected script
 performs only the single operation requested (fetch, localStorage read, etc.) and
 returns the result; it does not manipulate the DOM or execute arbitrary code.
 
@@ -52,7 +56,7 @@ Used only when the MCP server has declared the `capture_request_header` capabili
 and the user approved it at pair time. A one-shot `onBeforeSendHeaders` listener
 captures the value of a specific named request header (e.g. a bearer token the
 tab sends automatically) and returns it to the MCP server. The listener is
-registered for one request and then removed. Transporter **never modifies**
+registered for one request and then removed. ContextMint Bridge **never modifies**
 requests; it is a read-only observer.
 
 ---
@@ -68,9 +72,36 @@ purpose.
 
 ---
 
+### `downloads`
+
+Used only when the MCP server has declared the `download` capability and the
+user approved it at pair time. `chrome.downloads.download` lets the browser
+itself fetch a file from an approved domain with the user's own session, which
+clears bot-challenges that a page-level `fetch()` cannot. The file is saved to
+the Downloads folder without a prompt, the saved local path is returned to the
+MCP server on the same machine, and the download's history entry (not the file)
+is then erased. The URL must be on one of the MCP server's approved domains, and
+the capability is refused for MCP servers reached through a remote bridge, so
+only a server on the user's own machine can save a file.
+
+---
+
+### `tabGroups`
+
+Used to keep the relay tabs the extension opens in one place. When a paired MCP
+server needs a tab on an approved domain and none is open, the extension opens
+one in the background (without stealing focus) and files it into a single tab
+group titled "fetchproxy", so the user can see which tabs the extension created
+and that they are safe to close. `chrome.tabGroups` is used only to find that
+group and set its title and colour. It never reads page content, never moves a
+tab the user opened themselves, and grouping is best-effort: without the
+permission the relay tab still opens, ungrouped.
+
+---
+
 ### `host_permissions: <all_urls>`
 
-The domains that Transporter needs to reach are declared dynamically by each MCP
+The domains that ContextMint Bridge needs to reach are declared dynamically by each MCP
 server at pair time and approved by the user during the pairing flow. Because the
 set of possible domains is open-ended (any service a developer might build an MCP
 for), the manifest must declare broad host permissions. However, runtime
