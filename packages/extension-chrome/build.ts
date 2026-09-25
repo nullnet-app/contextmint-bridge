@@ -2,10 +2,14 @@ import { build, type BuildOptions } from 'esbuild';
 import { mkdir, copyFile, readdir } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Platform } from '@fetchproxy/protocol';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, 'dist');
 const CORE = resolve(HERE, '..', 'extension-core', 'src');
+
+/** This package is the Chrome build. Safari/Firefox builds pass their own. */
+const PLATFORM = 'chrome' satisfies Platform;
 
 /**
  * Which build this is. The release `.zip` attached to every GitHub Release is
@@ -28,6 +32,9 @@ function sharedOptions(mode: BuildMode): BuildOptions {
     target: 'chrome120',
     outdir: OUT,
     sourcemap: mode === 'development' ? 'inline' : false,
+    // The platform the extension hello announces (extension-core `platform.ts`).
+    // Every entry gets it: there is no default, and a bundle without it throws.
+    define: { __FETCHPROXY_PLATFORM__: JSON.stringify(PLATFORM) },
   };
 }
 

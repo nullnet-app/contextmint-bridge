@@ -9,5 +9,7 @@ import { configDefaults, defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, '**/.claude/**', '**/dist/**'],
+    // extension-core reads the build's `__FETCHPROXY_PLATFORM__` define; see the file.
+    setupFiles: ['./packages/extension-core/tests/setup/platform.ts'],
   },
 });

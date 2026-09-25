@@ -67,6 +67,11 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   not degraded: every call fails with `protocol version mismatch`, naming both
   versions. Rebuild `dist/`, then Reload. `packages/extension-chrome/README.md`
   §Install (developer / sideload) carries this.
+- **The hello's `platform` is a build-time define.** extension-core reads it
+  through `src/platform.ts` (`currentPlatform()`), which throws when the
+  bundle was built without esbuild `define: { __FETCHPROXY_PLATFORM__: … }` —
+  there is no `'chrome'` default. Every browser package's `build.ts` must pass
+  it on every entry; vitest sets it in `tests/setup/platform.ts`.
 - **`chrome.action.openPopup()` is restricted.** It generally needs a recent
   user gesture and only works from an MV3 background on recent Chromes; older
   ones throw sync or async. `background/badge.ts` swallows the failure; the
