@@ -1,0 +1,174 @@
+name: release-please
+
+# Thin stub: release-please itself runs in chrischall/workflows'
+# reusable-release-please.yml. What stays here is what depends on this repo:
+# building the Chrome extension from the release tag and attaching
+# `contextmint-bridge-chrome-${VERSION}.zip` plus its SHA-256 digest to the
+# GitHub Release.
+#
+# Nothing in this repo is published to npm — both workspaces are `private`,
+# and tests/release-workflow.test.ts fails if any workflow grows an
+# `npm publish`. The Chrome Web Store upload is a later, separate job.
+#
+# FIRST RELEASE: release-please-config.json carries `"release-as": "1.0.0"`
+# so the bridge starts its own line at 1.0.0 rather than continuing
+# fetchproxy's 3.x. Delete it once v1.0.0 is released.
+#
+# A green tag does not mean the zip is attached: the two jobs are
+# independent. Check the Release's assets; to finish a release whose tag
+# exists but whose zip never attached, dispatch this workflow FROM MAIN with
+# `republish_tag`.
+
+on:
+  push:
+    branches: [main]
+  # `republish_tag` re-fires the attach job for a tag that ALREADY EXISTS —
+  # for a release whose tag and GitHub Release were cut but whose zip never
+  # attached. Blank on the ordinary path. It lives here rather than in the
+  # reusable workflow because a called workflow cannot declare its caller's
+  # triggers.
+  workflow_dispatch:
+    inputs:
+      republish_tag:
+        description: 'Existing tag to re-attach the extension zip to (e.g. v1.0.0). Blank = skip.'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    uses: chrischall/workflows/.github/workflows/reusable-release-please.yml@main
+    with:
+      republish_tag: ${{ inputs.republish_tag }}
+    secrets:
+      release_pat: ${{ secrets.NULLNET_RELEASE_PAT }}
+
+  attach-extension:
+    needs: release-please
+    # `publish`, NOT `release_created`: the latter is release-please's own
+    # flag and is false on a republish, which is the one run that exists to
+    # attach. The reusable workflow folds both paths into this one output.
+    #
+    # Bound to main: a `republish_tag` dispatch runs THIS file as it exists on
+    # the dispatching ref, so without the guard a branch could rewrite this
+    # job and upload whatever it liked to a published Release.
+    if: needs.release-please.outputs.publish == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # `tag`, not `tag_name`: resolved ONCE for both paths by the
+          # reusable workflow, and `tag_name` is empty on a republish where
+          # only the dispatch input names the tag. The zip is built from the
+          # tagged tree, never from whatever main has moved on to.
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26
+          cache: npm
+
+      # `--ignore-scripts`: this job can write to the Release, so no
+      # transitive lifecycle script runs beside it. The lockfile carries
+      # esbuild's platform binary as an optional package, so the build below
+      # does not need esbuild's postinstall.
+      - run: npm ci --ignore-scripts
+
+      # The plain (release) build: no sourcemaps. `build.ts` makes release the
+      # default precisely because this is the build that gets zipped.
+      - name: Build Chrome extension
+        run: npm run build --workspace=@fetchproxy/extension-chrome
+
+      # VERSION = the release tag with its `v` stripped, already derived and
+      # validated by the reusable workflow. It rides in `env:` rather than
+      # being interpolated into the script, because a `${{ }}` value is
+      # substituted before the shell parses anything.
+      #
+      # The manifest check is the "green tag is not a green publish" guard for
+      # this repo: release-please bumps manifest.json through `extra-files`,
+      # and a zip whose manifest disagrees with its tag would be rejected by
+      # the Chrome Web Store (or, worse, accepted as the wrong version).
+      - name: Package Chrome extension
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          MANIFEST_VERSION=$(node -p "require('./packages/extension-chrome/dist/manifest.json').version")
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::packages/extension-chrome/dist/manifest.json is ${MANIFEST_VERSION} but the release is ${VERSION}; refusing to zip." >&2
+            exit 1
+          fi
+          cd packages/extension-chrome/dist
+          zip -r "../../../contextmint-bridge-chrome-${VERSION}.zip" .
+          ls -la "../../../contextmint-bridge-chrome-${VERSION}.zip"
+
+      # release-please already created the GitHub Release with the CHANGELOG
+      # body. Attach the extension zip and a digest of it: the zip is the
+      # sideload / audit distribution path, so the release has to say which
+      # bytes it published, and a sideloader checks what they downloaded with
+      # one `sha256sum -c` (hence sha256sum's own format).
+      #
+      # NO `--clobber`: a published asset is what somebody already downloaded
+      # and checked, and `republish_tag` lets any account with write access
+      # re-run this job against an existing tag with a rebuilt zip. An asset
+      # that is already there is left alone and reported.
+      #
+      # Which is exactly why the digest is computed HERE, from whichever zip
+      # the release ends up carrying, rather than from the local rebuild. The
+      # zip is NOT byte-reproducible — `zip -r` stores each entry's mtime and a
+      # fresh checkout stamps every file with checkout time — so on the
+      # republish path, where the upload is skipped, a digest of the rebuild
+      # would describe bytes nobody can download: the sideloader who runs
+      # `sha256sum -c` reads FAILED, which is indistinguishable from
+      # tampering. The published zip is downloaded and hashed instead, so the
+      # two assets always describe each other.
+      - name: Attach artifacts to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ZIP="contextmint-bridge-chrome-${VERSION}.zip"
+          DIGEST="${ZIP}.sha256"
+          EXISTING=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+          has_asset() { printf '%s\n' "$EXISTING" | grep -qxF "$1"; }
+
+          # The one combination that cannot be repaired without overwriting
+          # something: a digest whose zip has been deleted by hand. Uploading
+          # a fresh zip under it would leave the release asserting a digest of
+          # bytes it no longer serves, so refuse BEFORE uploading anything and
+          # name the repair.
+          if has_asset "$DIGEST" && ! has_asset "$ZIP"; then
+            echo "Release ${RELEASE_TAG} carries ${DIGEST} but not ${ZIP}: the published" >&2
+            echo "digest describes bytes the release no longer serves, and this job never" >&2
+            echo "overwrites an asset. Delete ${DIGEST} from the release, then re-run." >&2
+            exit 1
+          fi
+
+          if has_asset "$ZIP"; then
+            echo "Release ${RELEASE_TAG} already carries ${ZIP} — leaving it alone."
+            # Hash what the release serves, never this run's rebuild.
+            rm -f "$ZIP"
+            gh release download "$RELEASE_TAG" --pattern "$ZIP" --dir .
+          else
+            gh release upload "$RELEASE_TAG" "$ZIP"
+          fi
+
+          if has_asset "$DIGEST"; then
+            echo "Release ${RELEASE_TAG} already carries ${DIGEST} — leaving it alone."
+          else
+            sha256sum "$ZIP" > "$DIGEST"
+            cat "$DIGEST"
+            gh release upload "$RELEASE_TAG" "$DIGEST"
+          fi

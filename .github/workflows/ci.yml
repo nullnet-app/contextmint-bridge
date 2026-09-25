@@ -24,7 +24,70 @@ jobs:
   ci:
     uses: chrischall/workflows/.github/workflows/reusable-mcp-ci.yml@main
     with:
-      node-version: "26"
+      node-version: '26'
       build-command: npm run build
       test-command: npm test
       gate-mode: status
+
+  # Canary against fetchproxy's unreleased protocol. `@fetchproxy/protocol` is
+  # an ordinary npm dependency here, and protocol changes land in
+  # chrischall/fetchproxy first and ship on its `next` prerelease channel — so
+  # this job swaps the locked version for `@next` and runs the suite, and a
+  # protocol change that would break the bridge shows red HERE before it is
+  # released. When fetchproxy has no `next` dist-tag (between prereleases) it
+  # falls back to `latest` and says so, rather than failing.
+  #
+  # Not part of the `ci-gated` gate and not a required check: it reports on
+  # someone else's unreleased code, so it must not block this repo's merges.
+  # Skipped on `labeled` events, which re-run the gate but change no code.
+  protocol-next:
+    if: github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # Pins BOTH workspaces' range to the exact version and re-resolves, so
+      # a `next` outside `^3.x` (a new protocol major) cannot leave a nested
+      # 3.x copy that the suite would silently keep testing against. The
+      # rewritten package.json / lockfile live only in this runner.
+      - name: Install @fetchproxy/protocol@next (fallback latest)
+        run: |
+          set -euo pipefail
+          VERSION=$(npm view @fetchproxy/protocol dist-tags.next 2>/dev/null || true)
+          if [ -n "$VERSION" ]; then
+            echo "Testing against @fetchproxy/protocol@next = ${VERSION}"
+          else
+            VERSION=$(npm view @fetchproxy/protocol dist-tags.latest)
+            echo "::notice::@fetchproxy/protocol has no next dist-tag; falling back to latest = ${VERSION}"
+          fi
+          npm pkg set "dependencies.@fetchproxy/protocol=${VERSION}" \
+            -w @fetchproxy/extension-core -w @fetchproxy/extension-chrome
+          npm install --no-audit --no-fund --ignore-scripts
+          RESOLVED=$(npm ls @fetchproxy/protocol --all --json | node -e '
+            const seen = new Set();
+            const walk = (n) => {
+              for (const [name, dep] of Object.entries(n.dependencies ?? {})) {
+                if (name === "@fetchproxy/protocol") seen.add(dep.version);
+                walk(dep);
+              }
+            };
+            walk(JSON.parse(require("fs").readFileSync(0, "utf8")));
+            console.log([...seen].join(" "));
+          ')
+          if [ "$RESOLVED" != "$VERSION" ]; then
+            echo "::error::expected only @fetchproxy/protocol@${VERSION} in the tree, found: ${RESOLVED}" >&2
+            exit 1
+          fi
+
+      - run: npm run typecheck
+
+      - run: npm test

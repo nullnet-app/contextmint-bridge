@@ -47,6 +47,30 @@ second protocol.
 frozen protocol-3 recording copied verbatim from fetchproxy's server tests.
 Never edit it; re-copy it whole if upstream ever extends the corpus.
 
+CI's `protocol-next` job (`.github/workflows/ci.yml`) re-runs typecheck and
+tests against `@fetchproxy/protocol@next` (falling back to `latest` when
+fetchproxy has no `next` dist-tag), so an unreleased protocol change shows red
+here before it ships. It is not a required check.
+
+## Releases
+
+release-please (`release-please-config.json`, one root `node` package) bumps
+both workspace `package.json`s and `packages/extension-chrome/manifest.json`
+in lockstep and tags `vX.Y.Z`. On each release `.github/workflows/release-please.yml`
+builds `extension-chrome` from the tag and attaches
+`contextmint-bridge-chrome-${VERSION}.zip` and its `.sha256` to the GitHub
+Release, never overwriting an asset already there. Nothing is published to npm.
+release-please never rewrites inter-workspace ranges, so extension-chrome depends
+on extension-core as `"*"` — a pinned range would stop matching the workspace
+after a bump and send `npm ci` to the registry for a package that is never
+published.
+The bridge's version line is its own (it started at 1.0.0), independent of
+fetchproxy's; compatibility is the protocol number, not a version comparison.
+
+`"release-as": "1.0.0"` in the config exists only for the first release:
+delete it once v1.0.0 ships (`tests/release-workflow.test.ts` fails if it
+outlives a manifest of 1.0.0).
+
 ## Testing
 
 Tests live in `packages/<pkg>/tests/` (plus root `tests/` for doc guards).
