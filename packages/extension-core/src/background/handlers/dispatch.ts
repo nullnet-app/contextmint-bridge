@@ -11,7 +11,10 @@
  * `graphql_query` capability.
  */
 
-import type { InnerRequest } from '@fetchproxy/protocol';
+import type { Capability, InnerRequest } from '@fetchproxy/protocol';
+
+import type { ChromeApi } from '../../chrome-api.js';
+import { unavailableCapabilities } from '../../capabilities.js';
 
 import { sendInner } from '../send-inner.js';
 import { mcpDomains, mcpCapabilities } from '../session-scope.js';
@@ -31,6 +34,8 @@ import { handleReadIndexedDbRequest } from './read-indexed-db.js';
 import { handleReadDomRequest } from './read-dom.js';
 import { handleReadDomListRequest } from './read-dom-list.js';
 import { handleGraphqlQueryRequest } from './graphql-query.js';
+
+declare const chrome: ChromeApi;
 
 export async function handleRequest(mcpId: string, req: InnerRequest): Promise<void> {
   const domains = mcpDomains.get(mcpId);
@@ -58,6 +63,21 @@ export async function handleRequest(mcpId: string, req: InnerRequest): Promise<v
       ok: false,
       op: req.op,
       error: `capability ${JSON.stringify(requiredCapability)} not granted (declared: [${capabilities.join(', ')}])`,
+    });
+    return;
+  }
+  if (unavailableCapabilities(chrome).has(requiredCapability as Capability)) {
+    // Defence in depth behind the hello-time refusal (`background/hello.ts`):
+    // a session can still hold a grant this browser cannot serve — a trust
+    // record approved before the capability seam, or an API that vanished.
+    // Answer it here instead of entering a handler that reaches for an absent
+    // namespace. The handlers' own null checks stay as the last line.
+    await sendInner(mcpId, {
+      type: 'response',
+      id: req.id,
+      ok: false,
+      op: req.op,
+      error: `capability ${JSON.stringify(requiredCapability)} is not available in this browser`,
     });
     return;
   }

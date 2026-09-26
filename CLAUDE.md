@@ -131,6 +131,15 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `clients`, `skipWaiting`) — `extension-safari/tests/classic-scripts.test.ts`
   guards the first two. The Safari manifest is generated from Chrome's
   (`extension-safari/manifest.ts`): never hand-keep a second manifest.
+- **Capabilities are refused at hello by runtime API detection.**
+  `extension-core/src/capabilities.ts` (`unavailableCapabilities`) reads which
+  `chrome.*` APIs exist — never `currentPlatform()` or a user agent — and
+  `handleServerHello` refuses a hello declaring any of them, after the
+  signature check and before trust or a pair prompt, with the stable reason
+  `unsupported-capability: <sorted, comma-separated> (not available in this browser)`
+  (Safari 27: `download`). `handlers/dispatch.ts` re-checks per request. A new
+  capability whose API can be absent in some browser MUST be added to
+  `capabilities.ts`, or it is treated as always available.
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is

@@ -693,6 +693,67 @@ describe('telling the server why (#300)', () => {
 });
 
 /**
+ * The capability seam at the transport. The stubbed `chrome` above has no
+ * `downloads` — Safari 27's shape — so an MCP declaring `download` is refused
+ * at its hello, naming the capability, instead of being paired and then
+ * failing mid-request. The refusal reuses the one `hello-rejected` sender, so
+ * its `accepts` gate holds exactly as for every other refusal.
+ */
+describe('a hello declaring a capability this browser lacks', () => {
+  beforeEach(async () => {
+    storage.clear();
+    sessionStorage.clear();
+    freshVault();
+    mcpDomains.clear();
+    mcpCapabilities.clear();
+    state.trust = new TrustStore('2.1.0');
+    state.sessions = new SessionKeys();
+    state.extIdentity = await loadOrCreateExtensionIdentity();
+  });
+
+  async function freshLocal(): Promise<FakeSocket> {
+    FakeSocket.opened = [];
+    unbindAll();
+    links.clear();
+    reconcileRemoteLinks([REMOTE]);
+    const localWs = FakeSocket.opened.find((s) => s.url.startsWith('ws://127.0.0.1'))!;
+    localWs.open();
+    return localWs;
+  }
+
+  it('is refused with a parseable reason when the server accepts hello-rejected', async () => {
+    const localWs = await freshLocal();
+    const mcp = await scriptedMcp('etix-mcp:1.0.0:1111222233334444');
+    const hello = await helloFrom(mcp, extNonceOf(localWs));
+    localWs.message({ ...hello, capabilities: ['fetch', 'download'], accepts: ['hello-rejected'] });
+    await settleFrames(20);
+
+    const rejected = localWs.frames<{ mcpId: string; reason: string }>('hello-rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.mcpId).toBe(mcp.mcpId);
+    expect(rejected[0]!.reason).toBe(
+      'unsupported-capability: download (not available in this browser)',
+    );
+    // Refused before any pair prompt: no code, no ready, no binding kept.
+    expect(localWs.frames('pair-pending')).toHaveLength(0);
+    expect(localWs.frames('ready')).toHaveLength(0);
+    expect(linkForMcp(mcp.mcpId)).toBeNull();
+  });
+
+  it('is refused silently toward a server that did not advertise hello-rejected', async () => {
+    const localWs = await freshLocal();
+    const mcp = await scriptedMcp('etix-mcp:1.0.0:5555666677778888');
+    const hello = await helloFrom(mcp, extNonceOf(localWs)); // no `accepts`
+    localWs.message({ ...hello, capabilities: ['fetch', 'download'] });
+    await settleFrames(20);
+
+    expect(localWs.frames('hello-rejected')).toHaveLength(0);
+    expect(localWs.frames('pair-pending')).toHaveLength(0);
+    expect(localWs.frames('ready')).toHaveLength(0);
+  });
+});
+
+/**
  * A v3 MCP meeting this v4 extension (Task 4.1).
  *
  * Measured on this branch before the fix: `validateFrame` throws
