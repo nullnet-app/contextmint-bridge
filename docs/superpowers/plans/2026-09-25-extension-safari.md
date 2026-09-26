@@ -779,7 +779,7 @@ profiles. Recorded as the owner reported them; nothing below goes further than t
 
 | Check | Result | What was seen |
 | ----- | ------ | ------------- |
-| 1. Background runs, popup renders | **Passed** (popup) | The popup rendered, and the links, status report and pairing all worked, which needs the background running. No Web Inspector console line from the event page was recorded. |
+| 1. Background runs, popup renders | **Passed** (popup); background inferred from links, status report and pairing | The popup rendered, and the links, status report and pairing all worked, which needs the background running. No Web Inspector console line from the event page was recorded. |
 | 2. The same identity survives a restart | **Passed** | The hand-off and the extension identity survived a Safari restart — the first live test of #21 dropping the X25519 private key. The vault `identity` record was not inspected in Web Inspector. |
 | 3. `fetch`, keyed `read_cookies`, `read_local_storage`, `fetch` with `inPage: true` | **Passed** | Pairing with the pair-code match; content-script `fetch` 200 with real data; `fetch` with `inPage` (MAIN world) 200; `chrome.cookies` with declared keys returned exactly the two declared keys; the `localStorage` read answered. |
 | 4. `capture_request_header`; MAIN-world registration | **Inconclusive** (header capture) | Header capture via `webRequest` timed out once; it is unclear whether the page made a request in the window. Re-run pending with the owner. The `inPage` fetch in check 3 went through the MAIN-world bridge (`main-world-bridge.ts`) and returned 200; whether through the registered script or the open-tab `executeScript` was not told apart, and the GraphQL capture through it was not run. |
