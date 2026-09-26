@@ -55,7 +55,8 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
-      # Pins BOTH workspaces' range to the exact version and re-resolves, so
+      # Pins ALL THREE workspaces' range (extension-core, extension-chrome,
+      # extension-safari) to the exact version and re-resolves, so
       # a `next` outside `^3.x` (a new protocol major) cannot leave a nested
       # 3.x copy that the suite would silently keep testing against. The
       # rewritten package.json / lockfile live only in this runner.
@@ -70,7 +71,8 @@ jobs:
             echo "::notice::@fetchproxy/protocol has no next dist-tag; falling back to latest = ${VERSION}"
           fi
           npm pkg set "dependencies.@fetchproxy/protocol=${VERSION}" \
-            -w @fetchproxy/extension-core -w @fetchproxy/extension-chrome
+            -w @fetchproxy/extension-core -w @fetchproxy/extension-chrome \
+            -w @fetchproxy/extension-safari
           npm install --no-audit --no-fund --ignore-scripts
           RESOLVED=$(npm ls @fetchproxy/protocol --all --json | node -e '
             const seen = new Set();

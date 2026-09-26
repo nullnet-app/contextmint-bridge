@@ -99,6 +99,17 @@ permission the relay tab still opens, ungrouped.
 
 ---
 
+### `nativeMessaging`
+
+**Safari only** — the Chrome Web Store build does not request it. ContextMint
+Bridge for Safari ships inside the ContextMint app, and uses native messaging
+only to ask that containing app for the bridge target the user set up there
+(the bridge address and its access credential), so the extension can connect
+without the user typing them in again. It exchanges messages with no other
+application and sends no browsing data to the app.
+
+---
+
 ### `host_permissions: <all_urls>`
 
 The domains that ContextMint Bridge needs to reach are declared dynamically by each MCP

@@ -1,5 +1,6 @@
 import type { BuildOptions } from 'esbuild';
 import { mkdir, copyFile, readdir, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Platform } from '@fetchproxy/protocol';
@@ -158,5 +159,24 @@ export async function copyStatic(
   await copyFile(join(CORE, 'popup', 'popup.html'), join(outdir, 'popup.html'));
   for (const f of await readdir(iconsDir)) {
     await copyFile(join(iconsDir, f), join(outdir, 'icons', f));
+  }
+}
+
+/**
+ * Whether the module at `moduleUrl` (its `import.meta.url`) is the entry script
+ * (`tsx build.ts`), so a browser's `build.ts` builds only when run, never when
+ * imported — by the regression tests (which call the exported option factories
+ * themselves) or by another browser's build. The comparison is exact, on real
+ * paths: the old `argv[1].endsWith('build.ts')` fallback matched every
+ * package's `build.ts`, and a symlinked path (macOS `/tmp` → `/private/tmp`)
+ * differs from `import.meta.url`'s resolved one as a string.
+ */
+export function isEntryScript(moduleUrl: string): boolean {
+  const invoked = process.argv[1];
+  if (!invoked) return false;
+  try {
+    return realpathSync(resolve(invoked)) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
   }
 }

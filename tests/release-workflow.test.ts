@@ -153,14 +153,27 @@ describe('release-please config', () => {
     for (const f of pkg['extra-files']) expect(existsSync(join(ROOT, f.path)), f.path).toBe(true);
   });
 
+  it('bumps every workspace package.json, so a new package cannot be forgotten', () => {
+    const paths = (pkg['extra-files'] as { path: string; jsonpath: string }[])
+      .filter((f) => f.jsonpath === '$.version')
+      .map((f) => f.path);
+    const workspaces = readdirSync(join(ROOT, 'packages'))
+      .map((p) => `packages/${p}/package.json`)
+      .filter((p) => existsSync(join(ROOT, p)));
+    expect(workspaces.length).toBeGreaterThan(0);
+    for (const ws of workspaces) expect(paths, ws).toContain(ws);
+  });
+
   it('keeps the workspace dependency version-free, so a release bump cannot strand it', () => {
     // release-please moves every workspace `version` but never an
     // inter-workspace range. The first release takes extension-core from
     // 3.2.2 to 1.0.0; a `^3.2.2` range would then no longer match the
     // workspace, and `npm ci` goes to the registry for a private package
     // that was never published (404). `*` always resolves to the workspace.
-    const chrome = JSON.parse(read('packages/extension-chrome/package.json'));
-    expect(chrome.dependencies['@fetchproxy/extension-core']).toBe('*');
+    for (const p of ['extension-chrome', 'extension-safari']) {
+      const browser = JSON.parse(read(`packages/${p}/package.json`));
+      expect(browser.dependencies['@fetchproxy/extension-core'], p).toBe('*');
+    }
   });
 
   it('tags plain vX.Y.Z', () => {
@@ -287,6 +300,14 @@ describe('ci.yml protocol@next job', () => {
     expect(run).toContain('dist-tags.next');
     expect(run).toMatch(/latest/);
     expect(run).toMatch(/::notice::|::warning::/);
+  });
+
+  it('pins the protocol in every workspace, so none keeps testing the locked version', () => {
+    const names = readdirSync(join(ROOT, 'packages'))
+      .filter((p) => existsSync(join(ROOT, 'packages', p, 'package.json')))
+      .map((p) => JSON.parse(read(`packages/${p}/package.json`)).name as string);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) expect(run, name).toContain(`-w ${name}`);
   });
 
   it('runs npm test after the install', () => {

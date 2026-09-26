@@ -1,11 +1,11 @@
 import { build, type BuildOptions } from 'esbuild';
 import { mkdir, readFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   copyStatic,
   entryBuilds,
+  isEntryScript,
   moduleEntryOptions as sharedModuleEntryOptions,
   contentScriptEntryOptions as sharedContentScriptEntryOptions,
   type BuildMode,
@@ -58,26 +58,9 @@ async function main(mode: BuildMode): Promise<void> {
   console.log(`extension-chrome built (${mode}) →`, out);
 }
 
-/**
- * Only build when THIS file is the entry script (`tsx build.ts`), not when it
- * is imported — by the regression tests (which call the exported option
- * factories themselves) or by another browser's `build.ts`. The comparison is
- * exact, on real paths: the old `argv[1].endsWith('build.ts')` fallback matched
- * every package's `build.ts`, and a symlinked path (macOS `/tmp` →
- * `/private/tmp`) differs from `import.meta.url`'s resolved one as a string.
- */
-function isEntryScript(): boolean {
-  const invoked = process.argv[1];
-  if (!invoked) return false;
-  try {
-    return realpathSync(resolve(invoked)) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
 // `--dev` is the only argument: release is the default because this same plain
 // command is what the release workflow zips.
-if (isEntryScript()) {
+// The guard is `isEntryScript` in `build-lib.ts`, shared with every browser.
+if (isEntryScript(import.meta.url)) {
   void main(process.argv.includes('--dev') ? 'development' : 'release');
 }

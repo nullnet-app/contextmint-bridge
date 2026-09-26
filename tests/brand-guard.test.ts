@@ -35,6 +35,7 @@ const PACKAGES = readdirSync(join(ROOT, 'packages')).filter((p) =>
 const USER_FACING: string[] = [
   ...walk('packages/extension-core/src/popup'),
   'packages/extension-chrome/manifest.json',
+  'packages/extension-safari/manifest.ts',
   ...PACKAGES.map((p) => `packages/${p}/README.md`),
   'README.md',
   'docs/PRIVACY.md',
@@ -87,6 +88,24 @@ describe('manifest identity', () => {
     const justifications = read('docs/store-assets/permission-justifications.md');
     for (const perm of manifest.permissions) {
       expect(justifications, perm).toContain(`### \`${perm}\``);
+    }
+  });
+});
+
+describe('Safari-only permissions', () => {
+  it('every permission the Safari manifest adds has a justification marked Safari-only', async () => {
+    const { safariManifest } = await import('../packages/extension-safari/manifest.js');
+    const chrome = JSON.parse(read('packages/extension-chrome/manifest.json'));
+    const added = (safariManifest(chrome).permissions ?? []).filter(
+      (p: string) => !(chrome.permissions as string[]).includes(p),
+    );
+    expect(added.length).toBeGreaterThan(0);
+    const justifications = read('docs/store-assets/permission-justifications.md');
+    for (const perm of added) {
+      const heading = `### \`${perm}\``;
+      expect(justifications, perm).toContain(heading);
+      const body = justifications.slice(justifications.indexOf(heading)).split('\n---')[0]!;
+      expect(body, perm).toMatch(/Safari only/i);
     }
   });
 });
