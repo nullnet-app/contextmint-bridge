@@ -45,7 +45,19 @@ export interface ChromeManifest extends ManifestCommon {
 
 export interface SafariManifest extends ManifestCommon {
   background: { scripts: string[]; persistent: false };
+  browser_specific_settings: {
+    safari: { strict_min_version: string };
+    [browser: string]: unknown;
+  };
 }
+
+/**
+ * The spike — and every live check since — proved Safari 27 and nothing
+ * older, so an older Safari refuses to load the extension rather than running
+ * a build nobody has seen work there. Raise it when a newer Safari is required;
+ * never lower it without proving the older one.
+ */
+const SAFARI_MIN_VERSION = '27.0';
 
 /**
  * Safari 27 ran the background ONLY as a non-persistent event page; a
@@ -84,6 +96,8 @@ export function safariManifest(chrome: ChromeManifest): SafariManifest {
       case 'content_scripts':
         out[key] = (value as ContentScript[]).map(withoutWorld);
         break;
+      case 'browser_specific_settings':
+        break; // Set below, keeping any other browser's entry.
       default:
         out[key] = value;
     }
@@ -91,6 +105,11 @@ export function safariManifest(chrome: ChromeManifest): SafariManifest {
   if (!('background' in out))
     out['background'] = { ...EVENT_PAGE, scripts: [...EVENT_PAGE.scripts] };
   if (!('permissions' in out)) out['permissions'] = [...SAFARI_ONLY];
+  const settings = (chrome['browser_specific_settings'] ?? {}) as Record<string, unknown>;
+  out['browser_specific_settings'] = {
+    ...structuredClone(settings),
+    safari: { strict_min_version: SAFARI_MIN_VERSION },
+  };
   return out as SafariManifest;
 }
 

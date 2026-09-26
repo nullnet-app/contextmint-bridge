@@ -52,6 +52,9 @@ _Spike results — macOS_):
 - **No manifest `world` key.** Safari does not support it; content scripts run
   in the isolated world by default, and MAIN-world code is registered at
   runtime, which Safari runs.
+- **Safari 27 or later.** `browser_specific_settings.safari.strict_min_version`
+  is `"27.0"`: the build was proven on Safari 27 and nothing older, so an older
+  Safari refuses to load it instead of running it untested.
 
 The manifest is **generated** from Chrome's (`manifest.ts`), so name, version,
 icons, popup, content scripts and host permissions cannot drift;
