@@ -184,6 +184,30 @@ describe('the handed-off bridge link', () => {
     expect(handoffLinkOpen()).toBe(false);
   });
 
+  // A link REMOVED on purpose still fires its `close` later (the socket closes
+  // asynchronously). That late event must not report connected:false: the
+  // hand-off reports the state after the change itself, and a stale drop
+  // arriving after a newer link opened would tell ContextMint the opposite
+  // of the truth.
+  it('a link replaced by a new credential reports no stale drop when its close arrives', async () => {
+    setHandoffTarget(HANDOFF);
+    socketFor(HANDOFF.url, CREDENTIAL)[0]!.open();
+    const next = { ...HANDOFF, id: 'brt_two', token: 'mcpb_' + 'C'.repeat(43) };
+    setHandoffTarget(next);
+    socketFor(next.url, next.token)[0]!.open();
+    await flush(); // the old socket's close event lands here
+    expect(reports).toEqual([true, true]);
+    expect(handoffLinkOpen()).toBe(true);
+  });
+
+  it('a link withdrawn (not set up any more) reports no drop when its close arrives', async () => {
+    setHandoffTarget(HANDOFF);
+    socketFor(HANDOFF.url, CREDENTIAL)[0]!.open();
+    setHandoffTarget(null);
+    await flush();
+    expect(reports).toEqual([true]);
+  });
+
   it('refuses a target that fails typed-in validation, even if a caller skips the parser', () => {
     setHandoffTarget({ ...HANDOFF, url: 'ws://evil.example/bridge' });
     setHandoffTarget({ ...HANDOFF, url: 'wss://u:p@mcp.nullnet.app/bridge' });

@@ -19,10 +19,11 @@
  * key at all (`identity-keys.ts`) — the same record in every browser, Safari
  * included. A record an earlier version wrote with an X25519 private key is
  * read as the same identity and loses that key on the next wake
- * (`identity-storage.ts`). Before the vault it was raw base64 in `chrome.storage.local["extensionIdentity"]`,
- * where every site's content script could read it (fleet-audit #253); the
- * first load after upgrading imports those keys, so the identity — and every
- * pairing pinned to it — survives, and deletes them from storage.local.
+ * (`identity-storage.ts`). Before the vault it was raw base64 in
+ * `chrome.storage.local["extensionIdentity"]`, where every site's content
+ * script could read it (fleet-audit #253); the first load after upgrading
+ * imports those keys, so the identity — and every pairing pinned to it —
+ * survives, and deletes them from storage.local.
  *
  * Generated lazily on first read. Survives extension restarts because
  * MV3 service-worker state is wiped on every restart, but the vault persists.

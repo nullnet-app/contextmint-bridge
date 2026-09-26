@@ -2,7 +2,12 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-import { renderPopup, type BridgesView, type PopupState } from '../src/popup/popup.js';
+import {
+  handoffBridgeView,
+  renderPopup,
+  type BridgesView,
+  type PopupState,
+} from '../src/popup/popup.js';
 import {
   clearVersionMismatches,
   freshVersionMismatches,
@@ -1407,6 +1412,55 @@ describe('renderPopup — bridges', () => {
   it('shows no hand-off row when there is none', () => {
     withBridges({ targets: [] });
     expect(container.querySelector('.bridge.handoff')).toBeNull();
+  });
+});
+
+// The popup's bootstrap reads the background's link statuses and picks out
+// the ContextMint hand-off row from them (background/links.ts `linkStatuses`).
+describe('handoffBridgeView — the hand-off row from the link statuses', () => {
+  const LOCAL = { id: 'local', connected: true, url: 'ws://127.0.0.1:37149' };
+  const USER = {
+    id: 'remote:b1',
+    connected: true,
+    label: 'Mine',
+    url: 'wss://other.example/bridge',
+  };
+  const HANDOFF = {
+    id: 'contextmint:brt_one',
+    connected: false,
+    label: 'Safari on the Mac',
+    url: 'wss://mcp.nullnet.app/bridge',
+    handoff: true,
+  };
+
+  it('is the link marked handoff, named by its label, with its state', () => {
+    expect(handoffBridgeView([LOCAL, USER, HANDOFF])).toEqual({
+      name: 'Safari on the Mac',
+      url: 'wss://mcp.nullnet.app/bridge',
+      connected: false,
+    });
+    expect(handoffBridgeView([{ ...HANDOFF, connected: true }])?.connected).toBe(true);
+  });
+
+  it('is none when no link is marked handoff — a user-configured remote is never it', () => {
+    expect(handoffBridgeView([])).toBeUndefined();
+    expect(handoffBridgeView([LOCAL, USER])).toBeUndefined();
+    expect(handoffBridgeView([{ ...HANDOFF, handoff: false }])).toBeUndefined();
+  });
+
+  it('falls back to the URL when the link carries no label', () => {
+    const { label: _label, ...unlabelled } = HANDOFF;
+    expect(handoffBridgeView([unlabelled])?.name).toBe(HANDOFF.url);
+  });
+
+  it('is none when the hand-off link carries no URL to show', () => {
+    const { url: _url, ...urlless } = HANDOFF;
+    expect(handoffBridgeView([urlless])).toBeUndefined();
+  });
+
+  it('copies only the name, URL and state — nothing else a status might carry', () => {
+    const view = handoffBridgeView([{ ...HANDOFF, token: 'mcpb_secret' } as typeof HANDOFF]);
+    expect(Object.keys(view!).sort()).toEqual(['connected', 'name', 'url']);
   });
 });
 

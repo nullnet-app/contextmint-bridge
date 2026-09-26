@@ -132,6 +132,21 @@ export function isUsableHandoffTarget(t: HandoffTarget): boolean {
   );
 }
 
+/**
+ * What the person can do about a failed hand-off. Only "nothing set up" (or no
+ * app to answer) is fixed by setting the bridge up; `unknown-request` is the
+ * app's handler being older or newer than this extension (the contract), and a
+ * malformed answer is the same mismatch seen from here; an unusable URL or
+ * credential is a target the app holds that this extension will not dial.
+ */
+function adviceFor(reason: string): string {
+  if (reason.startsWith('not-set-up')) return 'set it up in the ContextMint app';
+  if (reason.startsWith('unusable ')) {
+    return 'check the bridge in the ContextMint app (reconnect it there)';
+  }
+  return 'update the ContextMint app so it and ContextMint Bridge speak the same hand-off';
+}
+
 export interface NativeHandoffDeps {
   runtime: NativeMessagingRuntime;
   /** `chrome.alarms` (Safari aliases it); absent → no heartbeat. */
@@ -196,7 +211,7 @@ export function startNativeHandoff(deps: NativeHandoffDeps): NativeHandoff {
       if (parsed.reason !== lastWarned) {
         lastWarned = parsed.reason;
         console.warn(
-          `[fetchproxy] no bridge target from ContextMint: ${parsed.reason} — set it up in the ContextMint app`,
+          `[fetchproxy] no bridge target from ContextMint: ${parsed.reason} — ${adviceFor(parsed.reason)}`,
         );
       }
     }
