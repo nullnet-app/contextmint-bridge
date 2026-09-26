@@ -70,9 +70,15 @@ describe.each(cases)('%s keeps parity with Chrome', (_label, safari) => {
     expect([...(safari().permissions ?? [])].sort()).toEqual([...expected].sort());
   });
 
-  it('differs from Chrome’s key set only by minimum_chrome_version', () => {
+  it('differs from Chrome’s key set only by minimum_chrome_version out and browser_specific_settings in', () => {
     const chromeKeys = Object.keys(chrome).filter((k) => k !== 'minimum_chrome_version');
-    expect(Object.keys(safari()).sort()).toEqual(chromeKeys.sort());
+    expect(Object.keys(safari()).sort()).toEqual(
+      [...chromeKeys, 'browser_specific_settings'].sort(),
+    );
+  });
+
+  it('requires Safari 27.0, the version the build was proven on', () => {
+    expect(safari().browser_specific_settings).toEqual({ safari: { strict_min_version: '27.0' } });
   });
 
   it('replaces the service worker with the event-page background shape', () => {
@@ -99,6 +105,20 @@ describe('safariManifest', () => {
       permissions: [...(chrome.permissions ?? []), 'nativeMessaging'],
     });
     expect(safari.permissions?.filter((p) => p === 'nativeMessaging')).toHaveLength(1);
+  });
+
+  it('keeps another browser’s browser_specific_settings and sets only the Safari floor', () => {
+    const safari = safariManifest({
+      ...chrome,
+      browser_specific_settings: {
+        gecko: { id: 'x@example.com' },
+        safari: { strict_min_version: '15.4', strict_max_version: '99' },
+      },
+    });
+    expect(safari.browser_specific_settings).toEqual({
+      gecko: { id: 'x@example.com' },
+      safari: { strict_min_version: '27.0' },
+    });
   });
 
   it('refuses a manifest-declared MAIN-world content script instead of demoting it to ISOLATED', () => {

@@ -759,6 +759,13 @@ the throwaway container afterwards.
    `storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })` at boot where
    it exists and to fail closed (queue nothing, approve nothing) where the restriction
    cannot be established — feature-checked, never a UA sniff.
+7. **Does Safari 27 accept the monochrome SVG template icon in `action.default_icon`,
+   and does it tint correctly?** Copy `system/assets/contextmint-bridge-toolbar.svg` from
+   chrischall/nullnet-design-system into a throwaway build's `icons/`, point
+   `action.default_icon` at it, and check the toolbar in light mode, dark mode, and with
+   the extension active vs inactive. v1 ships the PNGs regardless (owner decision
+   2026-09-26); a pass here becomes its own `feat:` task to generate the SVG into the
+   Safari manifest only.
 
 **Output:** a docs PR in chrischall/fetchproxy adding the results to the spec's *Spike
 results — macOS* table (title `docs(spec): record the Safari build's live checks`), and,
@@ -789,21 +796,32 @@ For chrischall/fetchproxy, as an additive minor protocol change, when the owner 
 
 ## Open questions
 
-- **Subset vs refusal.** T6 refuses the whole hello when any declared capability is
-  unavailable (the spec's "typed refusal at pair/hello time"). An MCP that declares
-  `download` as optional would then not work on Safari at all; granting the available
-  subset and refusing per request is the alternative. The plan follows the spec; say so
-  if you prefer the subset.
-- **Drop the X25519 private key instead?** It has no caller in protocol 4. Not storing it
-  (keep only the pub as the identity handle) is simpler and strictly safer than any
-  storage form — but it changes the identity's shape and forecloses a future use. T1
-  keeps it per the spec's design note.
-- **Safari toolbar template icon.** The spec mentions `contextmint-bridge-toolbar.svg`
-  (monochrome template) for Safari; T4 ships the same PNGs as Chrome. Whether Safari 27
-  takes an SVG in `action.default_icon`, and whether the template is wanted for v1, is
-  unverified.
-- **A Safari version floor** (`browser_specific_settings.safari.strict_min_version`) is
-  not set; the spike only proved Safari 27.
+**Decided by the owner, 2026-09-26** (the first four below):
+
+- **Subset vs refusal — DECIDED: subset, if protocol 4 can carry it.** Grant the
+  capabilities this browser can serve, show the unavailable ones greyed/marked in the
+  pairing UI, and fail a call to an unavailable verb with a typed "not available in this
+  browser" error — but only if `@fetchproxy/protocol` (protocol 4, as published) can
+  already tell the MCP which capabilities were granted (e.g. a granted set in the
+  ready/scope frames). If it cannot, T6's whole-hello refusal stays and the protocol
+  change is written up as an issue in chrischall/fetchproxy; the protocol is not changed
+  here.
+- **Drop the X25519 private key — DECIDED: drop it.** It has no caller in protocol 4
+  (session ECDH is ephemeral×ephemeral). Keep the X25519 **public** key as the identity
+  handle — trust records are keyed on its hash, so existing pairings survive unchanged —
+  stop generating and storing the private half, migrate existing vault records
+  (`cryptokey` / `wrapped` / `pkcs8`, T1) by discarding the private material and keeping
+  the pub, and simplify the storage-form machinery to what is still needed. fetchproxy's
+  `docs/SECURITY.md` paragraph from T2 gets a matching update in its own PR.
+- **Safari toolbar template icon — DECIDED: PNG for v1.** T4's PNGs ship. Whether Safari
+  27 takes `contextmint-bridge-toolbar.svg` in `action.default_icon`, and whether it
+  tints correctly, is T8 check 7.
+- **Safari version floor — DECIDED: `27.0`.** The generated Safari manifest sets
+  `browser_specific_settings.safari.strict_min_version` to `"27.0"`, the version the
+  build was proven on (`extension-safari/tests/manifest-parity.test.ts` pins it).
+
+Still open:
+
 - **`storage.session` access level on Safari** is unverified (T8 check 6). The pairing
   channel's integrity rests on a Chrome default today.
 - **iOS** rows of the spike are still open; nothing here is iOS-specific, but the event
