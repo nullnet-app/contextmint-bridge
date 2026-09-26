@@ -22,7 +22,8 @@ build unless the manifest's:
 - `permissions` does **not** contain `downloads`.
 
 Its Task 7 names the Safari-safe X25519 store and the detached-call fix (done here in
-#7) as release blockers for a real pin. Everything this plan ships is shaped to pass
+#7, merged to `main` after v1.0.0 was cut — so no release carries it yet) as release
+blockers for a real pin. Everything this plan ships is shaped to pass
 those checks exactly. Its Task 4 writes the native-messaging contract at
 `docs/BRIDGE-HANDOFF.md` in mcp-host-app (not on its `main` as of 2026-09-25).
 
@@ -156,8 +157,9 @@ first — if someone already opened this, stop and say so.
 **Steps:**
 1. The failing test already exists — run `npx vitest run tests/release-workflow.test.ts`
    and watch it fail with the message above.
-2. `release-please-config.json`: delete `"release-as": "1.0.0"` and the two `//` lines
-   about it; keep the `bootstrap-sha` lines.
+2. `release-please-config.json`: delete `"release-as": "1.0.0"` and the three `//` lines
+   about it (the first three entries of the `//` array); keep the two `bootstrap-sha`
+   lines.
 3. `.github/workflows/release-please.yml`: delete the `FIRST RELEASE:` comment paragraph.
    `CLAUDE.md` §Releases: delete the `release-as` paragraph (the rest stays true).
 4. Leave the test's `release-as` branch logic in place (it still guards a re-added key).
@@ -187,15 +189,21 @@ protection the browser allows.
 
 **Design (from the spec's design note; do not substitute a user-agent check):**
 
-- **Probe once per vault factory** (memoised like `ensureVault`'s `runs` WeakMap, NOT
-  persisted — a later browser that fixes the bug should be probed afresh): in one
-  readwrite transaction `put` a throwaway **non-extractable X25519 private `CryptoKey`**
-  under a probe key, `get` it back in a second transaction, delete it. If what comes back
-  is a `CryptoKey` with `algorithm.name === 'X25519'`, the vault can hold X25519 keys →
-  form **`cryptokey`** (today's shape, unchanged — Chrome stays exactly as it is). If
-  not, probe a throwaway non-extractable **AES-GCM** key (`['wrapKey','unwrapKey']`) the
-  same way. AES round-trips → form **`wrapped`**; AES also nulls → form **`pkcs8`**.
-  Add the probe key to `VaultKey` (e.g. `'storageProbe'`); never leave it behind.
+- **Probe only when minting** — never on a wake that finds a stored identity (that
+  record's own `form` says how to load it, so an ordinary wake writes nothing), and
+  never persisted (a later browser that fixes the bug is probed afresh at its next
+  mint): in one readwrite transaction `put` a throwaway **non-extractable X25519 private
+  `CryptoKey`** under a probe key, `get` it back in a second transaction, delete it. If
+  what comes back is a `CryptoKey` with `algorithm.name === 'X25519'`, the vault can hold
+  X25519 keys → form **`cryptokey`** (today's shape, unchanged — Chrome stays exactly as
+  it is). If not, probe a throwaway non-extractable **AES-GCM** key
+  (`['wrapKey','unwrapKey']`) the same way. AES round-trips → form **`wrapped`**; AES
+  also nulls → form **`pkcs8`**.
+- **The probe key is unique per probe**, e.g. `` `storageProbe:${crypto.randomUUID()}` ``
+  (widen `VaultKey` with that template-literal type), and is deleted in a `finally`. A
+  single fixed key races: the popup and the background both mint on first install, and
+  one context's delete can land between the other's `put` and `get`, which reads back
+  `undefined` and would silently downgrade a Chrome install to `wrapped`/`pkcs8`.
 - **Form `wrapped`:** a non-extractable AES-GCM-256 wrapping key, generated once and stored
   in the vault (new `VaultKey` `'identityWrappingKey'`, written in the SAME
   `vaultInitIfAbsent` transaction as the identity). To mint: generate the X25519 pair
@@ -240,6 +248,12 @@ protection the browser allows.
 - **Concurrency is unchanged:** the popup and the background can race first init; the
   wrapping key and the identity land in ONE `vaultInitIfAbsent` transaction, so only one
   pair ever wins. Minting (async WebCrypto) happens before the transaction, as today.
+- **Every writer of `identity` goes through the same to-stored-form step**, including
+  the legacy `storage.local` import in `run()` (`identity: imported`), which today writes
+  an `ExtensionIdentity` holding an X25519 `CryptoKey` straight into the vault. On a
+  `wrapped`/`pkcs8` vault that write would be nulled like any other. The import already
+  has the raw private bytes in hand (`importLegacyIdentity`); give it (or a sibling) a
+  way to produce the stored form from them before `importLegacyIdentity` zeroes them.
 
 **Files:** `packages/extension-core/src/identity-keys.ts`, `src/vault.ts` (new keys),
 `src/vault-migration.ts`, `src/extension-identity.ts` (docblock), probably a new
@@ -258,14 +272,18 @@ describes the vault.
    `vi.spyOn(FDBObjectStore.prototype, 'put')` from `fake-indexeddb` delegating to the
    original with the transformed value), and restore it in `afterEach`. Add a
    self-test: an X25519 key put through it reads back `null`, an object containing one
-   reads back `null`, an Ed25519 key and a `Uint8Array` round-trip. Watch
+   reads back `null`, an Ed25519 key and a `Uint8Array` round-trip. (The existing suites
+   already store `CryptoKey`s in fake-indexeddb, so Node's structured clone of a
+   `CryptoKey` is not the obstacle; only the nulling is simulated.) Watch
    `extension-identity.test.ts`'s fresh-install cases fail under `webkitLikeVault()`
    with today's "missing from the vault" error — that is the bug reproduced.
 2. Probe tests (`identity-storage.test.ts`): plain `freshVault()` → `cryptokey`;
    `webkitLikeVault()` → `wrapped`; `webkitLikeVault({nullAes: true})` → `pkcs8`; the
-   probe key is absent from the store afterwards; the probe runs once per factory
-   (count `put`s); a probe `put` that throws (quota) is a thrown error from
-   `ensureVault`, not a silent `pkcs8` downgrade.
+   probe key is absent from the store afterwards; a wake that finds a stored identity
+   of any form probes nothing and writes nothing (count `put`s); two concurrent first
+   loads on a plain `freshVault()` both see `cryptokey` (the unique-key race above); a
+   probe `put` that throws (quota) is a thrown error from `ensureVault`, not a silent
+   `pkcs8` downgrade.
 3. Identity tests, parameterised over the three vaults: `loadOrCreateExtensionIdentity`
    returns non-extractable X25519 and Ed25519 keys (`exportKey` rejects on both); the
    same identity comes back on a second load and after a simulated wake (drop the
@@ -285,7 +303,8 @@ describes the vault.
    returned as the identity (decide and test what happens next — the safe answer is the
    existing "missing from the vault" error rather than silently minting a new identity
    over a record that exists, since minting would orphan every pairing without saying
-   so; state the choice in a comment).
+   so; state the choice in a comment, and in the PR body say how a user recovers —
+   today that is removing and re-adding the extension).
 5. Implement until green. Keep `isExtensionIdentity` as the in-memory shape check.
 6. **Docs, honestly.** `docs/PRIVACY.md` §keys: say the private keys are held
    non-extractably by the browser; in browsers whose storage cannot keep such a key
@@ -312,7 +331,10 @@ before writing. **Branch:** `docs/safari-identity-storage`.
 **PR title:** `docs(security): say how the Safari bridge stores its identity keys`.
 
 **Steps:**
-1. `docs/SECURITY.md` §Defense 4 (the vault) — add a short *Safari* paragraph: WebKit
+1. `docs/SECURITY.md` — the claim that changes is in **§T-fake-extension** ("The
+   extension's own private keys are out of a content script's reach … non-extractable
+   WebCrypto `CryptoKey`s, persisted by structured clone"); Defense 4 (under §T3) only
+   points at it. Add a short *Safari* paragraph there: WebKit
    IndexedDB nulls X25519 `CryptoKey`s (spike 2026-09-25); the bridge probes storage once
    (never a UA sniff) and, where X25519 keys do not persist, stores that key wrapped
    under a non-extractable AES-GCM key held in the same vault, or — if AES keys do not
@@ -322,6 +344,9 @@ before writing. **Branch:** `docs/safari-identity-storage`.
    private key has no caller in protocol 4, so the practical exposure of the fallback is
    the identity handle, not session keys; the Ed25519 signing key is unaffected on every
    form. Link to the bridge repo paths as `nullnet-app/contextmint-bridge …`.
+   Defense 4 also rests on `chrome.storage.session` being closed to content scripts
+   "by default" — a Chrome fact. If T8 has recorded Safari's answer (its check 6), say
+   it; otherwise add one sentence that this is unverified on Safari, pending T8.
 2. If T8 has already recorded which form Safari actually takes, say it; otherwise say
    "expected `wrapped`, pending the live check" and leave a pointer to T8.
 3. Run fetchproxy's doc-guard tests (`npm test` at its root; `npm run typecheck`) — its
@@ -359,13 +384,17 @@ it would also run the CHROME build as a side effect. Fix both before T4 exists.
    helper for popup.html + icons. The popup entry stays `esm` for both targets (it is
    loaded via `<script type="module">` from an extension page, which the spike's Safari
    rendered). Keep the long comments with the code they explain.
+   `copyStatic` takes the manifest as JSON **text** (Chrome passes its file's contents,
+   Safari its generated manifest), not a path, so one helper serves both.
 3. `packages/extension-chrome/build.ts` becomes the Chrome target: its `BuildTarget`
    (`'chrome'`, `dist/`, `'esm'`, `'chrome120'`), `main()`, and **re-exports** of
    `moduleEntryOptions`/`contentScriptEntryOptions` pre-bound to the Chrome target so the
    existing tests (`platform-define`, `content-scripts-classic`,
    `release-bundle-sourcemaps`) keep importing `../build.js` unchanged. Replace the
-   `invokedPath.endsWith('build.ts')` fallback with an exact comparison of resolved
-   paths (keep whatever `tsx` needs — check `npm run build` still builds), and add a
+   `invokedPath.endsWith('build.ts')` fallback with an exact comparison of
+   `realpathSync`-resolved paths on both sides (symlinks such as macOS `/tmp` →
+   `/private/tmp` are why a plain string compare can miss; check `npm run build` still
+   builds, from the root and from the package), and add a
    test that proves importing `build.ts` from a different entry does not run `main`.
 4. `tsconfig.tests.json`: include `packages/extension-chrome/build-lib.ts`.
 5. `npm run build`, then diff the produced `packages/extension-chrome/dist/` against a
@@ -417,12 +446,12 @@ permissions can never drift:
      one deliberate Safari-only addition, named in the test with the reason); the key
      sets of the two manifests differ only by `minimum_chrome_version` and `background`'s
      shape. Run against the real `packages/extension-chrome/manifest.json` AND the built
-     `dist/manifest.json`.
+     manifest from the *Layout* test's temp build (never `dist/` — see below).
    - *mcp-host-app's gate, restated* (`manifest-consumer-contract.test.ts`): the built
      manifest's `background` deep-equals `{scripts: ['background.js'], persistent:
      false}`; `permissions` includes `nativeMessaging` and excludes `downloads`. Cite
-     nullnet-app/mcp-host-app `tools/fetch_bridge_resources.sh` / its plan Task 6 in the
-     comment — if that repo's check changes, this one must.
+     nullnet-app/mcp-host-app's plan Task 6 (`tools/fetch_bridge_resources.sh` there, not
+     on its `main` yet) in the comment — if that repo's check changes, this one must.
    - *Classic scripts* (`classic-scripts.test.ts`): build every Safari entry that the
      manifest loads as a classic script (background, content, capture-logger) with
      `write: false` and compile each with `new vm.Script(text)` from `node:vm` — Node
@@ -436,17 +465,27 @@ permissions can never drift:
      `extension-chrome/tests/platform-define.test.ts`, including its
      `/\? void 0 : "safari"/` background check).
    - *No sourcemaps in release* (mirror `release-bundle-sourcemaps.test.ts`).
-   - *Layout*: after `npm run build`, `dist/manifest.json` exists at the root, every file
-     the manifest names (background scripts, content-script `js`, `action.default_popup`,
-     every icon) exists in `dist/`, and nothing named in `dist/manifest.json` is missing.
-     Mirror `manifest-icons.test.ts`'s PNG-size check for the icons.
+   - *Layout*: run the Safari build into a **temp `outdir`** from the test itself
+     (export a `buildSafari({ outdir, mode })` from `build.ts` — `main()` calls it with
+     `dist/`), then assert `manifest.json` exists at the root, every file the manifest
+     names (background scripts, content-script `js`, `action.default_popup`, every icon)
+     exists, and `capture-logger.js` (registered at runtime, not named by the manifest)
+     is there too. Mirror `manifest-icons.test.ts`'s PNG-size check. Remove the temp dir
+     in `afterAll`.
+   - **No test may read `packages/extension-safari/dist/`.** `npm test` runs without a
+     prior build in CI's `protocol-next` job and in a fresh worktree; a test that needs
+     built output builds it into a temp dir (as above) or uses `write: false`. The
+     *manifest parity* test therefore runs against `safariManifest(chromeManifest)` and
+     the temp build's `manifest.json`, not `dist/`.
 2. `packages/extension-safari/package.json`: `"name": "@fetchproxy/extension-safari"`,
    `private`, `type: module`, `version` equal to extension-chrome's current version (read
    it; do not invent one), scripts `build` = `tsx build.ts`, `build:dev` = `tsx build.ts
    --dev`, dependencies `@fetchproxy/extension-core: "*"` and `@fetchproxy/protocol`
    with extension-chrome's exact range, devDependencies `esbuild`/`tsx` with
-   extension-chrome's ranges. It may import `../extension-chrome/build-lib.ts` by
-   relative path (both are private workspaces; say why in a comment). `npm install` to
+   extension-chrome's ranges. It may import `../extension-chrome/build-lib.js` by
+   relative path (the `.js` specifier, as the existing tests import `../build.js` — tsx
+   and tsc both resolve it to the `.ts`; both are private workspaces; say why in a
+   comment). `npm install` to
    update the lockfile.
 3. `packages/extension-safari/build.ts`: the Safari `BuildTarget` (`platform:
    'safari'`, `outdir: dist/`, `backgroundFormat: 'iife'`, an esbuild `target` Safari
@@ -524,15 +563,26 @@ zip is refused before anything uploads.
    builds that URL). Watch them fail.
 2. `release-please.yml`, in the existing `attach-extension` job (one job, so one
    checkout of the tag and one `npm ci --ignore-scripts`): add *Build Safari extension*
-   and *Package Safari extension* steps mirroring Chrome's, and turn *Attach artifacts to
-   release* into a loop over `chrome safari` running the unchanged per-zip logic (a shell
-   function taking the target name is fine). Keep every existing comment; add one saying
+   and *Package Safari extension* steps mirroring Chrome's, placed **before** *Attach
+   artifacts to release* so a Safari build or version-check failure uploads nothing at
+   all; then turn *Attach* into a loop over the targets running the unchanged per-zip
+   logic (a shell function taking the target name is fine).
+   **A tag that predates `packages/extension-safari`** (v1.0.0 today) has no Safari
+   package: a `republish_tag` of it must still attach Chrome. The Safari steps check
+   `test -f packages/extension-safari/package.json` in the checked-out tag and, when it
+   is absent, skip with a `::notice::` and leave `safari` out of the attach loop — test
+   that too. Never skip on any other failure. Keep every existing comment; add one saying
    why the Safari zip's root must be the resources directory. Update the file's header
    comment and `CLAUDE.md` §Releases.
-3. Consider the partial-failure path explicitly and say it in a comment: if Chrome
-   attaches and Safari fails, a `republish_tag` dispatch from main re-runs the job; the
-   Chrome assets are left alone (existing), and the Safari pair is added.
-4. `actionlint` if available (`brew install actionlint` if not) on the workflow.
+3. Consider the partial-failure path explicitly and say it in a comment: if an upload
+   fails part-way (Chrome attached, Safari not), a `republish_tag` dispatch from main
+   re-runs the job; the Chrome assets are left alone (existing), and the Safari pair is
+   added.
+4. The consumer builds the download URL as
+   `https://github.com/nullnet-app/contextmint-bridge/releases/download/v${VERSION}/contextmint-bridge-safari-${VERSION}.zip`
+   (public repo, unauthenticated). Say in the header comment that the `v`-prefixed tag
+   (`include-v-in-tag`, already tested) and this asset name are that contract.
+5. `actionlint` if available (`brew install actionlint` if not) on the workflow.
 
 **Done when:** tests green, `npm test`/`typecheck`/`build` green, PR open with CI green.
 The first release after this merges must show four assets; the task that is running
@@ -569,7 +619,12 @@ Handlers already null-check some APIs mid-request (`download.ts`: `if
     `capture_redirect` ← `api.webRequest?.onBeforeRedirect?.addListener` — if Safari
     exposes these objects they count as present (spike: unproven, not absent; T8
     checks them live);
-  - `fetch_in_page`, `graphql` ← `typeof api.scripting?.executeScript === 'function'`;
+  - `fetch_in_page`, `graphql` ← both reach the page through the MAIN-world bridge
+    (`capture-logger.js`), which `main-world-bridge.ts` places with
+    `scripting.getRegisteredContentScripts` / `registerContentScripts` /
+    `updateContentScripts` / `unregisterContentScripts` (future tabs; it already
+    no-ops unless all four are functions) and `scripting.executeScript` (open tabs) —
+    detection requires exactly those five, matching that file's own guard;
   - `write_cookies` ← `typeof api.cookies?.set === 'function'`;
   - everything else (`fetch`, `read_cookies` — which has a `document.cookie` path —,
     storage/IndexedDB/DOM reads) always available.
@@ -601,7 +656,8 @@ Handlers already null-check some APIs mid-request (`download.ts`: `if
 **Steps:**
 1. Tests first: `tests/capabilities.test.ts` — with a full stub API nothing is
    unavailable; with `downloads` undefined → `{download}`; with `webRequest` undefined →
-   both capture capabilities; with `scripting` undefined → `fetch_in_page`, `graphql`;
+   both capture capabilities; with `scripting` undefined, or only `registerContentScripts` missing →
+   `fetch_in_page`, `graphql`;
    with `cookies` lacking `set` → `write_cookies`; detection never calls a detached
    method (a stub whose methods throw when called without their receiver still yields
    "available"). In the existing `handleServerHello` test file: a hello declaring
@@ -635,7 +691,10 @@ report that the task is blocked; do not implement against a guessed contract.
 
 **What the Mac plan expects (implement against the CONTRACT DOC, which wins over this
 summary):** the extension calls `browser.runtime.sendNativeMessage` (with the manifest's
-`nativeMessaging` permission) sending `{"type":"bridge-target"}`; the appex answers
+`nativeMessaging` permission) sending `{"type":"bridge-target"}` — the call takes an
+application identifier first (`sendNativeMessage(application, message)`); Safari routes
+it to the containing app's appex whatever it says, so pass the container's bundle ID
+(`app.nullnet.mcphost`) unless the contract doc names another; the appex answers
 `{"url": "wss://…/bridge", "credential": "mcpb_…", "name": "…"}` or
 `{"error": "not-set-up"}` (or `{"error": "unknown-request"}`). The background is a
 non-persistent event page, so the target is held **in memory only** and asked for again
@@ -649,7 +708,11 @@ IndexedDB vault.
    malformed answer → no target, one `console.warn` without the credential text; the
    credential never appears in any storage mock or log line; Chrome (no
    `sendNativeMessage`) → the module is inert.
-2. Merge the handed-off target into the remote-bridge connection set without persisting
+2. Map the answer onto a `RemoteTarget` (`url`, `token` = the credential) and run it
+   through the same validation `remote-targets.ts` applies to a typed-in target
+   (`wss:` off loopback, no credentials in the URL, a subprotocol-safe token) — a
+   handed-off target is trusted no more than one the user typed. Merge it into the
+   remote-bridge connection set without persisting
    it (read how `remote-targets.ts` / `socket.ts` open links for vault-stored targets and
    add an in-memory source beside them; the popup shows it as "from ContextMint",
    not editable).
@@ -686,6 +749,16 @@ the throwaway container afterwards.
    capture-logger bridge in `main-world-bridge.ts`) works, which the spike did not test.
 5. An MCP declaring `download` is refused at hello with `unsupported-capability:
    download` (T6), visible in the MCP's error.
+6. **Can a content script reach `chrome.storage.session`?** From a content script on
+   any page (Web Inspector, the extension's isolated world), try
+   `chrome.storage.session.get(null)` and a `set`. The pairing queue and the popup's
+   approval (`pendingPair` / `approvedPair`, `background/pending-pair-store.ts`) live
+   there because Chrome closes it to content scripts by default (fetchproxy
+   `docs/SECURITY.md` Defense 4). If Safari lets a content script read or write it,
+   that is a **release blocker**: open a `fix:` task here to call
+   `storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })` at boot where
+   it exists and to fail closed (queue nothing, approve nothing) where the restriction
+   cannot be established — feature-checked, never a UA sniff.
 
 **Output:** a docs PR in chrischall/fetchproxy adding the results to the spec's *Spike
 results — macOS* table (title `docs(spec): record the Safari build's live checks`), and,
@@ -731,5 +804,7 @@ For chrischall/fetchproxy, as an additive minor protocol change, when the owner 
   unverified.
 - **A Safari version floor** (`browser_specific_settings.safari.strict_min_version`) is
   not set; the spike only proved Safari 27.
+- **`storage.session` access level on Safari** is unverified (T8 check 6). The pairing
+  channel's integrity rests on a Chrome default today.
 - **iOS** rows of the spike are still open; nothing here is iOS-specific, but the event
   page's lifetime on iOS may change what T7 must do on wake.
