@@ -217,8 +217,23 @@ export interface RemoteTargetView {
   connected?: boolean;
 }
 
+/**
+ * The bridge ContextMint handed over (Safari inside the ContextMint app,
+ * `native-handoff.ts`). Read from the background's live link statuses — it is
+ * held in memory there and nowhere the popup could read it from — and shown
+ * as "from ContextMint", not editable: the app owns it, and a disconnect in
+ * the app is what removes it. Never the credential.
+ */
+export interface HandoffBridgeView {
+  name: string;
+  url: string;
+  connected?: boolean;
+}
+
 export interface BridgesView {
   targets: RemoteTargetView[];
+  /** The ContextMint hand-off, when the background holds one. */
+  handoff?: HandoffBridgeView;
   /** Whether the loopback link — the one every local MCP needs — is up. */
   localConnected?: boolean;
   /** Save a new target. Returns an error string to show, or null on success. */
@@ -755,6 +770,15 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
   local.appendChild(elem('span', { class: 'bridge-url' }, 'localhost (always on)'));
   ul.appendChild(local);
 
+  if (bridges.handoff) {
+    const h = bridges.handoff;
+    const li = elem('li', { class: 'bridge remote handoff' });
+    if (h.connected !== undefined) li.appendChild(statusDot(h.connected));
+    li.appendChild(elem('span', { class: 'bridge-url' }, `${h.name} — ${h.url}`));
+    li.appendChild(elem('span', { class: 'bridge-source hint' }, ' from ContextMint'));
+    ul.appendChild(li);
+  }
+
   for (const t of bridges.targets) {
     const li = elem('li', { class: t.enabled ? 'bridge remote' : 'bridge remote disabled' });
     li.setAttribute('data-target-id', t.id);
@@ -1146,6 +1170,10 @@ type AnyPendingRecord = PendingPairRecord | PendingScopeUpdateRecord;
 interface LinkStatusMessage {
   id: string;
   connected: boolean;
+  label?: string;
+  url?: string;
+  /** Only on the link ContextMint handed over. */
+  handoff?: boolean;
 }
 
 declare const chrome: {
@@ -1355,8 +1383,18 @@ async function bootstrap(): Promise<void> {
       }
     };
     const localConnected = statusFor('local');
+    const handoffLink = links.find((link) => link.handoff === true);
+    const handoff: HandoffBridgeView | undefined =
+      handoffLink && typeof handoffLink.url === 'string'
+        ? {
+            name: typeof handoffLink.label === 'string' ? handoffLink.label : handoffLink.url,
+            url: handoffLink.url,
+            connected: handoffLink.connected,
+          }
+        : undefined;
     return {
       ...(localConnected === undefined ? {} : { localConnected }),
+      ...(handoff === undefined ? {} : { handoff }),
       targets: targets.map((t) => {
         const connected = statusFor(`remote:${t.id}`);
         return {

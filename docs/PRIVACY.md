@@ -1,6 +1,6 @@
 # Privacy Policy — ContextMint Bridge (fetchproxy)
 
-**Last updated: 2026-09-25**
+**Last updated: 2026-09-26**
 
 ContextMint Bridge is a Chrome extension that bridges local MCP (Model Context Protocol) servers to your signed-in browser tabs. All communication is confined to your local machine. This policy describes exactly what data ContextMint Bridge processes, stores, and shares.
 
@@ -73,6 +73,7 @@ ContextMint Bridge contains no telemetry, no analytics, no crash reporting, no r
 - The local WebSocket connection to `127.0.0.1:37149` (MCP server connections on your own machine).
 - HTTP requests made inside your browser tabs at the explicit direction of an approved MCP server.
 - **Outbound WebSocket connections to remote bridge targets you configure yourself** in the popup (a `wss://` relay that hosts MCP servers somewhere other than your machine). These are off by default: none exist until you add one, and removing or disabling a target closes its connection. The connection carries the access token you entered for that relay (as a WebSocket subprotocol). The contents of every request, response and cookie are end-to-end encrypted between the extension and each MCP server, so the relay cannot read them — but the relay operator can see the handshake metadata around them: the extension's hello (its ID, version and public identity keys), each MCP's hello (server name and version, `mcpId`, declared domains, capabilities and key names), the pair code shown during pairing, and the timing and size of frames. See [SECURITY.md §T-remote-bridge](https://github.com/chrischall/fetchproxy/blob/main/docs/SECURITY.md#t-remote-bridge--a-configured-remote-bridge-target).
+- **Safari only — the bridge target the ContextMint app hands over.** In Safari, ContextMint Bridge ships inside the ContextMint app. When you set up the browser bridge in that app, the extension asks it — the app on the same device, over Safari's native messaging, never the network — for the bridge address and its access credential, and connects to that address exactly as it would to a remote bridge target you added yourself (the same `wss://` requirement and the same relay-visible metadata apply). The extension keeps the address and credential **in memory only**: they are never written to `chrome.storage`, IndexedDB or any other storage, never logged, and are asked for again each time Safari restarts the extension. The only thing the extension tells the app is whether that one connection is currently up — no browsing data, URLs, cookies or request content. Disconnecting in the ContextMint app removes the target. The Chrome build does not do any of this.
 
 ---
 

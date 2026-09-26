@@ -140,6 +140,15 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   (Safari 27: `download`). `handlers/dispatch.ts` re-checks per request. A new
   capability whose API can be absent in some browser MUST be added to
   `capabilities.ts`, or it is treated as always available.
+- **Safari takes a bridge target from ContextMint over native messaging.**
+  `extension-core/src/native-handoff.ts` implements nullnet-app/mcp-host-app
+  `docs/BRIDGE-HANDOFF.md` (that contract wins over any summary here): at each
+  wake, on a 5-minute `contextmint-handoff` alarm, and when the link opens or
+  drops. It runs only where `sendNativeMessage` exists (the Safari manifest's
+  `nativeMessaging`), so Chrome is inert. The handed-off target is a
+  `contextmint:<brt id>` link held IN MEMORY beside the vault's targets
+  (`background/socket.ts` `setHandoffTarget`), re-validated like a typed-in
+  one, never persisted or logged, and shown read-only in the popup.
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is

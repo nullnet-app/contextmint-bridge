@@ -28,7 +28,14 @@ declare const chrome: ChromeApi;
 import { setPairPendingBadge, clearPairPendingBadge } from './badge.js';
 import type { AnyPendingRecord } from './pending-records.js';
 import { state } from './state.js';
-import { connect, loadRemoteLinks } from './socket.js';
+import {
+  connect,
+  handoffLinkOpen,
+  loadRemoteLinks,
+  onHandoffLinkState,
+  setHandoffTarget,
+} from './socket.js';
+import { nativeMessagingRuntime, startNativeHandoff, type NativeHandoff } from '../native-handoff.js';
 import { connectedIdentityHashes } from './session-scope.js';
 import { linkStatuses } from './links.js';
 import {
@@ -193,6 +200,27 @@ export function maybeBoot(): void {
       ensureConnected: connect,
     });
   }
+  // Safari inside ContextMint: the app hands over the bridge target the
+  // person set up there (`native-handoff.ts`, mcp-host-app
+  // docs/BRIDGE-HANDOFF.md). Present only where `sendNativeMessage` exists —
+  // Safari, whose manifest asks for `nativeMessaging`. Chrome's does not, so
+  // there this is skipped entirely. The heartbeat alarm is registered now; the
+  // first ask waits for the identity below, since the link it yields cannot
+  // say hello without it.
+  let handoff: NativeHandoff | null = null;
+  const nativeRuntime = nativeMessagingRuntime();
+  if (nativeRuntime) {
+    handoff = startNativeHandoff({
+      runtime: nativeRuntime,
+      ...(typeof c?.alarms?.create === 'function' &&
+      typeof c?.alarms?.onAlarm?.addListener === 'function'
+        ? { alarms: chrome.alarms }
+        : {}),
+      setTarget: setHandoffTarget,
+      linkConnected: handoffLinkOpen,
+    });
+    onHandoffLinkState(handoff.onLinkState);
+  }
   // 0.4.0: load (or generate) the extension's long-term identity
   // before connecting. The identity is required to construct the
   // extension hello on WS open.
@@ -203,7 +231,7 @@ export function maybeBoot(): void {
       // Remote targets are additional and asynchronous: the loopback link is
       // dialled above without waiting on storage, so a slow (or empty) target
       // list cannot delay the bridge that has always worked.
-      return loadRemoteLinks();
+      return Promise.all([loadRemoteLinks(), handoff?.refresh()]);
     })
     .catch((e) => console.error('[fetchproxy] extension identity boot:', e));
 }
