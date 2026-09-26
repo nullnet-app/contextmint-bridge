@@ -48,7 +48,10 @@ _Spike results — macOS_):
 - **No `downloads`, no `tabGroups`.** Neither API exists in Safari, so both
   permissions are dropped.
 - **`nativeMessaging`** is added (Safari only): the extension asks ContextMint,
-  the app that contains it, for the bridge target the user set up there.
+  the app that contains it, for the bridge target the user set up there
+  (extension-core `native-handoff.ts`, implementing nullnet-app/mcp-host-app
+  `docs/BRIDGE-HANDOFF.md`), holds it in memory only, and reports back whether
+  the link to it is up.
 - **No manifest `world` key.** Safari does not support it; content scripts run
   in the isolated world by default, and MAIN-world code is registered at
   runtime, which Safari runs.

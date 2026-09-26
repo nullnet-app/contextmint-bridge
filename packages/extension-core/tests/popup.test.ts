@@ -1384,6 +1384,30 @@ describe('renderPopup — bridges', () => {
     withBridges({ targets: [], onAdd: async () => null });
     expect(container.textContent).toContain('can ask this browser to pair');
   });
+
+  // Safari inside ContextMint: the app hands the target over (native-handoff.ts).
+  it('shows a handed-off bridge as from ContextMint, with no way to edit it', () => {
+    withBridges({
+      targets: [],
+      handoff: { name: 'Safari on the Mac', url: 'wss://mcp.nullnet.app/bridge', connected: true },
+      onAdd: async () => null,
+      onRemove: vi.fn(),
+      onToggle: vi.fn(),
+    });
+    const row = container.querySelector('.bridge.handoff')!;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toContain('from ContextMint');
+    expect(row.textContent).toContain('Safari on the Mac');
+    expect(row.textContent).toContain('wss://mcp.nullnet.app/bridge');
+    expect(row.querySelector('.status-dot.connected')).not.toBeNull();
+    expect(row.querySelector('button')).toBeNull();
+    expect(row.querySelector('input')).toBeNull();
+  });
+
+  it('shows no hand-off row when there is none', () => {
+    withBridges({ targets: [] });
+    expect(container.querySelector('.bridge.handoff')).toBeNull();
+  });
 });
 
 describe('renderPopup — bridge status dots', () => {

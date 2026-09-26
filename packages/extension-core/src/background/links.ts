@@ -56,7 +56,20 @@ export interface Link {
   sessionNonce: Uint8Array | null;
   /** True once this link has been removed from the registry; stops reconnects. */
   closed: boolean;
+  /**
+   * True for the link to the target ContextMint handed over
+   * (`native-handoff.ts`): held in memory, never in the vault, and shown in
+   * the popup as "from ContextMint" rather than as an editable row.
+   */
+  readonly handoff: boolean;
 }
+
+/**
+ * The id prefix of the ContextMint hand-off link, followed by the credential's
+ * `brt_*` id — so a newly minted credential is a different link, and no
+ * vault target (`remote:<id>`) can share an id with it.
+ */
+export const HANDOFF_LINK_PREFIX = 'contextmint:';
 
 /** Every link this extension currently intends to hold open, by link id. */
 export const links = new Map<string, Link>();
@@ -76,12 +89,13 @@ export function localLink(): Link {
     nextAttemptAt: 0,
     sessionNonce: null,
     closed: false,
+    handoff: false,
   };
 }
 
-export function remoteLink(target: RemoteTarget, protocols: string[]): Link {
+export function remoteLink(target: RemoteTarget, protocols: string[], handoff = false): Link {
   return {
-    id: `remote:${target.id}`,
+    id: handoff ? `${HANDOFF_LINK_PREFIX}${target.id}` : `remote:${target.id}`,
     kind: 'remote',
     url: target.url,
     protocols,
@@ -91,6 +105,7 @@ export function remoteLink(target: RemoteTarget, protocols: string[]): Link {
     nextAttemptAt: 0,
     sessionNonce: null,
     closed: false,
+    handoff,
   };
 }
 
@@ -152,6 +167,8 @@ export interface LinkStatus {
   connected: boolean;
   /** How many MCP sessions are currently bound to this link. */
   sessions: number;
+  /** Present (and true) only on the link ContextMint handed over. */
+  handoff?: true;
 }
 
 /**
@@ -172,6 +189,7 @@ export function linkStatuses(): LinkStatus[] {
       url: link.url,
       connected: link.ws?.readyState === WebSocket.OPEN,
       sessions: mcpIdsForLink(link).length,
+      ...(link.handoff ? { handoff: true as const } : {}),
     });
   }
   return out.sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1));
