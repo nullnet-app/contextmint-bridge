@@ -1167,13 +1167,29 @@ interface PendingScopeUpdateRecord {
 type AnyPendingRecord = PendingPairRecord | PendingScopeUpdateRecord;
 
 /** One entry of the background's link-status answer (background/links.ts). */
-interface LinkStatusMessage {
+export interface LinkStatusMessage {
   id: string;
   connected: boolean;
   label?: string;
   url?: string;
   /** Only on the link ContextMint handed over. */
   handoff?: boolean;
+}
+
+/**
+ * The hand-off row, from the background's link statuses: the link marked
+ * `handoff`, named by its label (else its URL), with its state — or none when
+ * no such link, or it carries no URL to show. Only those three fields are
+ * copied, so nothing else a status might carry can reach the popup's DOM.
+ */
+export function handoffBridgeView(links: LinkStatusMessage[]): HandoffBridgeView | undefined {
+  const link = links.find((l) => l.handoff === true);
+  if (!link || typeof link.url !== 'string') return undefined;
+  return {
+    name: typeof link.label === 'string' ? link.label : link.url,
+    url: link.url,
+    connected: link.connected,
+  };
 }
 
 declare const chrome: {
@@ -1383,15 +1399,7 @@ async function bootstrap(): Promise<void> {
       }
     };
     const localConnected = statusFor('local');
-    const handoffLink = links.find((link) => link.handoff === true);
-    const handoff: HandoffBridgeView | undefined =
-      handoffLink && typeof handoffLink.url === 'string'
-        ? {
-            name: typeof handoffLink.label === 'string' ? handoffLink.label : handoffLink.url,
-            url: handoffLink.url,
-            connected: handoffLink.connected,
-          }
-        : undefined;
+    const handoff = handoffBridgeView(links);
     return {
       ...(localConnected === undefined ? {} : { localConnected }),
       ...(handoff === undefined ? {} : { handoff }),

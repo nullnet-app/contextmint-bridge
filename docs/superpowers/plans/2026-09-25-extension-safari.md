@@ -742,10 +742,10 @@ the throwaway container afterwards.
 **Checks, each recorded as works / degraded / absent:**
 1. The background runs (a Web Inspector console line from the event page) and the popup
    renders.
-2. **The identity persists** (the X25519 private key is no longer kept — see *Open
-   questions* — so there is no storage form to observe; inspect the vault's `identity`
-   record in Web Inspector: four fields, no X25519 key). Pair, quit Safari, reopen: **the same identity** comes back (the MCP does
-   not ask to re-pair).
+2. **The same identity survives a restart.** The X25519 private key is no longer kept
+   (see *Open questions*), so there is no storage form to observe; inspect the vault's
+   `identity` record in Web Inspector (four fields, no X25519 key). Pair, quit Safari,
+   reopen: **the same identity** comes back (the MCP does not ask to re-pair).
 3. Pair a local MCP (`fpx` or `opentable-mcp`) and make a `fetch`, a keyed
    `read_cookies`, a `read_local_storage`, and a `fetch` with `inPage: true`.
 4. `capture_request_header` with a live tab open (the spike's inconclusive row) — and
@@ -770,6 +770,39 @@ the throwaway container afterwards.
    the extension active vs inactive. v1 ships the PNGs regardless (owner decision
    2026-09-26); a pass here becomes its own `feat:` task to generate the SVG into the
    Safari manifest only.
+
+### Results — 2026-09-26 (owner's Mac)
+
+Safari 27; ContextMint for Mac built from nullnet-app/mcp-host-app `main` at the time,
+with the ContextMint Bridge Safari `dist/` from this repo's `main`, signed with the dev
+profiles. Recorded as the owner reported them; nothing below goes further than that.
+
+| Check | Result | What was seen |
+| ----- | ------ | ------------- |
+| 1. Background runs, popup renders | **Passed** (popup) | The popup rendered, and the links, status report and pairing all worked, which needs the background running. No Web Inspector console line from the event page was recorded. |
+| 2. The same identity survives a restart | **Passed** | The hand-off and the extension identity survived a Safari restart — the first live test of #21 dropping the X25519 private key. The vault `identity` record was not inspected in Web Inspector. |
+| 3. `fetch`, keyed `read_cookies`, `read_local_storage`, `fetch` with `inPage: true` | **Passed** | Pairing with the pair-code match; content-script `fetch` 200 with real data; `fetch` with `inPage` (MAIN world) 200; `chrome.cookies` with declared keys returned exactly the two declared keys; the `localStorage` read answered. |
+| 4. `capture_request_header`; MAIN-world registration | **Inconclusive** (header capture) | Header capture via `webRequest` timed out once; it is unclear whether the page made a request in the window. Re-run pending with the owner. The `inPage` fetch in check 3 went through the MAIN-world bridge (`main-world-bridge.ts`) and returned 200; whether through the registered script or the open-tab `executeScript` was not told apart, and the GraphQL capture through it was not run. |
+| 5. `download` refused at hello | **Passed** | A profile declaring `download` was refused at hello with `unsupported-capability: download (not available in this browser)` (#18). |
+| 6. Content script and `chrome.storage.session` | **Not run** | Still open (see *Open questions*). |
+| 7. SVG toolbar template icon | **Not run** | v1 ships the PNGs. |
+
+Also passed, outside the numbered checks (the Mac app and the T7 hand-off):
+
+- Mac sign-in via the browser with the match code; the session survives quit and
+  relaunch (Keychain fine, no `-34018`).
+- Connect minted a `Safari on <mac>` credential.
+- Native-messaging hand-off: the popup shows `<label> — wss://mcp.nullnet.app/bridge
+  from ContextMint` with a green dot, and the extension's status report reached the app
+  (Safari: Connected).
+- No `mcpb_` in 30 minutes of system logs, info and debug included.
+
+Observations:
+
+- `chrome.tabs.query` returns URLs in Safari. An earlier "no tab matching" was the test
+  tab being on `www.wikipedia.org`, not a Safari issue; no onboarding change is needed.
+- The appex's and the app's `os_log` output did not appear under the subsystem
+  `app.nullnet.mcphost.*` in `log show --info --debug` at all.
 
 **Output:** a docs PR in chrischall/fetchproxy adding the results to the spec's *Spike
 results — macOS* table (title `docs(spec): record the Safari build's live checks`), and,

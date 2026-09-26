@@ -232,6 +232,42 @@ describe('startNativeHandoff', () => {
     expect(h.calls.at(-1)!.msg).toEqual({ type: 'status', connected: false });
   });
 
+  // The warning tells the person what to do, and that differs by failure:
+  // only "nothing set up" is fixed by setting it up. An `unknown-request` is
+  // the app's handler being older or newer than this extension (the
+  // contract), and a malformed or unusable target is the app sending
+  // something this extension will not dial — setting it up again fixes
+  // neither.
+  it.each([
+    ['not-set-up', () => ({ error: 'not-set-up' }), /set it up in the ContextMint app/],
+    [
+      'a rejection',
+      () => {
+        throw new Error('native host not found');
+      },
+      /set it up in the ContextMint app/,
+    ],
+    ['unknown-request', () => ({ error: 'unknown-request' }), /update the ContextMint app/],
+    ['a malformed answer', () => ({ url: GOOD.url }), /update the ContextMint app/],
+    [
+      'an unusable URL',
+      () => ({ ...GOOD, url: 'ws://evil.example/bridge' }),
+      /check the bridge in the ContextMint app/,
+    ],
+    [
+      'an unusable credential',
+      () => ({ ...GOOD, credential: 'mcpb_has space' }),
+      /check the bridge in the ContextMint app/,
+    ],
+  ])('%s → a warning whose advice fits that failure', async (_name, bridgeTarget, advice) => {
+    const h = harness((m) => (m.type === 'bridge-target' ? bridgeTarget() : { ok: true }));
+    await h.handoff.refresh();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toMatch(advice);
+    if (!/set it up/.test(advice.source)) expect(line).not.toMatch(/set it up/);
+  });
+
   it('does not repeat the same warning on every heartbeat', async () => {
     const h = harness((m) => (m.type === 'bridge-target' ? { error: 'not-set-up' } : { ok: true }));
     await h.handoff.refresh();

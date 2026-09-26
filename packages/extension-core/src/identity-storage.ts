@@ -16,11 +16,12 @@
  * absent or `'cryptokey'`), `wrapKey` output under a separate
  * `identityWrappingKey` (`'wrapped'`, Safari), or PKCS#8 bytes (`'pkcs8'`).
  * Such a record is still this extension's identity — its pubs are what every
- * pairing is pinned to — so it passes `isExtensionIdentity` and is read as one, and `vault-migration.ts`
- * rewrites it without the private material (`discardableX25519`) on the next
- * wake and deletes the wrapping key. The private material is discarded
- * unread: it is never unwrapped or imported, so a corrupt wrapped blob or a
- * missing wrapping key no longer costs anyone their pairings.
+ * pairing is pinned to — so it passes `isExtensionIdentity` and is read as
+ * one, and `vault-migration.ts` rewrites it without the private material
+ * (`discardableX25519`) on the next wake and deletes the wrapping key.
+ * The private material is discarded unread: it is never unwrapped or
+ * imported, so a corrupt wrapped blob or a missing wrapping key no longer
+ * costs anyone their pairings.
  */
 
 import { isExtensionIdentity, type ExtensionIdentity } from './identity-keys.js';
