@@ -1,34 +1,35 @@
 /**
- * The extension's long-term identity keys as NON-EXTRACTABLE WebCrypto keys
- * (fleet-audit #253).
+ * The extension's long-term identity: an Ed25519 signing key held as a
+ * NON-EXTRACTABLE WebCrypto key (fleet-audit #253), and an X25519 public key
+ * that is only a handle.
  *
  * Before the vault the private halves were raw bytes, base64-encoded in
  * `chrome.storage.local["extensionIdentity"]` — readable by the content
  * script on every site, so one renderer compromise could lift them and pose
  * as this extension to every paired MCP (T-fake-extension). Now:
  *
- * - a private key is created (or imported, once, from the legacy record) with
- *   `extractable: false`. WebCrypto will use it — sign, derive — but no API
+ * - the Ed25519 private key is created (or imported, once, from the legacy
+ *   record) with `extractable: false`. WebCrypto will sign with it, but no API
  *   will hand its bytes back, not even to extension code;
  * - it is persisted by structured clone into the extension-origin IndexedDB
- *   (`vault.ts`), which content scripts cannot open.
+ *   (`vault.ts`), which content scripts cannot open. WebKit's IndexedDB keeps
+ *   Ed25519 `CryptoKey`s (it nulls X25519 ones), so this holds in every
+ *   browser the bridge ships to.
  *
- * Both primitives are available non-extractably: `generateKey` /
- * `importKey('pkcs8', …, false, …)` accept `extractable: false` for Ed25519
- * and X25519 exactly as for any other algorithm. The PUBLIC halves stay raw
- * bytes, because they are sent in every hello and compared in trust records.
- *
- * The X25519 private key has no caller today — since protocol 4 the session
- * ECDH is ephemeral × ephemeral, and the long-term X25519 pub is only an
- * identity handle (trust-record hash, pair-code input). It is kept, under the
- * same protection, so the identity stays one coherent keypair set.
+ * There is NO X25519 private key. Since protocol 4 the session ECDH is
+ * ephemeral × ephemeral, and the long-term X25519 pub is only an identity
+ * handle (trust records pin it, pair codes hash it), so the private half had
+ * no caller. It is discarded the moment the pub is exported; a legacy record
+ * that carries one has it checked against its pub and then dropped, and a
+ * vault record from an earlier version loses it on the next wake
+ * (`identity-storage.ts`). The pub itself never changes, so every pairing
+ * survives.
  */
 
 import { fromB64 } from '@fetchproxy/protocol';
 
 export interface ExtensionIdentity {
-  /** Non-extractable X25519 private key (`deriveBits`). */
-  x25519PrivateKey: CryptoKey;
+  /** The identity handle. Its private half is never kept. */
   x25519Pub: Uint8Array;
   /** Non-extractable Ed25519 private key (`sign`). */
   ed25519PrivateKey: CryptoKey;
@@ -68,15 +69,11 @@ export function isPub(b: unknown): b is Uint8Array {
   return b instanceof Uint8Array && b.byteLength === 32;
 }
 
-/**
- * Shape check for the in-memory identity (and for a `cryptokey`-form vault
- * record, which is the same shape — `identity-storage.ts`).
- */
+/** Shape check for the identity, in memory and as the vault holds it. */
 export function isExtensionIdentity(x: unknown): x is ExtensionIdentity {
   if (!x || typeof x !== 'object') return false;
   const r = x as Record<string, unknown>;
   return (
-    isNonExtractable(r.x25519PrivateKey, 'X25519', 'deriveBits') &&
     isNonExtractable(r.ed25519PrivateKey, 'Ed25519', 'sign') &&
     isPub(r.x25519Pub) &&
     isPub(r.ed25519Pub) &&
@@ -84,25 +81,9 @@ export function isExtensionIdentity(x: unknown): x is ExtensionIdentity {
   );
 }
 
-/**
- * Options for the two ways an identity comes into being (mint, legacy import).
- *
- * `x25519Extractable` exists for ONE caller: `identity-storage.ts`, sealing the
- * X25519 key for a vault that cannot hold it as a `CryptoKey` (Safari).
- * WebCrypto cannot `wrapKey` or export a non-extractable key, so that path
- * needs the key extractable for the moment it takes to seal it; the identity
- * callers then use is unwrapped/imported back NON-extractable from the sealed
- * record. Nothing else may pass it.
- */
-export interface IdentityKeyOptions {
-  x25519Extractable?: boolean;
-}
-
-/** Mint a fresh identity whose private keys are never extractable (but see `IdentityKeyOptions`). */
-export async function generateExtensionIdentity({
-  x25519Extractable = false,
-}: IdentityKeyOptions = {}): Promise<ExtensionIdentity> {
-  const x = (await subtle().generateKey({ name: 'X25519' }, x25519Extractable, [
+/** Mint a fresh identity. The X25519 private key exists only until its pub is exported. */
+export async function generateExtensionIdentity(): Promise<ExtensionIdentity> {
+  const x = (await subtle().generateKey({ name: 'X25519' }, false, [
     'deriveBits',
   ])) as CryptoKeyPair;
   const ed = (await subtle().generateKey({ name: 'Ed25519' }, false, [
@@ -110,7 +91,6 @@ export async function generateExtensionIdentity({
     'verify',
   ])) as CryptoKeyPair;
   return {
-    x25519PrivateKey: x.privateKey,
     x25519Pub: new Uint8Array(await subtle().exportKey('raw', x.publicKey)),
     ed25519PrivateKey: ed.privateKey,
     ed25519Pub: new Uint8Array(await subtle().exportKey('raw', ed.publicKey)),
@@ -150,16 +130,14 @@ function decode32(v: unknown): Uint8Array | null {
  * non-extractable identity, so an upgrade keeps the SAME keys and nobody has
  * to re-pair. Returns null for anything malformed or self-inconsistent — a
  * record whose private halves do not produce its public halves is not this
- * extension's identity, whoever wrote it.
+ * extension's identity, whoever wrote it. The X25519 private half is used for
+ * that check only, then dropped.
  *
  * The raw bytes are zeroed once imported. (JavaScript cannot promise the
  * base64 strings they came from are gone from memory; they are deleted from
  * storage by the caller, which is what matters.)
  */
-export async function importLegacyIdentity(
-  stored: unknown,
-  { x25519Extractable = false }: IdentityKeyOptions = {},
-): Promise<ExtensionIdentity | null> {
+export async function importLegacyIdentity(stored: unknown): Promise<ExtensionIdentity | null> {
   if (!stored || typeof stored !== 'object') return null;
   const r = stored as Record<string, unknown>;
   const xPriv = decode32(r.x25519Priv);
@@ -174,7 +152,7 @@ export async function importLegacyIdentity(
       'pkcs8',
       xEnv as BufferSource,
       { name: 'X25519' },
-      x25519Extractable,
+      false,
       ['deriveBits'],
     );
     const ed25519PrivateKey = await subtle().importKey(
@@ -185,13 +163,15 @@ export async function importLegacyIdentity(
       ['sign'],
     );
     const id: ExtensionIdentity = {
-      x25519PrivateKey,
       x25519Pub: xPub,
       ed25519PrivateKey,
       ed25519Pub: edPub,
       createdAt: r.createdAt,
     };
-    return (await identityIsConsistent(id)) ? id : null;
+    const consistent =
+      (await ed25519Matches(ed25519PrivateKey, edPub)) &&
+      (await x25519Matches(x25519PrivateKey, xPub));
+    return consistent ? id : null;
   } catch {
     return null;
   } finally {
@@ -202,38 +182,27 @@ export async function importLegacyIdentity(
   }
 }
 
-/**
- * Prove each private key belongs to its public key without exporting it:
- * Ed25519 by a sign/verify round trip, X25519 by agreeing a secret with a
- * throwaway key from both ends.
- */
-export async function identityIsConsistent(id: ExtensionIdentity): Promise<boolean> {
+/** Does `priv` sign what `pub` verifies? Proven without exporting it. */
+async function ed25519Matches(priv: CryptoKey, pub: Uint8Array): Promise<boolean> {
   const probe = globalThis.crypto.getRandomValues(new Uint8Array(32));
-  const sig = await signWithExtensionIdentity(id, probe);
-  const edPub = await subtle().importKey(
-    'raw',
-    id.ed25519Pub as BufferSource,
-    { name: 'Ed25519' },
-    false,
-    ['verify'],
-  );
-  if (
-    !(await subtle().verify({ name: 'Ed25519' }, edPub, sig as BufferSource, probe as BufferSource))
-  ) {
-    return false;
-  }
+  const sig = new Uint8Array(await subtle().sign({ name: 'Ed25519' }, priv, probe as BufferSource));
+  const edPub = await subtle().importKey('raw', pub as BufferSource, { name: 'Ed25519' }, false, [
+    'verify',
+  ]);
+  return subtle().verify({ name: 'Ed25519' }, edPub, sig as BufferSource, probe as BufferSource);
+}
+
+/**
+ * Is `priv` the private half of `pub`? Proven without exporting it, by
+ * agreeing a secret with a throwaway key from both ends.
+ */
+async function x25519Matches(priv: CryptoKey, pub: Uint8Array): Promise<boolean> {
   const eph = (await subtle().generateKey({ name: 'X25519' }, false, [
     'deriveBits',
   ])) as CryptoKeyPair;
-  const xPub = await subtle().importKey(
-    'raw',
-    id.x25519Pub as BufferSource,
-    { name: 'X25519' },
-    false,
-    [],
-  );
+  const xPub = await subtle().importKey('raw', pub as BufferSource, { name: 'X25519' }, false, []);
   const ours = new Uint8Array(
-    await subtle().deriveBits({ name: 'X25519', public: eph.publicKey }, id.x25519PrivateKey, 256),
+    await subtle().deriveBits({ name: 'X25519', public: eph.publicKey }, priv, 256),
   );
   const theirs = new Uint8Array(
     await subtle().deriveBits({ name: 'X25519', public: xPub }, eph.privateKey, 256),

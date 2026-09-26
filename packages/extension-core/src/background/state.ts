@@ -29,7 +29,8 @@ export interface BackgroundState {
   // `loadOrCreateExtensionIdentity`, then threaded into every hello +
   // every ready-frame signature. Generated on first run, persisted in
   // the extension-origin IndexedDB vault across MV3 service-worker restarts,
-  // private halves as non-extractable CryptoKeys (see identity-keys.ts).
+  // the Ed25519 private key as a non-extractable CryptoKey and no X25519
+  // private key at all (see identity-keys.ts).
   extIdentity: ExtensionIdentity | null;
 }
 

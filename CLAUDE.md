@@ -161,10 +161,11 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   IndexedDB vault (`extension-core/src/vault.ts`, reached through
   `TrustStore` / `vault-records.ts` / `loadOrCreateExtensionIdentity`); the
   pairing queue lives in `storage.session`. `vault-migration.ts` is the only
-  reader of the legacy `storage.local` keys, and only once. The identity's
-  X25519 key is kept in one of three forms (`cryptokey` / `wrapped` / `pkcs8`,
-  `extension-core/src/identity-storage.ts`) because WebKit's IndexedDB nulls
-  X25519 `CryptoKey`s; the form is chosen by probing the vault when minting,
-  never by a user-agent sniff.
+  reader of the legacy `storage.local` keys, and only once. The identity
+  keeps NO X25519 private key (protocol 4 never uses one; the X25519 pub is
+  only the handle pairings are pinned to), so its vault record holds no X25519
+  `CryptoKey` — the one thing WebKit's IndexedDB silently nulls — and is the
+  same in every browser. Don't reintroduce one; `identity-storage.ts` only
+  strips the private material earlier versions kept.
 - Don't make `handleServerHello` impure. It is the security-critical decision
   point and stays under unit-test discipline.

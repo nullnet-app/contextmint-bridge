@@ -15,13 +15,11 @@
  * deliberately.
  *
  * Persisted in the extension-origin IndexedDB vault (`vault.ts`) with the
- * private halves as NON-EXTRACTABLE `CryptoKey`s (`identity-keys.ts`) — except
- * where the browser's IndexedDB cannot hold an X25519 `CryptoKey` (Safari),
- * which keeps that one key wrapped under a non-extractable AES-GCM key, or as
- * PKCS#8 bytes only if even that key cannot be kept. `identity-storage.ts`
- * picks the form by probing the vault, never by user agent, and whatever the
- * form, what this module returns holds non-extractable keys. Before
- * the vault it was raw base64 in `chrome.storage.local["extensionIdentity"]`,
+ * Ed25519 private key as a NON-EXTRACTABLE `CryptoKey` and no X25519 private
+ * key at all (`identity-keys.ts`) — the same record in every browser, Safari
+ * included. A record an earlier version wrote with an X25519 private key is
+ * read as the same identity and loses that key on the next wake
+ * (`identity-storage.ts`). Before the vault it was raw base64 in `chrome.storage.local["extensionIdentity"]`,
  * where every site's content script could read it (fleet-audit #253); the
  * first load after upgrading imports those keys, so the identity — and every
  * pairing pinned to it — survives, and deletes them from storage.local.
@@ -44,14 +42,12 @@ export { signWithExtensionIdentity, type ExtensionIdentity } from './identity-ke
  */
 export async function loadOrCreateExtensionIdentity(): Promise<ExtensionIdentity> {
   await ensureVault();
-  const stored = await vaultGet('identity');
-  const wrappingKey = stored ? await vaultGet('identityWrappingKey') : undefined;
-  const id = await openStoredIdentity(stored, wrappingKey);
-  // A record that exists but does not open (tampered or corrupted wrapped
-  // bytes, a public key that does not match) is deliberately NOT replaced by
-  // a freshly minted identity: that would orphan every pairing without a
-  // word. The load fails loudly; the user recovers by removing and re-adding
-  // the extension, which starts a new vault.
+  const id = openStoredIdentity(await vaultGet('identity'));
+  // `ensureVault` leaves a valid identity behind, so this only fires when
+  // something changed the record underneath it. That record is deliberately
+  // NOT replaced by a freshly minted identity here: that would orphan every
+  // pairing without a word. The load fails loudly; the user recovers by
+  // removing and re-adding the extension, which starts a new vault.
   if (!id) {
     throw new Error('extension identity missing from the vault after initialisation');
   }
