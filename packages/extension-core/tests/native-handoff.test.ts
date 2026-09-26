@@ -5,10 +5,13 @@ import { fileURLToPath } from 'node:url';
 import {
   CONTEXTMINT_APP_ID,
   HANDOFF_ALARM_NAME,
+  HANDOFF_FAILURE_KINDS,
   HANDOFF_HEARTBEAT_MINUTES,
+  handoffAdvice,
   nativeMessagingRuntime,
   parseBridgeTargetAnswer,
   startNativeHandoff,
+  type HandoffFailureKind,
   type HandoffTarget,
   type NativeMessagingRuntime,
 } from '../src/native-handoff.js';
@@ -143,10 +146,28 @@ describe('parseBridgeTargetAnswer', () => {
   });
 
   it('maps the contract’s error answers', () => {
-    expect(parseBridgeTargetAnswer({ error: 'not-set-up' })).toEqual({ ok: false, reason: 'not-set-up' });
+    expect(parseBridgeTargetAnswer({ error: 'not-set-up' })).toEqual({
+      ok: false,
+      kind: 'not-set-up',
+      reason: 'not-set-up',
+    });
     expect(parseBridgeTargetAnswer({ error: 'unknown-request' })).toEqual({
       ok: false,
+      kind: 'unknown-request',
       reason: 'unknown-request',
+    });
+  });
+
+  it('classifies every failure by kind, not by its reason text', () => {
+    expect(parseBridgeTargetAnswer({ error: 'something-new' })).toMatchObject({ ok: false, kind: 'malformed' });
+    expect(parseBridgeTargetAnswer({ url: GOOD.url })).toMatchObject({ ok: false, kind: 'malformed' });
+    expect(parseBridgeTargetAnswer({ ...GOOD, url: 'ws://evil.example/bridge' })).toMatchObject({
+      ok: false,
+      kind: 'unusable-target',
+    });
+    expect(parseBridgeTargetAnswer({ ...GOOD, credential: 'mcpb_has space' })).toMatchObject({
+      ok: false,
+      kind: 'unusable-target',
     });
   });
 
@@ -367,5 +388,35 @@ describe('startNativeHandoff', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// The advice is an exhaustive mapping over the failure kinds, so a kind added
+// later fails `tsc` in `handoffAdvice` until it is given its own advice —
+// it can never fall through to "update the ContextMint app" by default.
+describe('handoffAdvice', () => {
+  const expected: Record<HandoffFailureKind, RegExp> = {
+    'not-set-up': /set it up in the ContextMint app/,
+    'unknown-request': /update the ContextMint app/,
+    malformed: /update the ContextMint app/,
+    'unusable-target': /check the bridge in the ContextMint app/,
+  };
+
+  it('lists every kind exactly once', () => {
+    expect([...HANDOFF_FAILURE_KINDS].sort()).toEqual(Object.keys(expected).sort());
+  });
+
+  it.each(HANDOFF_FAILURE_KINDS.map((k) => [k]))('%s → its own advice', (kind) => {
+    expect(handoffAdvice(kind)).toMatch(expected[kind]);
+  });
+
+  it('only a version mismatch is told to update the app', () => {
+    const updating = HANDOFF_FAILURE_KINDS.filter((k) => /update the ContextMint app/.test(handoffAdvice(k)));
+    expect(updating.sort()).toEqual(['malformed', 'unknown-request']);
+  });
+
+  it('refuses a kind it does not know rather than guessing', () => {
+    // @ts-expect-error — not a HandoffFailureKind; the type refuses it too.
+    expect(() => handoffAdvice('something-new')).toThrow(/something-new/);
   });
 });

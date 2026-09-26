@@ -88,7 +88,26 @@ export function nativeMessagingRuntime(
   return null;
 }
 
-export type ParsedBridgeTarget = { ok: true; target: HandoffTarget } | { ok: false; reason: string };
+/**
+ * Why a hand-off failed, as the person has to act on it. `reason` is the
+ * human-readable detail; this is what the advice is chosen by, so a new
+ * failure is a new kind — never a new reason string that happens to match
+ * (or miss) a prefix.
+ *
+ * - `not-set-up`: the app has no bridge set up, or no app answered.
+ * - `unknown-request`: the app's handler is older or newer than this
+ *   extension (the contract).
+ * - `malformed`: an answer this extension cannot read — the same mismatch
+ *   seen from here.
+ * - `unusable-target`: a well-formed target whose URL or credential this
+ *   extension will not dial.
+ */
+export const HANDOFF_FAILURE_KINDS = ['not-set-up', 'unknown-request', 'malformed', 'unusable-target'] as const;
+export type HandoffFailureKind = (typeof HANDOFF_FAILURE_KINDS)[number];
+
+export type ParsedBridgeTarget =
+  | { ok: true; target: HandoffTarget }
+  | { ok: false; kind: HandoffFailureKind; reason: string };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -101,20 +120,23 @@ const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v !== '';
  * failure, never a value — the answer holds a live credential.
  */
 export function parseBridgeTargetAnswer(answer: unknown): ParsedBridgeTarget {
-  if (!isRecord(answer)) return { ok: false, reason: 'malformed answer' };
+  const malformed = { ok: false, kind: 'malformed', reason: 'malformed answer' } as const;
+  if (!isRecord(answer)) return malformed;
   if ('error' in answer) {
     const error = answer['error'];
-    if (error === 'not-set-up' || error === 'unknown-request') return { ok: false, reason: error };
-    return { ok: false, reason: 'malformed answer' };
+    if (error === 'not-set-up' || error === 'unknown-request') return { ok: false, kind: error, reason: error };
+    return malformed;
   }
   const { url, credential, name, id } = answer;
-  if (!nonEmpty(url) || !nonEmpty(credential) || !nonEmpty(name) || !nonEmpty(id)) {
-    return { ok: false, reason: 'malformed answer' };
-  }
+  if (!nonEmpty(url) || !nonEmpty(credential) || !nonEmpty(name) || !nonEmpty(id)) return malformed;
   const urlCheck = validateRemoteTargetUrl(url);
-  if (!urlCheck.ok) return { ok: false, reason: `unusable bridge URL: ${urlCheck.reason}` };
+  if (!urlCheck.ok) {
+    return { ok: false, kind: 'unusable-target', reason: `unusable bridge URL: ${urlCheck.reason}` };
+  }
   const tokenCheck = validateRemoteTargetToken(credential);
-  if (!tokenCheck.ok) return { ok: false, reason: `unusable credential: ${tokenCheck.reason}` };
+  if (!tokenCheck.ok) {
+    return { ok: false, kind: 'unusable-target', reason: `unusable credential: ${tokenCheck.reason}` };
+  }
   return { ok: true, target: { id, url, token: credential, name } };
 }
 
@@ -138,13 +160,24 @@ export function isUsableHandoffTarget(t: HandoffTarget): boolean {
  * app's handler being older or newer than this extension (the contract), and a
  * malformed answer is the same mismatch seen from here; an unusable URL or
  * credential is a target the app holds that this extension will not dial.
+ *
+ * Exhaustive over {@link HandoffFailureKind}: a kind added later fails `tsc`
+ * at the `never` below until it is given advice of its own.
  */
-function adviceFor(reason: string): string {
-  if (reason.startsWith('not-set-up')) return 'set it up in the ContextMint app';
-  if (reason.startsWith('unusable ')) {
-    return 'check the bridge in the ContextMint app (reconnect it there)';
+export function handoffAdvice(kind: HandoffFailureKind): string {
+  switch (kind) {
+    case 'not-set-up':
+      return 'set it up in the ContextMint app';
+    case 'unusable-target':
+      return 'check the bridge in the ContextMint app (reconnect it there)';
+    case 'unknown-request':
+    case 'malformed':
+      return 'update the ContextMint app so it and ContextMint Bridge speak the same hand-off';
+    default: {
+      const unhandled: never = kind;
+      throw new Error(`no hand-off advice for failure kind ${String(unhandled)}`);
+    }
   }
-  return 'update the ContextMint app so it and ContextMint Bridge speak the same hand-off';
 }
 
 export interface NativeHandoffDeps {
@@ -201,7 +234,7 @@ export function startNativeHandoff(deps: NativeHandoffDeps): NativeHandoff {
       // A rejection is "no handler": treated exactly like not-set-up. The
       // error itself is not logged — it is Safari's, and says nothing the
       // person can act on beyond this.
-      parsed = { ok: false, reason: 'not-set-up (no answer from the ContextMint app)' };
+      parsed = { ok: false, kind: 'not-set-up', reason: 'not-set-up (no answer from the ContextMint app)' };
     }
     if (parsed.ok) {
       lastWarned = null;
@@ -211,7 +244,7 @@ export function startNativeHandoff(deps: NativeHandoffDeps): NativeHandoff {
       if (parsed.reason !== lastWarned) {
         lastWarned = parsed.reason;
         console.warn(
-          `[fetchproxy] no bridge target from ContextMint: ${parsed.reason} — ${adviceFor(parsed.reason)}`,
+          `[fetchproxy] no bridge target from ContextMint: ${parsed.reason} — ${handoffAdvice(parsed.kind)}`,
         );
       }
     }
