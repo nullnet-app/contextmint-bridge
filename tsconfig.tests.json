@@ -10,6 +10,7 @@
     "tests/**/*",
     "packages/*/tests/**/*",
     "packages/extension-chrome/build.ts",
+    "packages/extension-chrome/build-lib.ts",
     "vitest.config.ts"
   ]
 }
