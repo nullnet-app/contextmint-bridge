@@ -170,6 +170,10 @@ first — if someone already opened this, stop and say so.
 
 ## Task 1 — Safari-safe identity storage in the vault (feature check, never a UA sniff)
 
+> **Superseded (2026-09-26):** the owner chose to drop the X25519 private key (see *Open
+> questions*), which removes the probe and the three storage forms this task built. Kept
+> as the record of what shipped in #11 and what the migration reads.
+
 **Independent** of T3 and T6. **Branch:** `fix/safari-safe-identity-storage`.
 **PR title:** `fix(extension): keep the identity keys where Safari's IndexedDB can hold them`.
 
@@ -738,9 +742,9 @@ the throwaway container afterwards.
 **Checks, each recorded as works / degraded / absent:**
 1. The background runs (a Web Inspector console line from the event page) and the popup
    renders.
-2. **Which identity storage form Safari takes** (T1's probe result — log it once at boot
-   in a dev build, or inspect the vault's `identity` record in Web Inspector): `wrapped`
-   expected. Pair, quit Safari, reopen: **the same identity** comes back (the MCP does
+2. **The identity persists** (the X25519 private key is no longer kept — see *Open
+   questions* — so there is no storage form to observe; inspect the vault's `identity`
+   record in Web Inspector: four fields, no X25519 key). Pair, quit Safari, reopen: **the same identity** comes back (the MCP does
    not ask to re-pair).
 3. Pair a local MCP (`fpx` or `opentable-mcp`) and make a `fetch`, a keyed
    `read_cookies`, a `read_local_storage`, and a `fetch` with `inPage: true`.
@@ -806,13 +810,15 @@ For chrischall/fetchproxy, as an additive minor protocol change, when the owner 
   ready/scope frames). If it cannot, T6's whole-hello refusal stays and the protocol
   change is written up as an issue in chrischall/fetchproxy; the protocol is not changed
   here.
-- **Drop the X25519 private key — DECIDED: drop it.** It has no caller in protocol 4
-  (session ECDH is ephemeral×ephemeral). Keep the X25519 **public** key as the identity
-  handle — trust records are keyed on its hash, so existing pairings survive unchanged —
-  stop generating and storing the private half, migrate existing vault records
-  (`cryptokey` / `wrapped` / `pkcs8`, T1) by discarding the private material and keeping
-  the pub, and simplify the storage-form machinery to what is still needed. fetchproxy's
-  `docs/SECURITY.md` paragraph from T2 gets a matching update in its own PR.
+- **Drop the X25519 private key — DECIDED: drop it, and done.** It has no caller in
+  protocol 4 (session ECDH is ephemeral×ephemeral). The identity now keeps only the X25519
+  **public** key (the handle trust records pin, so existing pairings survive unchanged);
+  nothing generates or stores the private half, and a wake that finds a record from T1's
+  `cryptokey` / `wrapped` / `pkcs8` forms rewrites it without the private material and
+  deletes `identityWrappingKey`. The storage probe and the forms are gone — the vault
+  record holds no X25519 `CryptoKey`, so it is the same in every browser. fetchproxy's
+  `docs/SECURITY.md` paragraph from T2 gets a matching update in its own PR, and T8
+  check 2 becomes "the same identity survives a restart" (there is no form to observe).
 - **Safari toolbar template icon — DECIDED: PNG for v1.** T4's PNGs ship. Whether Safari
   27 takes `contextmint-bridge-toolbar.svg` in `action.default_icon`, and whether it
   tints correctly, is T8 check 7.

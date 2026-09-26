@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { IDBObjectStore } from 'fake-indexeddb';
-import { generateEd25519, generateX25519, toB64, ecdhX25519 } from '@fetchproxy/protocol';
-import { loadOrCreateExtensionIdentity } from '../src/extension-identity.js';
-import { probeIdentityStorageForm } from '../src/identity-storage.js';
+import { ed25519Verify, generateEd25519, generateX25519, toB64 } from '@fetchproxy/protocol';
+import {
+  loadOrCreateExtensionIdentity,
+  signWithExtensionIdentity,
+} from '../src/extension-identity.js';
 import { noteInstalled, __forgetVaultRunsForTests } from '../src/vault-migration.js';
 import { vaultGet, vaultUpdate } from '../src/vault.js';
 import { loadRemoteTargets } from '../src/vault-records.js';
@@ -15,15 +17,22 @@ import {
 } from './helpers/vault.js';
 
 /**
- * Safari-safe identity storage. WebKit's IndexedDB silently stores an X25519
- * `CryptoKey` — and any object holding one — as `null` (macOS spike,
- * chrischall/fetchproxy
- * docs/superpowers/specs/2026-09-25-contextmint-bridge-chrome-safari-design.md).
- * The vault picks a storage form by PROBING what it can hold when it mints,
- * never by sniffing the user agent: `cryptokey` (Chrome, unchanged),
- * `wrapped` (X25519 as `wrapKey` output under a non-extractable AES-GCM key),
- * `pkcs8` (AES keys nulled too: plain PKCS#8 bytes, the documented fallback).
+ * The identity keeps NO X25519 private key (owner decision, 2026-09-26).
+ *
+ * Protocol 4's session ECDH is ephemeral × ephemeral, so the long-term X25519
+ * private key had no caller; the X25519 PUBLIC key is only an identity handle
+ * (trust records pin it, pair codes hash it). Keeping the private half cost a
+ * storage-form machine — WebKit's IndexedDB silently nulls an X25519
+ * `CryptoKey` and any object holding one (macOS spike, chrischall/fetchproxy
+ * docs/superpowers/specs/2026-09-25-contextmint-bridge-chrome-safari-design.md),
+ * so Safari kept it wrapped (`wrapped`) or as bytes (`pkcs8`). Now the vault
+ * holds the same four-field record in every browser, and a record written in
+ * any of those older forms loses its private X25519 material on the next wake
+ * while keeping the pub — so every pairing survives.
  */
+
+const ID_FIELDS = ['createdAt', 'ed25519PrivateKey', 'ed25519Pub', 'x25519Pub'];
+const LEGACY_FIELDS = ['form', 'x25519PrivateKey', 'x25519Wrapped', 'x25519Iv', 'x25519Pkcs8'];
 
 /** Count object-store puts from here on (a WebKit-like vault's spy is reused, so clear it). */
 function storePut(): { mock: { calls: unknown[][] } } {
@@ -65,6 +74,15 @@ function containsBytes(hay: unknown, needle: Uint8Array, seen = new Set<object>(
   return Object.values(hay).some((v) => containsBytes(v, needle, seen));
 }
 
+/** Does `v` hold an X25519 `CryptoKey` anywhere? */
+function holdsX25519Key(v: unknown, seen = new Set<object>()): boolean {
+  if (typeof v !== 'object' || v === null) return false;
+  if (v instanceof CryptoKey) return v.algorithm.name === 'X25519';
+  if (ArrayBuffer.isView(v) || seen.has(v)) return false;
+  seen.add(v);
+  return Object.values(v).some((x) => holdsX25519Key(x, seen));
+}
+
 async function legacyStored(): Promise<{
   stored: Record<string, unknown>;
   xPriv: Uint8Array;
@@ -87,20 +105,12 @@ async function legacyStored(): Promise<{
   };
 }
 
-/** The X25519 secret the loaded identity agrees with a fresh peer, from both ends. */
-async function agrees(id: { x25519PrivateKey: CryptoKey; x25519Pub: Uint8Array }): Promise<void> {
-  const peer = await generateX25519();
-  const peerPub = await crypto.subtle.importKey(
-    'raw',
-    peer.publicKey as BufferSource,
-    { name: 'X25519' },
-    false,
-    [],
-  );
-  const ours = new Uint8Array(
-    await crypto.subtle.deriveBits({ name: 'X25519', public: peerPub }, id.x25519PrivateKey, 256),
-  );
-  expect(toB64(ours)).toBe(toB64(await ecdhX25519(peer.privateKey, id.x25519Pub)));
+/** The Ed25519 key signs, and the signature verifies under the stored pub. */
+async function signs(id: { ed25519PrivateKey: CryptoKey; ed25519Pub: Uint8Array }): Promise<void> {
+  const msg = new TextEncoder().encode('ready');
+  expect(
+    await ed25519Verify(id.ed25519Pub, msg, await signWithExtensionIdentity(id as never, msg)),
+  ).toBe(true);
 }
 
 afterEach(() => {
@@ -108,58 +118,7 @@ afterEach(() => {
   __forgetVaultRunsForTests();
 });
 
-describe('probeIdentityStorageForm — a feature check, never a user-agent sniff', () => {
-  it.each(VAULTS)('$name vault → $form', async (vault) => {
-    vault.make();
-    expect(await probeIdentityStorageForm()).toBe(vault.form);
-  });
-
-  it.each(VAULTS)('$name vault: leaves no probe key behind', async (vault) => {
-    const f = vault.make();
-    await probeIdentityStorageForm();
-    expect(await vaultKeys(f)).toEqual([]);
-  });
-
-  it('two concurrent probes (popup + background minting at once) both see cryptokey', async () => {
-    // A single fixed probe key would race: one context's delete lands between
-    // the other's put and get, which reads back undefined and silently
-    // downgrades a Chrome install to wrapped/pkcs8.
-    freshVault();
-    const puts = storePut();
-    const forms = await Promise.all([
-      probeIdentityStorageForm(),
-      probeIdentityStorageForm(),
-      probeIdentityStorageForm(),
-    ]);
-    expect(forms).toEqual(['cryptokey', 'cryptokey', 'cryptokey']);
-    // Whatever the scheduler happened to do this run, no two probes can
-    // ever share a key.
-    const keys = puts.mock.calls.map((c) => c[1]);
-    expect(keys).toHaveLength(3);
-    expect(new Set(keys).size).toBe(3);
-    for (const k of keys) expect(k).toMatch(/^storageProbe:[0-9a-f-]{36}$/);
-  });
-
-  it('a probe put that fails (quota) is an error from the load, not a silent pkcs8 downgrade', async () => {
-    freshVault();
-    installChromeLocal();
-    const original = IDBObjectStore.prototype.put;
-    vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (
-      this: IDBObjectStore,
-      value: unknown,
-      key?: IDBValidKey,
-    ) {
-      if (typeof key === 'string' && key.startsWith('storageProbe:')) {
-        throw new DOMException('quota', 'QuotaExceededError');
-      }
-      return original.call(this, value, key);
-    });
-    await expect(loadOrCreateExtensionIdentity()).rejects.toThrow();
-    expect(await vaultGet('identity')).toBeUndefined();
-  });
-});
-
-describe.each(VAULTS)('the identity in a $name vault', (vault) => {
+describe.each(VAULTS)('a fresh identity in a $name vault', (vault) => {
   let local: LocalArea;
   let f: IDBFactory;
   beforeEach(() => {
@@ -167,13 +126,24 @@ describe.each(VAULTS)('the identity in a $name vault', (vault) => {
     local = installChromeLocal();
   });
 
-  it('loads non-extractable X25519 and Ed25519 keys, and the X25519 key agrees', async () => {
+  it('has no X25519 private key: an X25519 pub, a non-extractable Ed25519 key, createdAt', async () => {
     const id = await loadOrCreateExtensionIdentity();
-    expect(id.x25519PrivateKey.extractable).toBe(false);
+    expect(Object.keys(id).sort()).toEqual(ID_FIELDS);
+    expect(id.x25519Pub.byteLength).toBe(32);
     expect(id.ed25519PrivateKey.extractable).toBe(false);
-    await expect(crypto.subtle.exportKey('pkcs8', id.x25519PrivateKey)).rejects.toThrow();
     await expect(crypto.subtle.exportKey('pkcs8', id.ed25519PrivateKey)).rejects.toThrow();
-    await agrees(id);
+    await signs(id);
+  });
+
+  it('the vault holds the same four fields — no X25519 key, no wrapping key, no probe', async () => {
+    const puts = storePut();
+    await loadOrCreateExtensionIdentity();
+    const stored = (await vaultGet('identity')) as Record<string, unknown>;
+    expect(Object.keys(stored).sort()).toEqual(ID_FIELDS);
+    expect(holdsX25519Key(stored)).toBe(false);
+    expect((await vaultKeys(f)).sort()).toEqual(['identity', 'legacyStoresMigrated']);
+    // No storage probe: nothing is ever put anywhere but the identity's own keys.
+    for (const [, key] of puts.mock.calls) expect(String(key)).not.toMatch(/^storageProbe:/);
   });
 
   it('comes back the same after a wake (a fresh vault run on the same profile)', async () => {
@@ -183,16 +153,15 @@ describe.each(VAULTS)('the identity in a $name vault', (vault) => {
     expect(toB64(again.x25519Pub)).toBe(toB64(first.x25519Pub));
     expect(toB64(again.ed25519Pub)).toBe(toB64(first.ed25519Pub));
     expect(again.createdAt).toBe(first.createdAt);
-    await agrees(again);
+    await signs(again);
   });
 
-  it('a wake that finds the stored identity probes nothing and writes nothing', async () => {
+  it('a wake that finds the stored identity writes nothing', async () => {
     await loadOrCreateExtensionIdentity();
     __forgetVaultRunsForTests();
     const puts = storePut();
     await loadOrCreateExtensionIdentity();
     expect(puts.mock.calls).toEqual([]);
-    expect((await vaultKeys(f)).some((k) => String(k).startsWith('storageProbe:'))).toBe(false);
   });
 
   it('two contexts minting at once (separate vault runs) agree on ONE identity', async () => {
@@ -202,18 +171,14 @@ describe.each(VAULTS)('the identity in a $name vault', (vault) => {
     const [ia, ib] = await Promise.all([a, b]);
     expect(toB64(ia.x25519Pub)).toBe(toB64(ib.x25519Pub));
     expect(toB64(ia.ed25519Pub)).toBe(toB64(ib.ed25519Pub));
-    await agrees(ia);
-    await agrees(ib);
   });
 
-  it('stores the probed form and writes nothing to chrome.storage.local', async () => {
+  it('writes nothing to chrome.storage.local', async () => {
     await loadOrCreateExtensionIdentity();
-    const stored = (await vaultGet('identity')) as Record<string, unknown>;
-    expect(stored.form).toBe(vault.form);
     expect(local.data).toEqual({});
   });
 
-  it('a legacy storage.local import lands in the probed form and keeps the keys', async () => {
+  it('a legacy storage.local import keeps both pubs and drops the X25519 private bytes', async () => {
     const legacy = await legacyStored();
     local.data['extensionIdentity'] = legacy.stored;
     await noteInstalled({ reason: 'update', previousVersion: '3.2.0' });
@@ -221,158 +186,167 @@ describe.each(VAULTS)('the identity in a $name vault', (vault) => {
     expect(toB64(id.ed25519Pub)).toBe(legacy.edPub);
     expect(toB64(id.x25519Pub)).toBe(toB64(legacy.xPub));
     expect(id.createdAt).toBe(7);
-    await agrees(id);
-    expect(((await vaultGet('identity')) as Record<string, unknown>).form).toBe(vault.form);
+    expect(Object.keys(id).sort()).toEqual(ID_FIELDS);
+    const stored = await vaultGet('identity');
+    expect(Object.keys(stored as object).sort()).toEqual(ID_FIELDS);
+    expect(containsBytes(stored, legacy.xPriv)).toBe(false);
     expect(local.data).toEqual({});
   });
 });
 
-describe('what a Safari vault holds at rest', () => {
-  beforeEach(() => installChromeLocal());
+/**
+ * The three forms an earlier version could have left in the vault (#11), each
+ * built the way that version built it.
+ */
+async function earlierRecord(form: 'none' | 'cryptokey' | 'wrapped' | 'pkcs8'): Promise<{
+  record: Record<string, unknown>;
+  wrappingKey?: CryptoKey;
+  xPriv: Uint8Array;
+}> {
+  const x = (await crypto.subtle.generateKey({ name: 'X25519' }, true, [
+    'deriveBits',
+  ])) as CryptoKeyPair;
+  const ed = (await crypto.subtle.generateKey({ name: 'Ed25519' }, false, [
+    'sign',
+    'verify',
+  ])) as CryptoKeyPair;
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', x.privateKey));
+  const common = {
+    x25519Pub: new Uint8Array(await crypto.subtle.exportKey('raw', x.publicKey)),
+    ed25519PrivateKey: ed.privateKey,
+    ed25519Pub: new Uint8Array(await crypto.subtle.exportKey('raw', ed.publicKey)),
+    createdAt: 99,
+  };
+  const xPriv = pkcs8.slice(-32);
+  switch (form) {
+    case 'none':
+    case 'cryptokey': {
+      const nonExtractable = await crypto.subtle.importKey(
+        'pkcs8',
+        pkcs8 as BufferSource,
+        { name: 'X25519' },
+        false,
+        ['deriveBits'],
+      );
+      const record = { x25519PrivateKey: nonExtractable, ...common };
+      return { record: form === 'none' ? record : { form, ...record }, xPriv };
+    }
+    case 'wrapped': {
+      const wrappingKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'wrapKey',
+        'unwrapKey',
+      ]);
+      const x25519Iv = crypto.getRandomValues(new Uint8Array(12));
+      const x25519Wrapped = new Uint8Array(
+        await crypto.subtle.wrapKey('pkcs8', x.privateKey, wrappingKey, {
+          name: 'AES-GCM',
+          iv: x25519Iv,
+        }),
+      );
+      return { record: { form, x25519Wrapped, x25519Iv, ...common }, wrappingKey, xPriv };
+    }
+    case 'pkcs8':
+      return { record: { form, x25519Pkcs8: pkcs8, ...common }, xPriv };
+  }
+}
 
-  it('wrapped: no X25519 CryptoKey and no PKCS#8 plaintext; the wrapping key is non-extractable AES-GCM', async () => {
-    webkitLikeVault();
-    let raw: Uint8Array | null = null;
-    const wrap = crypto.subtle.wrapKey.bind(crypto.subtle);
-    vi.spyOn(crypto.subtle, 'wrapKey').mockImplementation(async (format, key, wk, alg) => {
-      // Capture the raw private key the vault must never hold in the clear.
-      raw = new Uint8Array(await crypto.subtle.exportKey('pkcs8', key)).slice(-32);
-      return wrap(format, key, wk, alg);
-    });
-    await loadOrCreateExtensionIdentity();
-    expect(raw).not.toBeNull();
-    const stored = (await vaultGet('identity')) as Record<string, unknown>;
-    expect(stored.form).toBe('wrapped');
-    expect(
-      Object.values(stored).some((v) => v instanceof CryptoKey && v.algorithm.name === 'X25519'),
-    ).toBe(false);
-    expect(containsBytes(stored, raw!)).toBe(false);
-    const wk = await vaultGet('identityWrappingKey');
-    expect(wk).toBeInstanceOf(CryptoKey);
-    expect((wk as CryptoKey).algorithm.name).toBe('AES-GCM');
-    expect((wk as CryptoKey).extractable).toBe(false);
+const EARLIER_FORMS = [
+  { form: 'none', name: 'Chrome, no `form` field', make: () => freshVault() },
+  { form: 'cryptokey', name: 'Chrome, form cryptokey', make: () => freshVault() },
+  { form: 'wrapped', name: 'Safari, form wrapped', make: () => webkitLikeVault() },
+  {
+    form: 'pkcs8',
+    name: 'WebKit with AES nulled, form pkcs8',
+    make: () => webkitLikeVault({ nullAes: true }),
+  },
+] as const;
+
+describe.each(EARLIER_FORMS)('a vault written by an earlier version: $name', ({ form, make }) => {
+  let f: IDBFactory;
+  let earlier: Awaited<ReturnType<typeof earlierRecord>>;
+  const trust = { records: { abc: { identityHash: 'abc', domains: ['x.example'] } } };
+  beforeEach(async () => {
+    f = make();
+    installChromeLocal();
+    earlier = await earlierRecord(form);
+    await vaultUpdate('identity', () => earlier.record);
+    if (earlier.wrappingKey) await vaultUpdate('identityWrappingKey', () => earlier.wrappingKey);
+    await vaultUpdate('trustedMcps', () => trust);
+    await vaultUpdate('legacyStoresMigrated', () => true);
   });
 
-  it('wrapped: an imported legacy key is not stored in the clear either', async () => {
-    webkitLikeVault();
-    const local = installChromeLocal();
-    const legacy = await legacyStored();
-    local.data['extensionIdentity'] = legacy.stored;
-    await noteInstalled({ reason: 'update', previousVersion: '3.2.0' });
-    await loadOrCreateExtensionIdentity();
-    const stored = await vaultGet('identity');
-    expect((stored as Record<string, unknown>).form).toBe('wrapped');
-    expect(containsBytes(stored, legacy.xPriv)).toBe(false);
+  it('keeps the SAME identity — both pubs, createdAt and the signing key — so pairings survive', async () => {
+    const id = await loadOrCreateExtensionIdentity();
+    expect(toB64(id.x25519Pub)).toBe(toB64(earlier.record.x25519Pub as Uint8Array));
+    expect(toB64(id.ed25519Pub)).toBe(toB64(earlier.record.ed25519Pub as Uint8Array));
+    expect(id.createdAt).toBe(99);
+    expect(Object.keys(id).sort()).toEqual(ID_FIELDS);
+    await signs(id);
+    expect(await vaultGet('trustedMcps')).toEqual(trust);
   });
 
-  it('pkcs8: the record says so, and a wake warns that the at-rest key is extractable', async () => {
-    webkitLikeVault({ nullAes: true });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('discards the private X25519 material and the wrapping key from the vault', async () => {
     await loadOrCreateExtensionIdentity();
     const stored = (await vaultGet('identity')) as Record<string, unknown>;
-    expect(stored.form).toBe('pkcs8');
-    expect(stored.x25519Pkcs8).toBeInstanceOf(Uint8Array);
+    expect(Object.keys(stored).sort()).toEqual(ID_FIELDS);
+    for (const k of LEGACY_FIELDS) expect(k in stored).toBe(false);
+    expect(holdsX25519Key(stored)).toBe(false);
+    expect(containsBytes(stored, earlier.xPriv)).toBe(false);
     expect(await vaultGet('identityWrappingKey')).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/extractable/));
+    expect((await vaultKeys(f)).sort()).toEqual([
+      'identity',
+      'legacyStoresMigrated',
+      'trustedMcps',
+    ]);
   });
 
-  it('cryptokey (Chrome): the record holds the non-extractable X25519 key itself, no wrapping key', async () => {
-    freshVault();
+  it('migrates once: the wake after that writes nothing', async () => {
     await loadOrCreateExtensionIdentity();
-    const stored = (await vaultGet('identity')) as Record<string, unknown>;
-    expect(stored.x25519PrivateKey).toBeInstanceOf(CryptoKey);
-    expect(await vaultGet('identityWrappingKey')).toBeUndefined();
+    __forgetVaultRunsForTests();
+    const puts = storePut();
+    const again = await loadOrCreateExtensionIdentity();
+    expect(puts.mock.calls).toEqual([]);
+    expect(toB64(again.x25519Pub)).toBe(toB64(earlier.record.x25519Pub as Uint8Array));
   });
 });
 
-describe('vaults written before this fix', () => {
-  let local: LocalArea;
-  beforeEach(() => {
-    local = installChromeLocal();
-  });
+describe('earlier Safari records that could not be opened before', () => {
+  beforeEach(() => installChromeLocal());
 
-  it.each(VAULTS)(
-    '$name: a null identity (a Safari build before the fix) is re-minted and the remote bridges kept',
-    async (vault) => {
-      vault.make();
-      const bridge = { id: 'b1', url: 'wss://relay.example.com/bridge', token: 't', enabled: true };
-      await vaultUpdate('identity', () => null);
-      await vaultUpdate('remoteBridges', () => [bridge]);
-      const id = await loadOrCreateExtensionIdentity();
-      await agrees(id);
-      expect(((await vaultGet('identity')) as Record<string, unknown>).form).toBe(vault.form);
-      expect(await loadRemoteTargets()).toEqual([bridge]);
-      expect(local.data).toEqual({});
-    },
-  );
-
-  it('a Chrome record with no `form` field loads unchanged and is NOT rewritten', async () => {
-    freshVault();
-    const x = (await crypto.subtle.generateKey({ name: 'X25519' }, false, [
-      'deriveBits',
-    ])) as CryptoKeyPair;
-    const ed = (await crypto.subtle.generateKey({ name: 'Ed25519' }, false, [
-      'sign',
-      'verify',
-    ])) as CryptoKeyPair;
-    const record = {
-      x25519PrivateKey: x.privateKey,
-      x25519Pub: new Uint8Array(await crypto.subtle.exportKey('raw', x.publicKey)),
-      ed25519PrivateKey: ed.privateKey,
-      ed25519Pub: new Uint8Array(await crypto.subtle.exportKey('raw', ed.publicKey)),
-      createdAt: 99,
-    };
-    await vaultUpdate('identity', () => record);
+  it('a wrapped record with corrupted bytes is migrated without being unwrapped', async () => {
+    // The private half is discarded unread, so its bytes no longer decide
+    // whether the identity (and every pairing pinned to it) survives.
+    webkitLikeVault();
+    const earlier = await earlierRecord('wrapped');
+    const w = (earlier.record.x25519Wrapped as Uint8Array).slice();
+    w[0] = w[0]! ^ 0xff;
+    await vaultUpdate('identity', () => ({ ...earlier.record, x25519Wrapped: w }));
     await vaultUpdate('legacyStoresMigrated', () => true);
-    const puts = storePut();
     const id = await loadOrCreateExtensionIdentity();
-    expect(toB64(id.x25519Pub)).toBe(toB64(record.x25519Pub));
-    expect(id.createdAt).toBe(99);
-    await agrees(id);
-    expect(puts.mock.calls).toEqual([]);
-    expect('form' in ((await vaultGet('identity')) as object)).toBe(false);
+    expect(toB64(id.x25519Pub)).toBe(toB64(earlier.record.x25519Pub as Uint8Array));
   });
 
-  it('a tampered wrapped record is not returned, and is NOT silently replaced by a new identity', async () => {
-    // Minting over a record that exists would orphan every pairing without
-    // saying so. The load fails loudly instead.
+  it('a wrapped record whose wrapping key is gone still keeps its identity', async () => {
     webkitLikeVault();
-    const first = await loadOrCreateExtensionIdentity();
-    await vaultUpdate('identity', (cur) => {
-      const r = { ...(cur as Record<string, unknown>) };
-      const w = (r.x25519Wrapped as Uint8Array).slice();
-      w[0] = w[0]! ^ 0xff;
-      r.x25519Wrapped = w;
-      return r;
-    });
-    __forgetVaultRunsForTests();
-    await expect(loadOrCreateExtensionIdentity()).rejects.toThrow(/missing from the vault/);
-    const stored = (await vaultGet('identity')) as Record<string, unknown>;
-    expect(toB64(stored.x25519Pub as Uint8Array)).toBe(toB64(first.x25519Pub));
+    const earlier = await earlierRecord('wrapped');
+    await vaultUpdate('identity', () => earlier.record);
+    await vaultUpdate('legacyStoresMigrated', () => true);
+    const id = await loadOrCreateExtensionIdentity();
+    expect(toB64(id.ed25519Pub)).toBe(toB64(earlier.record.ed25519Pub as Uint8Array));
   });
+});
 
-  it('a wrapped record whose public key was swapped fails the consistency check', async () => {
-    webkitLikeVault();
-    await loadOrCreateExtensionIdentity();
-    const other = await generateX25519();
-    await vaultUpdate('identity', (cur) => ({
-      ...(cur as Record<string, unknown>),
-      x25519Pub: other.publicKey,
-    }));
-    __forgetVaultRunsForTests();
-    await expect(loadOrCreateExtensionIdentity()).rejects.toThrow(/missing from the vault/);
-  });
-
-  it('a pkcs8 record whose public key was swapped fails the consistency check', async () => {
-    webkitLikeVault({ nullAes: true });
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await loadOrCreateExtensionIdentity();
-    const other = await generateX25519();
-    await vaultUpdate('identity', (cur) => ({
-      ...(cur as Record<string, unknown>),
-      x25519Pub: other.publicKey,
-    }));
-    __forgetVaultRunsForTests();
-    await expect(loadOrCreateExtensionIdentity()).rejects.toThrow(/missing from the vault/);
+describe('a null identity (a Safari build before #11)', () => {
+  it.each(VAULTS)('$name: is re-minted and the remote bridges kept', async (vault) => {
+    vault.make();
+    const local = installChromeLocal();
+    const bridge = { id: 'b1', url: 'wss://relay.example.com/bridge', token: 't', enabled: true };
+    await vaultUpdate('identity', () => null);
+    await vaultUpdate('remoteBridges', () => [bridge]);
+    const id = await loadOrCreateExtensionIdentity();
+    await signs(id);
+    expect(Object.keys((await vaultGet('identity')) as object).sort()).toEqual(ID_FIELDS);
+    expect(await loadRemoteTargets()).toEqual([bridge]);
+    expect(local.data).toEqual({});
   });
 });

@@ -118,16 +118,12 @@ export function chromeSession(): LocalArea {
 }
 
 /**
- * The three vaults the identity must survive, by the storage form each one
- * forces: Chrome's (X25519 keys persist), Safari's as measured (X25519 keys
- * nulled, AES keys persist), and a worse WebKit (AES keys nulled too).
+ * The vaults the identity must survive: Chrome's, Safari's as measured (X25519
+ * keys nulled, AES keys persist) and a worse WebKit (AES keys nulled too). The
+ * identity holds no X25519 private key, so all three store the same record.
  */
 export const VAULTS = [
-  { name: 'plain (Chrome)', form: 'cryptokey', make: () => freshVault() },
-  { name: 'WebKit-like (Safari)', form: 'wrapped', make: () => webkitLikeVault() },
-  {
-    name: 'WebKit-like, AES nulled too',
-    form: 'pkcs8',
-    make: () => webkitLikeVault({ nullAes: true }),
-  },
+  { name: 'plain (Chrome)', make: () => freshVault() },
+  { name: 'WebKit-like (Safari)', make: () => webkitLikeVault() },
+  { name: 'WebKit-like, AES nulled too', make: () => webkitLikeVault({ nullAes: true }) },
 ] as const;
