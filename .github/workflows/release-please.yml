@@ -2,31 +2,40 @@ name: release-please
 
 # Thin stub: release-please itself runs in chrischall/workflows'
 # reusable-release-please.yml. What stays here is what depends on this repo:
-# building the Chrome extension from the release tag and attaching
-# `contextmint-bridge-chrome-${VERSION}.zip` plus its SHA-256 digest to the
-# GitHub Release.
+# building both browser targets from the release tag and attaching four
+# assets to the GitHub Release:
 #
-# Nothing in this repo is published to npm — both workspaces are `private`,
+#   contextmint-bridge-chrome-${VERSION}.zip   + .sha256
+#   contextmint-bridge-safari-${VERSION}.zip   + .sha256
+#
+# The Safari zip is a CONTRACT, not just a download: nullnet-app/mcp-host-app
+# (its plan 2026-09-25-contextmint-mac-v0, Task 6) fetches
+#   https://github.com/nullnet-app/contextmint-bridge/releases/download/v${VERSION}/contextmint-bridge-safari-${VERSION}.zip
+# unauthenticated, checks it against a pinned SHA-256 and unzips it straight
+# into its appex's Resources/. The `v`-prefixed tag (`include-v-in-tag`) and
+# that asset name are the contract; tests/release-workflow.test.ts pins both.
+#
+# Nothing in this repo is published to npm — every workspace is `private`,
 # and tests/release-workflow.test.ts fails if any workflow grows an
 # `npm publish`. The Chrome Web Store upload is a later, separate job.
 #
-# A green tag does not mean the zip is attached: the two jobs are
+# A green tag does not mean the zips are attached: the two jobs are
 # independent. Check the Release's assets; to finish a release whose tag
-# exists but whose zip never attached, dispatch this workflow FROM MAIN with
-# `republish_tag`.
+# exists but whose zips never (or only partly) attached, dispatch this
+# workflow FROM MAIN with `republish_tag`.
 
 on:
   push:
     branches: [main]
   # `republish_tag` re-fires the attach job for a tag that ALREADY EXISTS —
-  # for a release whose tag and GitHub Release were cut but whose zip never
-  # attached. Blank on the ordinary path. It lives here rather than in the
+  # for a release whose tag and GitHub Release were cut but whose zips never
+  # (or only partly) attached. Blank on the ordinary path. It lives here rather than in the
   # reusable workflow because a called workflow cannot declare its caller's
   # triggers.
   workflow_dispatch:
     inputs:
       republish_tag:
-        description: 'Existing tag to re-attach the extension zip to (e.g. v1.0.0). Blank = skip.'
+        description: 'Existing tag to re-attach the extension zips to (e.g. v1.0.0). Blank = skip.'
         required: false
         type: string
         default: ''
@@ -108,11 +117,60 @@ jobs:
           zip -r "../../../contextmint-bridge-chrome-${VERSION}.zip" .
           ls -la "../../../contextmint-bridge-chrome-${VERSION}.zip"
 
+      # A tag that predates packages/extension-safari (v1.0.0) has no Safari
+      # package, and a `republish_tag` of it must still attach Chrome. This is
+      # the ONLY reason the Safari steps may be skipped: the decision is made
+      # once, here, from the checked-out tag, and every other failure of a
+      # Safari step fails the job before anything is uploaded.
+      - name: Detect Safari package
+        id: safari
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if test -f packages/extension-safari/package.json; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::${RELEASE_TAG} predates packages/extension-safari; attaching the Chrome pair only."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Release build, as for Chrome. The Safari build generates its manifest
+      # from extension-chrome/manifest.json, so it carries the same version.
+      - name: Build Safari extension
+        if: steps.safari.outputs.present == 'true'
+        run: npm run build --workspace=@fetchproxy/extension-safari
+
+      # Same version guard as Chrome's. The zip is made from INSIDE dist/ so
+      # manifest.json sits at the zip root: mcp-host-app unzips this straight
+      # into its appex's Contents/Resources/, and Safari only finds a web
+      # extension whose manifest.json is at the top of Resources/ — a
+      # `dist/manifest.json` entry would build an appex with no extension in it.
+      - name: Package Safari extension
+        if: steps.safari.outputs.present == 'true'
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          MANIFEST_VERSION=$(node -p "require('./packages/extension-safari/dist/manifest.json').version")
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::packages/extension-safari/dist/manifest.json is ${MANIFEST_VERSION} but the release is ${VERSION}; refusing to zip." >&2
+            exit 1
+          fi
+          cd packages/extension-safari/dist
+          zip -r "../../../contextmint-bridge-safari-${VERSION}.zip" .
+          ls -la "../../../contextmint-bridge-safari-${VERSION}.zip"
+
       # release-please already created the GitHub Release with the CHANGELOG
-      # body. Attach the extension zip and a digest of it: the zip is the
-      # sideload / audit distribution path, so the release has to say which
-      # bytes it published, and a sideloader checks what they downloaded with
-      # one `sha256sum -c` (hence sha256sum's own format).
+      # body. Attach each extension zip and a digest of it: the zip is the
+      # sideload / audit distribution path (and, for Safari, what
+      # mcp-host-app pins), so the release has to say which bytes it
+      # published, and a sideloader checks what they downloaded with one
+      # `sha256sum -c` (hence sha256sum's own format).
+      #
+      # This runs only after BOTH targets built and passed their version
+      # check, so a Safari failure uploads nothing at all. The per-zip logic
+      # below is the same for every target; `attach` is called once each.
       #
       # NO `--clobber`: a published asset is what somebody already downloaded
       # and checked, and `republish_tag` lets any account with write access
@@ -133,38 +191,63 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.release-please.outputs.version }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
+          SAFARI: ${{ steps.safari.outputs.present }}
         run: |
           set -euo pipefail
-          ZIP="contextmint-bridge-chrome-${VERSION}.zip"
-          DIGEST="${ZIP}.sha256"
+          # An empty or unexpected value means the detect step did not run as
+          # written; never treat that as "no Safari package".
+          case "$SAFARI" in
+            true) TARGETS=(chrome safari) ;;
+            false) TARGETS=(chrome) ;;
+            *) echo "::error::Safari detection reported '${SAFARI}', expected true or false." >&2; exit 1 ;;
+          esac
           EXISTING=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
           has_asset() { printf '%s\n' "$EXISTING" | grep -qxF "$1"; }
 
           # The one combination that cannot be repaired without overwriting
           # something: a digest whose zip has been deleted by hand. Uploading
           # a fresh zip under it would leave the release asserting a digest of
-          # bytes it no longer serves, so refuse BEFORE uploading anything and
-          # name the repair.
-          if has_asset "$DIGEST" && ! has_asset "$ZIP"; then
-            echo "Release ${RELEASE_TAG} carries ${DIGEST} but not ${ZIP}: the published" >&2
-            echo "digest describes bytes the release no longer serves, and this job never" >&2
-            echo "overwrites an asset. Delete ${DIGEST} from the release, then re-run." >&2
-            exit 1
-          fi
+          # bytes it no longer serves, so refuse BEFORE uploading anything —
+          # for EVERY target, so a lone Safari digest also stops the Chrome
+          # upload — and name the repair.
+          for target in "${TARGETS[@]}"; do
+            ZIP="contextmint-bridge-${target}-${VERSION}.zip"
+            DIGEST="${ZIP}.sha256"
+            if has_asset "$DIGEST" && ! has_asset "$ZIP"; then
+              echo "Release ${RELEASE_TAG} carries ${DIGEST} but not ${ZIP}: the published" >&2
+              echo "digest describes bytes the release no longer serves, and this job never" >&2
+              echo "overwrites an asset. Delete ${DIGEST} from the release, then re-run." >&2
+              exit 1
+            fi
+          done
 
-          if has_asset "$ZIP"; then
-            echo "Release ${RELEASE_TAG} already carries ${ZIP} — leaving it alone."
-            # Hash what the release serves, never this run's rebuild.
-            rm -f "$ZIP"
-            gh release download "$RELEASE_TAG" --pattern "$ZIP" --dir .
-          else
-            gh release upload "$RELEASE_TAG" "$ZIP"
-          fi
+          attach() {
+            local ZIP="contextmint-bridge-${1}-${VERSION}.zip"
+            local DIGEST="${ZIP}.sha256"
 
-          if has_asset "$DIGEST"; then
-            echo "Release ${RELEASE_TAG} already carries ${DIGEST} — leaving it alone."
-          else
-            sha256sum "$ZIP" > "$DIGEST"
-            cat "$DIGEST"
-            gh release upload "$RELEASE_TAG" "$DIGEST"
-          fi
+            if has_asset "$ZIP"; then
+              echo "Release ${RELEASE_TAG} already carries ${ZIP} — leaving it alone."
+              # Hash what the release serves, never this run's rebuild.
+              rm -f "$ZIP"
+              gh release download "$RELEASE_TAG" --pattern "$ZIP" --dir .
+            else
+              gh release upload "$RELEASE_TAG" "$ZIP"
+            fi
+
+            if has_asset "$DIGEST"; then
+              echo "Release ${RELEASE_TAG} already carries ${DIGEST} — leaving it alone."
+            else
+              sha256sum "$ZIP" > "$DIGEST"
+              cat "$DIGEST"
+              gh release upload "$RELEASE_TAG" "$DIGEST"
+            fi
+          }
+
+          # Partial failure: if an upload fails part-way (say the Chrome pair
+          # attached and the Safari zip did not), the job goes red. Dispatch
+          # this workflow FROM MAIN with `republish_tag` to finish it: the
+          # Chrome assets already there are left alone (and its digest still
+          # describes the published zip), and the missing Safari pair is added.
+          for target in "${TARGETS[@]}"; do
+            attach "$target"
+          done

@@ -61,9 +61,17 @@ every workspace `package.json` and `packages/extension-chrome/manifest.json`
 in lockstep (the Safari manifest takes its version from Chrome's at build time;
 `tests/release-workflow.test.ts` fails if a `packages/*/package.json` is missing
 from `extra-files`) and tags `vX.Y.Z`. On each release `.github/workflows/release-please.yml`
-builds `extension-chrome` from the tag and attaches
-`contextmint-bridge-chrome-${VERSION}.zip` and its `.sha256` to the GitHub
-Release, never overwriting an asset already there. Nothing is published to npm.
+builds `extension-chrome` and `extension-safari` from the tag and attaches
+`contextmint-bridge-chrome-${VERSION}.zip`, `contextmint-bridge-safari-${VERSION}.zip`
+and a `.sha256` for each to the GitHub Release, never overwriting an asset
+already there. Both zips are made from inside `dist/`, so `manifest.json` is at
+the zip root — nullnet-app/mcp-host-app unzips the Safari one straight into its
+appex's `Resources/`, and downloads it from
+`releases/download/v${VERSION}/contextmint-bridge-safari-${VERSION}.zip`, so the
+`v` tag prefix and that asset name are a contract. A tag without
+`packages/extension-safari` (v1.0.0) attaches Chrome only. If an attach fails
+part-way, dispatch the workflow from main with `republish_tag`: assets already
+there are left alone and the missing ones are added. Nothing is published to npm.
 release-please never rewrites inter-workspace ranges, so extension-chrome depends
 on extension-core as `"*"` — a pinned range would stop matching the workspace
 after a bump and send `npm ci` to the registry for a package that is never
