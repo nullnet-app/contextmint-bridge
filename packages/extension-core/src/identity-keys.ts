@@ -53,7 +53,7 @@ function pkcs8(prefix: number[], raw: Uint8Array): Uint8Array {
   return out;
 }
 
-function isNonExtractable(k: unknown, alg: string, usage: KeyUsage): k is CryptoKey {
+export function isNonExtractable(k: unknown, alg: string, usage: KeyUsage): k is CryptoKey {
   return (
     typeof CryptoKey !== 'undefined' &&
     k instanceof CryptoKey &&
@@ -64,11 +64,14 @@ function isNonExtractable(k: unknown, alg: string, usage: KeyUsage): k is Crypto
   );
 }
 
-function isPub(b: unknown): b is Uint8Array {
+export function isPub(b: unknown): b is Uint8Array {
   return b instanceof Uint8Array && b.byteLength === 32;
 }
 
-/** Shape check for an identity read back out of the vault. */
+/**
+ * Shape check for the in-memory identity (and for a `cryptokey`-form vault
+ * record, which is the same shape — `identity-storage.ts`).
+ */
 export function isExtensionIdentity(x: unknown): x is ExtensionIdentity {
   if (!x || typeof x !== 'object') return false;
   const r = x as Record<string, unknown>;
@@ -81,9 +84,25 @@ export function isExtensionIdentity(x: unknown): x is ExtensionIdentity {
   );
 }
 
-/** Mint a fresh identity whose private keys are never extractable. */
-export async function generateExtensionIdentity(): Promise<ExtensionIdentity> {
-  const x = (await subtle().generateKey({ name: 'X25519' }, false, [
+/**
+ * Options for the two ways an identity comes into being (mint, legacy import).
+ *
+ * `x25519Extractable` exists for ONE caller: `identity-storage.ts`, sealing the
+ * X25519 key for a vault that cannot hold it as a `CryptoKey` (Safari).
+ * WebCrypto cannot `wrapKey` or export a non-extractable key, so that path
+ * needs the key extractable for the moment it takes to seal it; the identity
+ * callers then use is unwrapped/imported back NON-extractable from the sealed
+ * record. Nothing else may pass it.
+ */
+export interface IdentityKeyOptions {
+  x25519Extractable?: boolean;
+}
+
+/** Mint a fresh identity whose private keys are never extractable (but see `IdentityKeyOptions`). */
+export async function generateExtensionIdentity({
+  x25519Extractable = false,
+}: IdentityKeyOptions = {}): Promise<ExtensionIdentity> {
+  const x = (await subtle().generateKey({ name: 'X25519' }, x25519Extractable, [
     'deriveBits',
   ])) as CryptoKeyPair;
   const ed = (await subtle().generateKey({ name: 'Ed25519' }, false, [
@@ -137,7 +156,10 @@ function decode32(v: unknown): Uint8Array | null {
  * base64 strings they came from are gone from memory; they are deleted from
  * storage by the caller, which is what matters.)
  */
-export async function importLegacyIdentity(stored: unknown): Promise<ExtensionIdentity | null> {
+export async function importLegacyIdentity(
+  stored: unknown,
+  { x25519Extractable = false }: IdentityKeyOptions = {},
+): Promise<ExtensionIdentity | null> {
   if (!stored || typeof stored !== 'object') return null;
   const r = stored as Record<string, unknown>;
   const xPriv = decode32(r.x25519Priv);
@@ -152,7 +174,7 @@ export async function importLegacyIdentity(stored: unknown): Promise<ExtensionId
       'pkcs8',
       xEnv as BufferSource,
       { name: 'X25519' },
-      false,
+      x25519Extractable,
       ['deriveBits'],
     );
     const ed25519PrivateKey = await subtle().importKey(
@@ -185,7 +207,7 @@ export async function importLegacyIdentity(stored: unknown): Promise<ExtensionId
  * Ed25519 by a sign/verify round trip, X25519 by agreeing a secret with a
  * throwaway key from both ends.
  */
-async function identityIsConsistent(id: ExtensionIdentity): Promise<boolean> {
+export async function identityIsConsistent(id: ExtensionIdentity): Promise<boolean> {
   const probe = globalThis.crypto.getRandomValues(new Uint8Array(32));
   const sig = await signWithExtensionIdentity(id, probe);
   const edPub = await subtle().importKey(
