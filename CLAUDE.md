@@ -19,20 +19,22 @@ and the protocol reference (`docs/PROTOCOL.md`) all still live in fetchproxy.
 
 ## Packages
 
-| Package                                                      | What it does                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/extension-core` (`@fetchproxy/extension-core`)     | Browser-agnostic business logic: the service worker (`src/background/`), `handleServerHello` (the security-critical pair / auto-trust decision, `src/background/hello.ts`), the trust store and IndexedDB vault, session keys, the content scripts, popup rendering, badge logic. Tested under vitest with mocked `chrome.*` globals. `private`, never published. |
-| `packages/extension-chrome` (`@fetchproxy/extension-chrome`) | Thin Chrome MV3 wrapper: esbuild bundling (`build.ts`), `manifest.json`, icons. Produces `packages/extension-chrome/dist/` for sideloading and the release `.zip`. `private`, never published.                                                                                                                                                                    |
+| Package                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/extension-core` (`@fetchproxy/extension-core`)     | Browser-agnostic business logic: the service worker (`src/background/`), `handleServerHello` (the security-critical pair / auto-trust decision, `src/background/hello.ts`), the trust store and IndexedDB vault, session keys, the content scripts, popup rendering, badge logic. Tested under vitest with mocked `chrome.*` globals. `private`, never published.                                             |
+| `packages/extension-chrome` (`@fetchproxy/extension-chrome`) | Thin Chrome MV3 wrapper: esbuild bundling (`build.ts`), `manifest.json`, icons. Produces `packages/extension-chrome/dist/` for sideloading and the release `.zip`. `private`, never published.                                                                                                                                                                                                                |
+| `packages/extension-safari` (`@fetchproxy/extension-safari`) | Safari web-extension resources, embedded by ContextMint's Apple apps (nullnet-app/mcp-host-app), never distributed alone. Reuses extension-chrome's esbuild entries (`build-lib.ts`); owns only `manifest.ts` (the Safari manifest GENERATED from Chrome's) and the `'safari'` platform. Produces `packages/extension-safari/dist/` (`manifest.json` at its root). Signs nothing. `private`, never published. |
 
 ## Commands
 
-|                                                              |                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm test`                                                   | `vitest run` over the whole repo, all mocked, no network. Must stay green.                                                                                                                                                                                           |
-| `npm run typecheck`                                          | `tsc -b packages/extension-core` (source), then `tsc -p tsconfig.tests.json` (every test file, plus `build.ts` and `vitest.config.ts`). vitest does not typecheck, so CI runs this before `npm test`. extension-chrome's source is typechecked by its esbuild build. |
-| `npm run build`                                              | `npm run build --workspaces --if-present`, in npm's alphabetical workspace order: extension-chrome's esbuild bundle (which bundles extension-core from source, so it does not need core built first), then extension-core's `tsc -b`.                                |
-| `npm run build --workspace=@fetchproxy/extension-chrome`     | Rebuild just the unpacked extension after a source edit, then reload it in `chrome://extensions/`. **No sourcemaps** — release is the default because this is the command that gets zipped.                                                                          |
-| `npm run build:dev --workspace=@fetchproxy/extension-chrome` | Same with inline sourcemaps, for DevTools. Never what ships.                                                                                                                                                                                                         |
+|                                                              |                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`                                                   | `vitest run` over the whole repo, all mocked, no network. Must stay green.                                                                                                                                                                                                                                           |
+| `npm run typecheck`                                          | `tsc -b packages/extension-core` (source), then `tsc -p tsconfig.tests.json` (every test file, plus `build.ts` and `vitest.config.ts`). vitest does not typecheck, so CI runs this before `npm test`. extension-chrome's source is typechecked by its esbuild build.                                                 |
+| `npm run build`                                              | `npm run build --workspaces --if-present`, in npm's alphabetical workspace order: extension-chrome's esbuild bundle (which bundles extension-core from source, so it does not need core built first), extension-core's `tsc -b`, then extension-safari (which reads Chrome's manifest and icons, never its `dist/`). |
+| `npm run build --workspace=@fetchproxy/extension-chrome`     | Rebuild just the unpacked extension after a source edit, then reload it in `chrome://extensions/`. **No sourcemaps** — release is the default because this is the command that gets zipped.                                                                                                                          |
+| `npm run build:dev --workspace=@fetchproxy/extension-chrome` | Same with inline sourcemaps, for DevTools. Never what ships.                                                                                                                                                                                                                                                         |
+| `npm run build --workspace=@fetchproxy/extension-safari`     | Rebuild just the Safari resources into `packages/extension-safari/dist/` (release, no sourcemaps). `build:dev` adds inline sourcemaps; point mcp-host-app's `BRIDGE_SAFARI_RESOURCES_DIR` at `dist/` to run it inside a signed ContextMint build.                                                                    |
 
 ## The protocol comes from npm
 
@@ -55,24 +57,27 @@ here before it ships. It is not a required check.
 ## Releases
 
 release-please (`release-please-config.json`, one root `node` package) bumps
-both workspace `package.json`s and `packages/extension-chrome/manifest.json`
-in lockstep and tags `vX.Y.Z`. On each release `.github/workflows/release-please.yml`
-builds `extension-chrome` from the tag and attaches
-`contextmint-bridge-chrome-${VERSION}.zip` and its `.sha256` to the GitHub
-Release, never overwriting an asset already there. Nothing is published to npm.
+every workspace `package.json` and `packages/extension-chrome/manifest.json`
+in lockstep (the Safari manifest takes its version from Chrome's at build time;
+`tests/release-workflow.test.ts` fails if a `packages/*/package.json` is missing
+from `extra-files`) and tags `vX.Y.Z`. On each release `.github/workflows/release-please.yml`
+builds `extension-chrome` and `extension-safari` from the tag and attaches
+`contextmint-bridge-chrome-${VERSION}.zip`, `contextmint-bridge-safari-${VERSION}.zip`
+and a `.sha256` for each to the GitHub Release, never overwriting an asset
+already there. Both zips are made from inside `dist/`, so `manifest.json` is at
+the zip root — nullnet-app/mcp-host-app unzips the Safari one straight into its
+appex's `Resources/`, and downloads it from
+`releases/download/v${VERSION}/contextmint-bridge-safari-${VERSION}.zip`, so the
+`v` tag prefix and that asset name are a contract. A tag without
+`packages/extension-safari` (v1.0.0) attaches Chrome only. If an attach fails
+part-way, dispatch the workflow from main with `republish_tag`: assets already
+there are left alone and the missing ones are added. Nothing is published to npm.
 release-please never rewrites inter-workspace ranges, so extension-chrome depends
 on extension-core as `"*"` — a pinned range would stop matching the workspace
 after a bump and send `npm ci` to the registry for a package that is never
 published.
 The bridge's version line is its own (it started at 1.0.0), independent of
 fetchproxy's; compatibility is the protocol number, not a version comparison.
-
-`"release-as": "1.0.0"` in the config exists only for the first release:
-delete it once v1.0.0 ships. `tests/release-workflow.test.ts` enforces that
-from CHANGELOG.md, not the manifest (which `release-as` pins at 1.0.0): a
-`1.0.0` changelog entry beside `release-as` is allowed only on the release PR
-itself (a `release-please--*` head branch), so main goes red the moment the
-v1.0.0 release PR merges, until a follow-up deletes the key.
 
 ## Icons
 
@@ -120,6 +125,21 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   does a second pass re-send without the marker. GETs never walk. If a site
   403s writes through the bridge, check which tab relayed them before
   suspecting the isolated world.
+- **Safari runs the background as a non-persistent event page built as a
+  classic script.** Keep background code free of top-level await,
+  `import.meta` and service-worker-only globals (`self.registration`,
+  `clients`, `skipWaiting`) — `extension-safari/tests/classic-scripts.test.ts`
+  guards the first two. The Safari manifest is generated from Chrome's
+  (`extension-safari/manifest.ts`): never hand-keep a second manifest.
+- **Capabilities are refused at hello by runtime API detection.**
+  `extension-core/src/capabilities.ts` (`unavailableCapabilities`) reads which
+  `chrome.*` APIs exist — never `currentPlatform()` or a user agent — and
+  `handleServerHello` refuses a hello declaring any of them, after the
+  signature check and before trust or a pair prompt, with the stable reason
+  `unsupported-capability: <sorted, comma-separated> (not available in this browser)`
+  (Safari 27: `download`). `handlers/dispatch.ts` re-checks per request. A new
+  capability whose API can be absent in some browser MUST be added to
+  `capabilities.ts`, or it is treated as always available.
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is
@@ -133,12 +153,18 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `packages/extension-chrome/manifest.json` AND documenting it in
   `packages/extension-chrome/README.md`'s manifest highlights (and in
   `docs/store-assets/permission-justifications.md` for the store listing).
+  A permission only Safari needs goes in `extension-safari/manifest.ts`, never
+  in Chrome's manifest, and its justification says "Safari only".
 - Don't put anything security-relevant in `chrome.storage.local` — every
   site's content script can read AND write it. Keys, trust records, remote
   bridge targets and dismissed scope hashes live in the extension-origin
   IndexedDB vault (`extension-core/src/vault.ts`, reached through
   `TrustStore` / `vault-records.ts` / `loadOrCreateExtensionIdentity`); the
   pairing queue lives in `storage.session`. `vault-migration.ts` is the only
-  reader of the legacy `storage.local` keys, and only once.
+  reader of the legacy `storage.local` keys, and only once. The identity's
+  X25519 key is kept in one of three forms (`cryptokey` / `wrapped` / `pkcs8`,
+  `extension-core/src/identity-storage.ts`) because WebKit's IndexedDB nulls
+  X25519 `CryptoKey`s; the form is chosen by probing the vault when minting,
+  never by a user-agent sniff.
 - Don't make `handleServerHello` impure. It is the security-critical decision
   point and stays under unit-test discipline.

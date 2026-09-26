@@ -14,7 +14,12 @@
  * What lives here (keys of the single `kv` object store):
  * - `identity`             — the extension's long-term keypairs, private halves
  *                            as NON-EXTRACTABLE `CryptoKey`s
- *                            (`identity-keys.ts`, fleet-audit #253);
+ *                            (`identity-keys.ts`, fleet-audit #253) — or, where
+ *                            the browser's IndexedDB cannot hold an X25519
+ *                            `CryptoKey` (Safari), that one key sealed another
+ *                            way (`identity-storage.ts`);
+ * - `identityWrappingKey`  — the non-extractable AES-GCM key an identity in the
+ *                            `wrapped` form is sealed under (Safari only);
  * - `trustedMcps`          — the MCP trust records (`trust-store.ts`);
  * - `remoteBridges`        — configured remote bridge targets;
  * - `dismissedScopeHashes` — scope-update offers the user said "keep as is" to
@@ -22,7 +27,10 @@
  *                            #252 — a content script could forge or revoke
  *                            them while they lived in `storage.local`);
  * - `legacyStoresMigrated` — marker: the one-time import of those three out of
- *                            `storage.local` has happened (`vault-migration.ts`).
+ *                            `storage.local` has happened (`vault-migration.ts`);
+ * - `storageProbe:<uuid>`  — transient: a throwaway key `identity-storage.ts`
+ *                            round-trips to learn what this IndexedDB can hold,
+ *                            deleted as soon as it is read back.
  *
  * Every value is stored by structured clone, which is what lets a
  * non-extractable `CryptoKey` persist without its bytes ever being exposed.
@@ -36,7 +44,13 @@ const DB_VERSION = 1;
 const STORE = 'kv';
 
 export type VaultKey =
-  'identity' | 'trustedMcps' | 'remoteBridges' | 'dismissedScopeHashes' | 'legacyStoresMigrated';
+  | 'identity'
+  | 'identityWrappingKey'
+  | 'trustedMcps'
+  | 'remoteBridges'
+  | 'dismissedScopeHashes'
+  | 'legacyStoresMigrated'
+  | `storageProbe:${string}`;
 
 function factory(): IDBFactory {
   const f = (globalThis as { indexedDB?: IDBFactory }).indexedDB;

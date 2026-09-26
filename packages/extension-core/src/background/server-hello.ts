@@ -38,6 +38,7 @@ import {
 } from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../chrome-api.js';
+import { unavailableCapabilities } from '../capabilities.js';
 import { ensureDomainTab } from '../ensure-domain-tab.js';
 import { signWithExtensionIdentity } from '../extension-identity.js';
 import { loadDismissedScopeHashes } from '../vault-records.js';
@@ -157,6 +158,12 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     // 3.0.0: this LINK's nonce, which the transcript salt needs. Per link,
     // never a module global.
     extensionSessionNonce: link.sessionNonce,
+    // Runtime API detection, never a platform or UA check: the same line is
+    // right for Chrome, Safari and a future Firefox. An MCP declaring a
+    // capability this browser lacks is refused below through the ordinary
+    // reject path — it hears `hello-rejected` with the reason if it `accepts`
+    // it, and silence if it does not, exactly as for every other refusal.
+    unavailableCapabilities: unavailableCapabilities(chrome),
   });
   if (result.kind === 'reject') {
     // Give the binding back. It was taken before the decision — deliberately,

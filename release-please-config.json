@@ -1,9 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "//": [
-    "release-as 1.0.0 forces the FIRST bridge release to 1.0.0 (a fresh product, not fetchproxy 3.x).",
-    "DELETE `release-as` once v1.0.0 is released, or every later release stays pinned to 1.0.0;",
-    "tests/release-workflow.test.ts fails once CHANGELOG.md has a 1.0.0 entry, except on the release PR itself.",
     "bootstrap-sha is the last fetchproxy commit (release 3.2.2) before the split, so the first",
     "changelog starts at the split instead of replaying fetchproxy's history."
   ],
@@ -12,7 +9,6 @@
     ".": {
       "package-name": "contextmint-bridge",
       "release-type": "node",
-      "release-as": "1.0.0",
       "extra-files": [
         {
           "type": "json",
@@ -24,7 +20,12 @@
           "path": "packages/extension-chrome/manifest.json",
           "jsonpath": "$.version"
         },
-        { "type": "json", "path": "packages/extension-core/package.json", "jsonpath": "$.version" }
+        { "type": "json", "path": "packages/extension-core/package.json", "jsonpath": "$.version" },
+        {
+          "type": "json",
+          "path": "packages/extension-safari/package.json",
+          "jsonpath": "$.version"
+        }
       ]
     }
   },

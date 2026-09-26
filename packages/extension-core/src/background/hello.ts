@@ -55,6 +55,13 @@ export interface HandleHelloDeps {
    * rebuild the bug the multi-link design removed.
    */
   extensionSessionNonce: Uint8Array;
+  /**
+   * The capabilities THIS browser cannot serve (`src/capabilities.ts`,
+   * found by runtime API detection). Computed by the caller so this function
+   * stays pure. Absent means nothing is unavailable — Chrome's case, and every
+   * test that predates the capability seam.
+   */
+  unavailableCapabilities?: ReadonlySet<Capability>;
 }
 
 export type HandleHelloResult =
@@ -285,10 +292,32 @@ export async function handleServerHello(
   }
   if (!sigOk) return { kind: 'reject', reason: 'sessionSig invalid' };
 
-  // 2. Look up trust.
+  // 2. Refuse what this browser cannot serve (the capability seam).
+  //
+  // After the signature, so an unauthenticated hello learns nothing about
+  // this browser's APIs it could not learn from a forged one. Before the
+  // trust lookup and any pair prompt, because asking a person to approve an
+  // MCP that cannot work is worse than refusing it — and an already-trusted
+  // MCP is refused the same way: trust does not make an API exist.
+  //
+  // The reason's `unsupported-capability: ` prefix and its sorted,
+  // comma-separated list are the de facto machine contract until the
+  // protocol carries a typed rejection code; keep them stable.
+  const capabilities = effectiveCapabilities(hello);
+  const unavailable = deps.unavailableCapabilities;
+  if (unavailable && unavailable.size > 0) {
+    const refused = [...new Set(capabilities.filter((c) => unavailable.has(c)))].sort();
+    if (refused.length > 0) {
+      return {
+        kind: 'reject',
+        reason: `unsupported-capability: ${refused.join(', ')} (not available in this browser)`,
+      };
+    }
+  }
+
+  // 3. Look up trust.
   const hash = toHex(await sha256(identityX25519Pub));
   const record = await deps.trust.get(hash);
-  const capabilities = effectiveCapabilities(hello);
 
   const scope = declaredScope(hello);
 
@@ -469,7 +498,7 @@ export async function handleServerHello(
     }
   }
 
-  // 3. Need pairing.
+  // 4. Need pairing.
   //
   // 3.0.0 (protocol 4): the code commits to the whole pair transcript — both
   // identities, both hello nonces and the MCP's session ephemeral — and the

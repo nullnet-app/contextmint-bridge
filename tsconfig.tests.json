@@ -10,6 +10,9 @@
     "tests/**/*",
     "packages/*/tests/**/*",
     "packages/extension-chrome/build.ts",
+    "packages/extension-chrome/build-lib.ts",
+    "packages/extension-safari/build.ts",
+    "packages/extension-safari/manifest.ts",
     "vitest.config.ts"
   ]
 }

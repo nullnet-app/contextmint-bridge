@@ -48,6 +48,13 @@
  * re-pair, and the exposure it closes is from the upgrade onward
  * (chrischall/fetchproxy docs/SECURITY.md §Defense 4).
  *
+ * The identity is kept in whichever storage form this browser's IndexedDB
+ * can hold (`identity-storage.ts`): probed here, only when minting or
+ * importing, and every identity check below is on the STORED shape — a
+ * Safari record is not an `ExtensionIdentity` until it is unwrapped, and
+ * `null` (what a WebKit vault written before those forms existed holds) is
+ * no identity at all, so it is overwritten rather than mistaken for one.
+ *
  * Memoised per IndexedDB factory (= per profile) so the many callers that
  * need the vault ready — identity load, trust store, remote targets, popup —
  * share one run. A failed run is not memoised; the next caller retries.
@@ -55,10 +62,13 @@
 
 import { vaultFactory, vaultGet, vaultInitIfAbsent } from './vault.js';
 import {
-  generateExtensionIdentity,
-  importLegacyIdentity,
-  isExtensionIdentity,
-} from './identity-keys.js';
+  isStoredIdentity,
+  legacyStoredIdentity,
+  mintStoredIdentity,
+  probeIdentityStorageForm,
+  storedIdentityForm,
+  warnExtractableAtRest,
+} from './identity-storage.js';
 import { normaliseRemoteTargets } from './remote-targets.js';
 
 /** `chrome.storage.local` keys an older version kept secrets or trust in. */
@@ -163,7 +173,7 @@ export async function noteInstalled(details: {
 
 async function vaultHasIdentity(): Promise<boolean> {
   try {
-    return isExtensionIdentity(await vaultGet('identity'));
+    return isStoredIdentity(await vaultGet('identity'));
   } catch {
     // Unreadable vault: the import could not land anyway, and ensureVault
     // retries. Authorise, so a transient failure does not cost the pairings.
@@ -236,15 +246,20 @@ async function purgeLegacy(area: Area | null): Promise<void> {
 
 async function run(): Promise<void> {
   const area = storageArea('local');
-  if (isExtensionIdentity(await vaultGet('identity'))) {
+  const existing = await vaultGet('identity');
+  if (isStoredIdentity(existing)) {
     // Initialised. Anything under the legacy keys now was not written by this
     // extension's current state — a content script planted it, or it is the
     // leftover of a run interrupted before its purge — and is never imported.
+    // No probe: the record's own form says how to load it.
+    if (storedIdentityForm(existing) === 'pkcs8') warnExtractableAtRest();
     await vaultInitIfAbsent('legacyStoresMigrated', { legacyStoresMigrated: true });
     await clearSessionFlag();
     await purgeLegacy(area);
     return;
   }
+  // Minting (or importing) — the one time the vault is probed.
+  const form = await probeIdentityStorageForm();
   if (await upgradeAuthorised()) {
     let legacy: Record<string, unknown> = {};
     if (area) {
@@ -254,7 +269,7 @@ async function run(): Promise<void> {
         console.error('[fetchproxy] could not read legacy storage.local keys:', e);
       }
     }
-    const imported = await importLegacyIdentity(legacy[LEGACY_IDENTITY_KEY]);
+    const imported = await legacyStoredIdentity(legacy[LEGACY_IDENTITY_KEY], form);
     // An upgrade brings its stores with it, pinned to the identity it had. If
     // another context (popup vs service worker) won the race, nothing is
     // written here and its initialisation stands.
@@ -262,29 +277,42 @@ async function run(): Promise<void> {
       'identity',
       imported
         ? {
-            identity: imported,
+            ...imported,
             trustedMcps: sanitiseTrustStore(legacy[LEGACY_TRUST_KEY]),
             remoteBridges: normaliseRemoteTargets(legacy[LEGACY_REMOTE_TARGETS_KEY]),
             dismissedScopeHashes: sanitiseDismissed(legacy[LEGACY_DISMISSED_KEY]),
             legacyStoresMigrated: true,
           }
-        : { identity: await generateExtensionIdentity(), legacyStoresMigrated: true },
-      isExtensionIdentity,
+        : { ...(await mintStoredIdentity(form)), legacyStoresMigrated: true },
+      isStoredIdentity,
     );
     // Consumed: a vault lost later in this browser session mints fresh.
     await clearSessionFlag();
   } else {
-    // A fresh install, or a lost vault. Nothing in storage.local is ours.
+    // A fresh install, or a lost vault — or a WebKit vault whose identity
+    // was nulled before the storage forms existed: `isStoredIdentity(null)`
+    // is false, so that `null` is overwritten, and whatever sits beside it
+    // (remote bridge targets the user typed in) is left as it is. Nothing in
+    // storage.local is ours.
     await vaultInitIfAbsent(
       'identity',
-      { identity: await generateExtensionIdentity(), legacyStoresMigrated: true },
-      isExtensionIdentity,
+      { ...(await mintStoredIdentity(form)), legacyStoresMigrated: true },
+      isStoredIdentity,
     );
   }
+  if (form === 'pkcs8') warnExtractableAtRest();
   await purgeLegacy(area);
 }
 
-const runs = new WeakMap<IDBFactory, Promise<void>>();
+let runs = new WeakMap<IDBFactory, Promise<void>>();
+
+/**
+ * Test-only: forget every memoised run, as a new service-worker wake (or the
+ * popup, a separate context) would start without one.
+ */
+export function __forgetVaultRunsForTests(): void {
+  runs = new WeakMap();
+}
 
 /** Resolve once the vault is initialised (migrating or minting as needed). */
 export function ensureVault(): Promise<void> {
