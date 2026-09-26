@@ -47,9 +47,10 @@ class FakeSocket {
 
 const storage = new Map<string, unknown>();
 
-function stubChrome(): void {
+function stubChrome(extra: Record<string, unknown> = {}): void {
   vi.stubGlobal('WebSocket', FakeSocket);
   vi.stubGlobal('chrome', {
+    ...extra,
     runtime: { getManifest: () => ({ version: '3.2.2' }), sendMessage: () => undefined },
     storage: {
       local: {
@@ -122,4 +123,75 @@ describe('the extension hello', () => {
       expect(hello).toMatchObject({ type: 'hello', role: 'extension', platform: p });
     },
   );
+});
+
+/**
+ * #418: the extension hello lists what this browser cannot serve — and a
+ * browser that can serve everything (Chrome) must put exactly the bytes on the
+ * wire it did before, so the field is absent rather than an empty list.
+ */
+describe('the extension hello and unavailable capabilities', () => {
+  const fn = (): undefined => undefined;
+  /** Every optional API a Chrome build has (see src/capabilities.ts). */
+  const EVERY_API = {
+    downloads: { download: fn, onChanged: { addListener: fn } },
+    webRequest: {
+      onBeforeSendHeaders: { addListener: fn },
+      onBeforeRedirect: { addListener: fn },
+    },
+    scripting: {
+      getRegisteredContentScripts: async () => [],
+      registerContentScripts: async () => undefined,
+      updateContentScripts: async () => undefined,
+      unregisterContentScripts: async () => undefined,
+      executeScript: async () => [],
+    },
+    cookies: { get: fn, set: fn },
+  };
+
+  async function openHello(): Promise<Record<string, unknown>> {
+    FakeSocket.opened = [];
+    freshVault();
+    const { connect } = await import('../src/background/socket.js');
+    const { state } = await import('../src/background/state.js');
+    const { links, unbindAll } = await import('../src/background/links.js');
+    const { TrustStore } = await import('../src/trust-store.js');
+    const { SessionKeys } = await import('../src/session-keys.js');
+    const { loadOrCreateExtensionIdentity } = await import('../src/extension-identity.js');
+    unbindAll();
+    links.clear();
+    state.trust = new TrustStore('3.2.2');
+    state.sessions = new SessionKeys();
+    state.extIdentity = await loadOrCreateExtensionIdentity();
+    connect();
+    const ws = FakeSocket.opened.find((s) => s.url.startsWith('ws://127.0.0.1'))!;
+    ws.open();
+    return ws.hellos()[0]!;
+  }
+
+  it('omits the field entirely when every API is present (Chrome: unchanged wire)', async () => {
+    stubChrome(EVERY_API);
+    vi.stubGlobal('__FETCHPROXY_PLATFORM__', 'chrome');
+    const hello = await openHello();
+    expect(Object.keys(hello).sort()).toEqual([
+      'accepts',
+      'extensionId',
+      'identityEd25519Pub',
+      'identityX25519Pub',
+      'platform',
+      'protocolVersion',
+      'role',
+      'sessionNonce',
+      'type',
+      'version',
+    ]);
+  });
+
+  it('lists only what is missing, sorted, when one API is absent (Safari: no downloads)', async () => {
+    const { downloads: _omit, ...rest } = EVERY_API;
+    stubChrome(rest);
+    vi.stubGlobal('__FETCHPROXY_PLATFORM__', 'safari');
+    const hello = await openHello();
+    expect(hello.unavailableCapabilities).toEqual(['download']);
+  });
 });

@@ -693,11 +693,17 @@ describe('telling the server why (#300)', () => {
 });
 
 /**
- * The capability seam at the transport. The stubbed `chrome` above has no
- * `downloads` — Safari 27's shape — so an MCP declaring `download` is refused
- * at its hello, naming the capability, instead of being paired and then
- * failing mid-request. The refusal reuses the one `hello-rejected` sender, so
- * its `accepts` gate holds exactly as for every other refusal.
+ * The capability seam at the transport (#418). The stubbed `chrome` above has
+ * no `downloads`, no `webRequest` and no `cookies.set` — close to Safari 27's
+ * shape — so this extension:
+ *
+ * - says so in its own hello, sorted, for the MCP to fail fast locally;
+ * - grants an MCP that declares `download` among servable capabilities the
+ *   servable subset (a pair prompt, not a refusal), keeping `download` out of
+ *   what the prompt approves and out of the trust record;
+ * - still refuses, with the unchanged reason, an MCP of which NOTHING is
+ *   servable. That refusal reuses the one `hello-rejected` sender, so its
+ *   `accepts` gate holds exactly as for every other refusal.
  */
 describe('a hello declaring a capability this browser lacks', () => {
   beforeEach(async () => {
@@ -721,11 +727,84 @@ describe('a hello declaring a capability this browser lacks', () => {
     return localWs;
   }
 
-  it('is refused with a parseable reason when the server accepts hello-rejected', async () => {
+  it("lists this browser's unavailable capabilities, sorted, in the extension hello", async () => {
+    const localWs = await freshLocal();
+    const [hello] = localWs.frames<Record<string, unknown>>('hello');
+    expect(hello!.unavailableCapabilities).toEqual([
+      'capture_redirect',
+      'capture_request_header',
+      'download',
+      'write_cookies',
+    ]);
+  });
+
+  it('is offered the servable subset for pairing instead of being refused', async () => {
     const localWs = await freshLocal();
     const mcp = await scriptedMcp('etix-mcp:1.0.0:1111222233334444');
     const hello = await helloFrom(mcp, extNonceOf(localWs));
     localWs.message({ ...hello, capabilities: ['fetch', 'download'], accepts: ['hello-rejected'] });
+    await vi.waitUntil(() => localWs.frames('pair-pending').length > 0);
+
+    expect(localWs.frames('hello-rejected')).toHaveLength(0);
+    const identityHash = toHex(await sha256(mcp.x.publicKey));
+    const queued = Object.values(
+      (sessionStorage.get('pendingPair') ?? {}) as Record<string, AnyPendingRecord>,
+    ).find((r) => r.identityHash === identityHash)!;
+    expect(queued.capabilities).toEqual(['fetch']);
+    expect(queued.unavailableCapabilities).toEqual(['download']);
+
+    // Approving the queued record trusts, and grants, only what can be served.
+    await onApproval(structuredClone(queued));
+    await vi.waitUntil(() => localWs.frames('ready').length > 0);
+    expect((await state.trust!.get(identityHash))!.capabilities).toEqual(['fetch']);
+    expect(mcpCapabilities.get(mcp.mcpId)).toEqual(['fetch']);
+  });
+
+  it('never stores an unavailable capability in trust, even from a record that lists one', async () => {
+    const localWs = await freshLocal();
+    const mcp = await scriptedMcp('etix-mcp:1.0.0:9999aaaabbbbcccc');
+    const hello = await helloFrom(mcp, extNonceOf(localWs));
+    localWs.message({ ...hello, capabilities: ['fetch', 'download'] });
+    await vi.waitUntil(() => localWs.frames('pair-pending').length > 0);
+    const identityHash = toHex(await sha256(mcp.x.publicKey));
+    const queued = Object.values(
+      (sessionStorage.get('pendingPair') ?? {}) as Record<string, AnyPendingRecord>,
+    ).find((r) => r.identityHash === identityHash)!;
+
+    // A record queued by an older build of this extension (before #418 it
+    // could only get here with `download` servable) still carries it.
+    await onApproval({ ...structuredClone(queued), capabilities: ['fetch', 'download'] });
+    await vi.waitUntil(() => localWs.frames('ready').length > 0);
+    expect((await state.trust!.get(identityHash))!.capabilities).toEqual(['fetch']);
+    expect(mcpCapabilities.get(mcp.mcpId)).toEqual(['fetch']);
+  });
+
+  it('trusts and grants nothing when an approved record holds only unavailable capabilities', async () => {
+    const localWs = await freshLocal();
+    const mcp = await scriptedMcp('etix-mcp:1.0.0:ddddeeeeffff0000');
+    const hello = await helloFrom(mcp, extNonceOf(localWs));
+    localWs.message({ ...hello, capabilities: ['fetch', 'download'] });
+    await vi.waitUntil(() => localWs.frames('pair-pending').length > 0);
+    const identityHash = toHex(await sha256(mcp.x.publicKey));
+    const queued = Object.values(
+      (sessionStorage.get('pendingPair') ?? {}) as Record<string, AnyPendingRecord>,
+    ).find((r) => r.identityHash === identityHash)!;
+
+    // Neither the `['fetch']` default nor the session grant may stand in for
+    // a set this browser emptied.
+    await onApproval({ ...structuredClone(queued), capabilities: ['download'] });
+    await settleFrames(20);
+    expect(await state.trust!.get(identityHash)).toBeNull();
+    expect(localWs.frames('ready')).toHaveLength(0);
+    expect(mcpCapabilities.has(mcp.mcpId)).toBe(false);
+    expect(sessionStorage.has('pendingPair')).toBe(false);
+  });
+
+  it('is refused with the unchanged, parseable reason when nothing it declared is servable', async () => {
+    const localWs = await freshLocal();
+    const mcp = await scriptedMcp('etix-mcp:1.0.0:5555666677770000');
+    const hello = await helloFrom(mcp, extNonceOf(localWs));
+    localWs.message({ ...hello, capabilities: ['download'], accepts: ['hello-rejected'] });
     await settleFrames(20);
 
     const rejected = localWs.frames<{ mcpId: string; reason: string }>('hello-rejected');
@@ -744,7 +823,7 @@ describe('a hello declaring a capability this browser lacks', () => {
     const localWs = await freshLocal();
     const mcp = await scriptedMcp('etix-mcp:1.0.0:5555666677778888');
     const hello = await helloFrom(mcp, extNonceOf(localWs)); // no `accepts`
-    localWs.message({ ...hello, capabilities: ['fetch', 'download'] });
+    localWs.message({ ...hello, capabilities: ['download'] });
     await settleFrames(20);
 
     expect(localWs.frames('hello-rejected')).toHaveLength(0);

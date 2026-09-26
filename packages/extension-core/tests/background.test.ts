@@ -862,44 +862,84 @@ async function buildHelloWithIdentity(
 }
 
 // ---------------------------------------------------------------------------
-// Capability seam: refuse at hello what this browser cannot serve
+// Capability seam (#418): grant the servable subset, refuse only when nothing
+// the MCP declared can be served in this browser
 // ---------------------------------------------------------------------------
 
-describe('handleServerHello refuses capabilities this browser cannot serve', () => {
+describe('handleServerHello grants the capabilities this browser can serve', () => {
   beforeEach(() => mockStorage());
 
-  it('rejects a hello declaring an unavailable capability, before any pair prompt or trust read', async () => {
+  /** Trust `hello`'s identity with `capabilities` approved, as a real approval would. */
+  async function trustHello(
+    trust: InstanceType<typeof TrustStore>,
+    hello: HelloFrameFromServer,
+    capabilities: string[],
+  ): Promise<void> {
+    const idHash = Buffer.from(
+      await sha256(new Uint8Array(Buffer.from(hello.identityX25519Pub, 'base64'))),
+    ).toString('hex');
+    await trust.put(idHash, {
+      serverName: hello.serverName,
+      domains: [...hello.domains],
+      capabilities,
+      identityX25519Pub: hello.identityX25519Pub,
+      identityEd25519Pub: hello.identityEd25519Pub,
+      extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB_B64,
+      extensionIdentityEd25519Pub: FAKE_EXT_X25519_PUB_B64,
+    });
+  }
+
+  it('asks to pair with only the servable capabilities, naming the unavailable ones for the popup', async () => {
     const hello = await buildServerHello(
       'etix-mcp:1.0.0:aaaaaaaaaaaaaaaa',
       'etix-mcp',
       ['etix.com'],
       ['fetch', 'download'],
     );
-    const trust = new TrustStore('1.0.0');
-    const get = vi.spyOn(trust, 'get');
     const result = await handleServerHello(hello, {
-      trust,
+      trust: new TrustStore('1.0.0'),
       extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB,
       ...DEPS_EXTRA,
       unavailableCapabilities: new Set(['download']),
     });
-    expect(result.kind).toBe('reject');
-    if (result.kind === 'reject') {
-      expect(result.reason).toBe('unsupported-capability: download (not available in this browser)');
+    expect(result.kind).toBe('needs-pair');
+    if (result.kind === 'needs-pair') {
+      expect(result.capabilities).toEqual(['fetch']);
+      expect(result.unavailableCapabilities).toEqual(['download']);
     }
-    // No pair record can be made from a reject, and trust was never asked.
-    expect(get).not.toHaveBeenCalled();
   });
 
-  it('names every unavailable declared capability, sorted and comma-separated', async () => {
+  it('sorts and de-duplicates the unavailable declared capabilities, ignoring undeclared ones', async () => {
+    const hello = await buildServerHello(
+      'etix-mcp:1.0.0:abababababababab',
+      'etix-mcp',
+      ['etix.com'],
+      ['fetch', 'download', 'capture_request_header', 'download'],
+    );
+    const result = await handleServerHello(hello, {
+      trust: new TrustStore('1.0.0'),
+      extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB,
+      ...DEPS_EXTRA,
+      unavailableCapabilities: new Set(['download', 'capture_request_header', 'graphql']),
+    });
+    expect(result.kind).toBe('needs-pair');
+    if (result.kind === 'needs-pair') {
+      expect(result.capabilities).toEqual(['fetch']);
+      expect(result.unavailableCapabilities).toEqual(['capture_request_header', 'download']);
+    }
+  });
+
+  it('still refuses, with the unchanged reason, when NOTHING declared is servable — before any trust read', async () => {
     const hello = await buildServerHello(
       'etix-mcp:1.0.0:bbbbbbbbbbbbbbbb',
       'etix-mcp',
       ['etix.com'],
-      ['fetch', 'download', 'capture_request_header'],
+      ['download', 'capture_request_header'],
     );
+    const trust = new TrustStore('1.0.0');
+    const get = vi.spyOn(trust, 'get');
     const result = await handleServerHello(hello, {
-      trust: new TrustStore('1.0.0'),
+      trust,
       extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB,
       ...DEPS_EXTRA,
       unavailableCapabilities: new Set(['download', 'capture_request_header', 'graphql']),
@@ -909,6 +949,8 @@ describe('handleServerHello refuses capabilities this browser cannot serve', () 
       reason:
         'unsupported-capability: capture_request_header, download (not available in this browser)',
     });
+    // No pair record can be made from a reject, and trust was never asked.
+    expect(get).not.toHaveBeenCalled();
   });
 
   it('still checks the signature first — a forged hello is refused as forged', async () => {
@@ -916,7 +958,7 @@ describe('handleServerHello refuses capabilities this browser cannot serve', () 
       'etix-mcp:1.0.0:cccccccccccccccc',
       'etix-mcp',
       ['etix.com'],
-      ['fetch', 'download'],
+      ['download'],
     );
     const result = await handleServerHello(
       { ...hello, sessionSig: toB64(new Uint8Array(64)) },
@@ -930,7 +972,7 @@ describe('handleServerHello refuses capabilities this browser cannot serve', () 
     expect(result).toEqual({ kind: 'reject', reason: 'sessionSig invalid' });
   });
 
-  it('proceeds exactly as before when nothing declared is unavailable', async () => {
+  it('proceeds exactly as before when nothing declared is unavailable — no unavailable list at all', async () => {
     const hello = await buildServerHello(
       'etix-mcp:1.0.0:dddddddddddddddd',
       'etix-mcp',
@@ -947,6 +989,7 @@ describe('handleServerHello refuses capabilities this browser cannot serve', () 
     expect(result.kind).toBe('needs-pair');
     if (result.kind === 'needs-pair') {
       expect(result.capabilities).toEqual(['fetch', 'download']);
+      expect('unavailableCapabilities' in result).toBe(false);
     }
   });
 
@@ -961,7 +1004,7 @@ describe('handleServerHello refuses capabilities this browser cannot serve', () 
     expect(result.kind).toBe('needs-pair');
   });
 
-  it('refuses an already-trusted MCP the same way — trust does not make an API exist', async () => {
+  it('auto-trusts a record approved before #418 that holds an unavailable capability — granting only the servable part', async () => {
     const hello = await buildServerHello(
       'etix-mcp:1.0.0:ffffffffffffffff',
       'etix-mcp',
@@ -969,33 +1012,67 @@ describe('handleServerHello refuses capabilities this browser cannot serve', () 
       ['fetch', 'download'],
     );
     const trust = new TrustStore('1.0.0');
-    const idHash = Buffer.from(
-      await sha256(new Uint8Array(Buffer.from(hello.identityX25519Pub, 'base64'))),
-    ).toString('hex');
-    await trust.put(idHash, {
-      serverName: 'etix-mcp',
-      domains: ['etix.com'],
-      capabilities: ['fetch', 'download'],
-      identityX25519Pub: hello.identityX25519Pub,
-      identityEd25519Pub: hello.identityEd25519Pub,
-      extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB_B64,
-      extensionIdentityEd25519Pub: FAKE_EXT_X25519_PUB_B64,
-    });
-    const deps = {
+    // A legacy record: approved in a browser build, or before the seam, with
+    // `download` in it. Left alone — intersecting with the servable set drops
+    // `download` from every session grant.
+    await trustHello(trust, hello, ['fetch', 'download']);
+    const result = await handleServerHello(hello, {
       trust,
       extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB,
       ...DEPS_EXTRA,
-    };
-    // Control: with the API present the record auto-trusts.
-    expect((await handleServerHello(hello, deps)).kind).toBe('auto-trust');
-    const result = await handleServerHello(hello, {
-      ...deps,
       unavailableCapabilities: new Set(['download']),
     });
-    expect(result).toEqual({
-      kind: 'reject',
-      reason: 'unsupported-capability: download (not available in this browser)',
+    expect(result.kind).toBe('auto-trust');
+    if (result.kind === 'auto-trust') {
+      expect(result.capabilities).toEqual(['fetch']);
+      expect(result.pendingScopeUpdate).toBeUndefined();
+    }
+  });
+
+  it('does not queue a scope-update offer every session for a capability that can never be granted', async () => {
+    const hello = await buildServerHello(
+      'etix-mcp:1.0.0:1212121212121212',
+      'etix-mcp',
+      ['etix.com'],
+      ['fetch', 'download'],
+    );
+    const trust = new TrustStore('1.0.0');
+    // What approving the subset stores: the servable set only.
+    await trustHello(trust, hello, ['fetch']);
+    const result = await handleServerHello(hello, {
+      trust,
+      extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB,
+      ...DEPS_EXTRA,
+      unavailableCapabilities: new Set(['download']),
     });
+    expect(result.kind).toBe('auto-trust');
+    if (result.kind === 'auto-trust') {
+      expect(result.capabilities).toEqual(['fetch']);
+      expect(result.pendingScopeUpdate).toBeUndefined();
+    }
+  });
+
+  it('offers real growth without the unavailable capability, naming it separately for the popup', async () => {
+    const hello = await buildServerHello(
+      'etix-mcp:1.0.0:3434343434343434',
+      'etix-mcp',
+      ['etix.com'],
+      ['fetch', 'download', 'read_cookies'],
+    );
+    const trust = new TrustStore('1.0.0');
+    await trustHello(trust, hello, ['fetch']);
+    const result = await handleServerHello(hello, {
+      trust,
+      extensionIdentityX25519Pub: FAKE_EXT_X25519_PUB,
+      ...DEPS_EXTRA,
+      unavailableCapabilities: new Set(['download']),
+    });
+    expect(result.kind).toBe('auto-trust');
+    if (result.kind === 'auto-trust') {
+      expect(result.capabilities).toEqual(['fetch']);
+      expect(result.pendingScopeUpdate?.declaredCapabilities).toEqual(['fetch', 'read_cookies']);
+      expect(result.pendingScopeUpdate?.unavailableCapabilities).toEqual(['download']);
+    }
   });
 });
 

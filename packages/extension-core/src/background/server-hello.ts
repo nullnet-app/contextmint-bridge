@@ -159,8 +159,9 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     // never a module global.
     extensionSessionNonce: link.sessionNonce,
     // Runtime API detection, never a platform or UA check: the same line is
-    // right for Chrome, Safari and a future Firefox. An MCP declaring a
-    // capability this browser lacks is refused below through the ordinary
+    // right for Chrome, Safari and a future Firefox. #418: an MCP declaring a
+    // capability this browser lacks is offered the SERVABLE subset. Only one
+    // of which nothing is servable is refused below through the ordinary
     // reject path — it hears `hello-rejected` with the reason if it `accepts`
     // it, and silence if it does not, exactly as for every other refusal.
     unavailableCapabilities: unavailableCapabilities(chrome),
@@ -276,6 +277,9 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
             mcpIds: [result.mcpId],
             domains: [...hello.domains],
             capabilities: [...su.declaredCapabilities],
+            ...(su.unavailableCapabilities
+              ? { unavailableCapabilities: [...su.unavailableCapabilities] }
+              : {}),
             cookieKeys: [...su.declaredCookieKeys],
             localStorageKeys: [...su.declaredLocalStorageKeys],
             sessionStorageKeys: [...su.declaredSessionStorageKeys],
@@ -375,6 +379,9 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     graphqlOps: [...result.graphqlOps],
     localStoragePointers: [...result.localStoragePointers],
     sessionStoragePointers: [...result.sessionStoragePointers],
+    ...(result.unavailableCapabilities
+      ? { unavailableCapabilities: [...result.unavailableCapabilities] }
+      : {}),
     ...(result.previousScope ? { previousScope: result.previousScope } : {}),
     pairCode: result.pairCode,
     identityX25519Pub: result.identityX25519Pub,

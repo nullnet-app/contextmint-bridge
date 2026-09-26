@@ -153,6 +153,13 @@ export interface PendingPair {
    * this MCP would invoke through the tab's own Apollo client.
    */
   graphqlOps?: { name: string; operationName: string }[];
+  /**
+   * #418: capabilities the MCP declared that THIS browser cannot serve.
+   * Rendered greyed, labelled "not available in this browser", with nothing
+   * to tick — `capabilities` above already excludes them, so Approve never
+   * grants them. Absent or empty in a browser missing nothing.
+   */
+  unavailableCapabilities?: string[];
   pairCode: string;
 }
 
@@ -196,6 +203,8 @@ export interface ScopeSnapshot {
   graphqlOps: { name: string; operationName: string }[];
   localStoragePointers: { key: string; jsonPointer: string }[];
   sessionStoragePointers: { key: string; jsonPointer: string }[];
+  /** #418: as {@link PendingPair.unavailableCapabilities} — shown, never granted. */
+  unavailableCapabilities?: string[];
 }
 
 /**
@@ -323,6 +332,35 @@ function appendScopeSubList(
   const dd = elem('dd', { class: 'cap-warn' });
   const ul = elem('ul', { class: 'scope-keys' });
   for (const k of keys) ul.appendChild(elem('li', {}, k));
+  dd.appendChild(ul);
+  dl.appendChild(dd);
+}
+
+/**
+ * #418: the declared capabilities this browser cannot serve, greyed and
+ * labelled, in a list of their own. Nothing to tick and nothing Approve or
+ * Grant reads: the pending record's `capabilities` — what is approved — has
+ * already had them removed. Shown so the user knows what the MCP will lack.
+ * Renders nothing when the list is absent or empty (Chrome).
+ */
+function appendUnavailableCapabilities(
+  dl: HTMLElement,
+  caps: readonly string[] | undefined,
+): void {
+  if (!caps || caps.length === 0) return;
+  dl.appendChild(elem('dt', {}, 'Not available in this browser'));
+  const dd = elem('dd');
+  const ul = elem('ul', { class: 'capabilities-unavailable' });
+  for (const cap of caps) {
+    const label = CAPABILITY_DISPLAY[cap]?.label ?? cap;
+    ul.appendChild(
+      elem(
+        'li',
+        { class: 'cap-unavailable', 'aria-disabled': 'true' },
+        `${label} — not available in this browser`,
+      ),
+    );
+  }
   dd.appendChild(ul);
   dl.appendChild(dd);
 }
@@ -457,8 +495,16 @@ function appendDiffSummary(
 ): void {
   const dl = elem('dl', { class: 'scope-diff' });
 
-  // Capabilities (compared as strings).
-  const capDiff = diffLists(previous.capabilities, pending.capabilities, (x) => x);
+  // Capabilities (compared as strings). #418: a capability this browser
+  // cannot serve is left out of the baseline too — a record approved before
+  // #418 may hold one — so it is listed once, greyed, as unavailable, and
+  // never as "No longer requested", which would misstate what the MCP asked.
+  const unavailable = new Set(pending.unavailableCapabilities ?? []);
+  const capDiff = diffLists(
+    previous.capabilities.filter((c) => !unavailable.has(c)),
+    pending.capabilities,
+    (x) => x,
+  );
   // Cookies / local / session storage keys (strings).
   const cookDiff = diffLists(
     previous.cookieKeys,
@@ -961,8 +1007,16 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
       domSelectors: pending.domSelectors,
       domListSelectors: pending.domListSelectors,
       graphqlOps: pending.graphqlOps,
+      ...(pending.unavailableCapabilities
+        ? { unavailableCapabilities: pending.unavailableCapabilities }
+        : {}),
       pairCode: '',
     }, previous);
+    if (pending.unavailableCapabilities && pending.unavailableCapabilities.length > 0) {
+      const unavailDl = elem('dl');
+      appendUnavailableCapabilities(unavailDl, pending.unavailableCapabilities);
+      root.appendChild(unavailDl);
+    }
     // Newly requested cookies get the same HttpOnly-session warning as the
     // pair prompt (S-SEC-2): Grant is the moment the user decides.
     const newCookies = pending.cookieKeys.filter((k) => !previous.cookieKeys.includes(k));
@@ -1034,6 +1088,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
   }
   ddCaps.appendChild(ulCaps);
   dl.appendChild(ddCaps);
+  appendUnavailableCapabilities(dl, pending.unavailableCapabilities);
 
   // 0.3.0+: itemise each non-empty scope array. The user approves the
   // exact set of names, not just "this MCP can read storage" — so the
@@ -1129,6 +1184,8 @@ interface PendingPairRecord {
   localStoragePointers?: { key: string; jsonPointer: string }[];
   sessionStoragePointers?: { key: string; jsonPointer: string }[];
   previousScope?: PreviousScope;
+  /** #418: shown greyed, never approved (see `PendingPair`). */
+  unavailableCapabilities?: string[];
   pairCode: string;
   identityX25519Pub: string;
   identityEd25519Pub: string;
@@ -1160,6 +1217,8 @@ interface PendingScopeUpdateRecord {
   localStoragePointers?: { key: string; jsonPointer: string }[];
   sessionStoragePointers?: { key: string; jsonPointer: string }[];
   previousScope: PreviousScope;
+  /** #418: shown greyed, never granted (see `PendingPair`). */
+  unavailableCapabilities?: string[];
   identityX25519Pub: string;
   identityEd25519Pub: string;
 }
@@ -1301,6 +1360,9 @@ async function bootstrap(): Promise<void> {
           graphqlOps: (pending.graphqlOps ?? []).map((d) => ({ ...d })),
           localStoragePointers: (pending.localStoragePointers ?? []).map((d) => ({ ...d })),
           sessionStoragePointers: (pending.sessionStoragePointers ?? []).map((d) => ({ ...d })),
+          ...(pending.unavailableCapabilities
+            ? { unavailableCapabilities: [...pending.unavailableCapabilities] }
+            : {}),
         },
         previous: pending.previousScope,
         onGrant: () => {
@@ -1356,6 +1418,9 @@ async function bootstrap(): Promise<void> {
           fields: d.fields.map((f) => ({ ...f })),
         })),
         graphqlOps: (pending.graphqlOps ?? []).map((d) => ({ ...d })),
+        ...(pending.unavailableCapabilities
+          ? { unavailableCapabilities: [...pending.unavailableCapabilities] }
+          : {}),
         pairCode: pending.pairCode,
       },
       ...(pending.previousScope ? { previous: pending.previousScope } : {}),

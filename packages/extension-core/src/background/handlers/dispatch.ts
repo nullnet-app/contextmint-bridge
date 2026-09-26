@@ -11,10 +11,16 @@
  * `graphql_query` capability.
  */
 
-import type { Capability, InnerRequest } from '@fetchproxy/protocol';
+import {
+  CAPABILITY_UNAVAILABLE_CODE,
+  capabilityUnavailableMessage,
+  type Capability,
+  type InnerRequest,
+} from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../../chrome-api.js';
 import { unavailableCapabilities } from '../../capabilities.js';
+import { currentPlatform } from '../../platform.js';
 
 import { sendInner } from '../send-inner.js';
 import { mcpDomains, mcpCapabilities } from '../session-scope.js';
@@ -53,6 +59,35 @@ export async function handleRequest(mcpId: string, req: InnerRequest): Promise<v
   // capability string — it is governed by the `graphql` capability. Every
   // other op's capability equals its op name.
   const requiredCapability = req.op === 'graphql_query' ? 'graphql' : req.op;
+  if (unavailableCapabilities(chrome).has(requiredCapability as Capability)) {
+    // #418: this browser cannot serve it — answered with the TYPED error
+    // (`code: 'capability_unavailable'` plus the fixed wording naming the
+    // browser) instead of entering a handler that reaches for an absent
+    // namespace.
+    //
+    // BEFORE the grant check, deliberately. The hello grants the servable
+    // subset, so an unavailable capability is normally absent from the grant,
+    // and checking the grant first would answer "not granted" — blaming the
+    // MCP's code (every server classifies `/^capability .+ not granted/` as
+    // `capability_denied`) for the browser's gap. The order reveals nothing:
+    // the extension hello already lists what is unavailable. It also covers a
+    // session that still HOLDS such a grant from a record approved before
+    // #418. The handlers' own null checks stay as the last line.
+    //
+    // The answer comes from this extension's own runtime probe, never from
+    // anything on the wire, so a relay that strips the advisory list from
+    // the extension hello gains nothing: the request is refused here, over
+    // the authenticated session.
+    await sendInner(mcpId, {
+      type: 'response',
+      id: req.id,
+      ok: false,
+      op: req.op,
+      code: CAPABILITY_UNAVAILABLE_CODE,
+      error: capabilityUnavailableMessage(requiredCapability, currentPlatform()),
+    });
+    return;
+  }
   if (!capabilities.includes(requiredCapability)) {
     // Capability gate. The MCP didn't ask for this verb at pair time —
     // refuse with an op-echoing error so the server-side awaiter can
@@ -63,21 +98,6 @@ export async function handleRequest(mcpId: string, req: InnerRequest): Promise<v
       ok: false,
       op: req.op,
       error: `capability ${JSON.stringify(requiredCapability)} not granted (declared: [${capabilities.join(', ')}])`,
-    });
-    return;
-  }
-  if (unavailableCapabilities(chrome).has(requiredCapability as Capability)) {
-    // Defence in depth behind the hello-time refusal (`background/hello.ts`):
-    // a session can still hold a grant this browser cannot serve — a trust
-    // record approved before the capability seam, or an API that vanished.
-    // Answer it here instead of entering a handler that reaches for an absent
-    // namespace. The handlers' own null checks stay as the last line.
-    await sendInner(mcpId, {
-      type: 'response',
-      id: req.id,
-      ok: false,
-      op: req.op,
-      error: `capability ${JSON.stringify(requiredCapability)} is not available in this browser`,
     });
     return;
   }

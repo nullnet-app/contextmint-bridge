@@ -30,8 +30,10 @@ import {
   readySignaturePayload,
   transcriptHash,
   HKDF_SESSION_INFO,
+  type Capability,
   type ReadyFrame,
 } from '@fetchproxy/protocol';
+import { unavailableCapabilities } from '../capabilities.js';
 import { ensureDomainTab } from '../ensure-domain-tab.js';
 import { signWithExtensionIdentity } from '../extension-identity.js';
 import { recordDismissedScopeHash } from '../vault-records.js';
@@ -63,7 +65,7 @@ import {
 } from './session-scope.js';
 import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 
-export async function onApproval(approved: AnyPendingRecord): Promise<void> {
+export async function onApproval(record: AnyPendingRecord): Promise<void> {
   if (!state.trust || !state.sessions || !state.extIdentity) return;
   // Fail closed without the trusted-only area. `./boot.js` only ever calls
   // this from `storage.session.onChanged`, so this is belt and braces.
@@ -71,16 +73,36 @@ export async function onApproval(approved: AnyPendingRecord): Promise<void> {
   if (!area) return;
   // Persist trust. Default to ['fetch'] when older popup state somehow
   // omits the field — defensive, the popup always populates it in 0.2.0+.
-  const approvedCapabilities =
-    approved.capabilities && approved.capabilities.length > 0
-      ? [...approved.capabilities]
-      : ['fetch'];
+  //
+  // #418: then drop anything THIS browser cannot serve, so the trust record —
+  // and every grant made from `approved` below — holds the servable set only.
+  // The hello already queues the servable subset, so this bites only on a
+  // record queued by an older build; either way a capability the browser
+  // lacks is never written into trust. A trust record that already holds one
+  // is left alone: the hello intersects it with the servable set, which drops
+  // it from every session.
+  const unavailable = unavailableCapabilities(chrome);
+  const approvedCapabilities = (
+    record.capabilities && record.capabilities.length > 0 ? record.capabilities : ['fetch']
+  ).filter((c) => !unavailable.has(c as Capability));
+  const approved: AnyPendingRecord = { ...record, capabilities: approvedCapabilities };
+  if (approvedCapabilities.length === 0) {
+    // Nothing servable: grant nothing and trust nothing, rather than letting
+    // the `['fetch']` default above or in `grantedScopeFromApproval` stand in
+    // for a set this browser emptied. The MCP's next hello is refused with
+    // the `unsupported-capability:` reason.
+    console.warn(
+      `[fetchproxy] onApproval: nothing ${record.serverName} asked for is available in this browser; not trusted`,
+    );
+    await clearApprovedEntry(area, record.key);
+    return;
+  }
   // Trust is keyed by identityHash — write it once for the entire group of
   // waiting processes (all share the same identity and scope).
   await state.trust.put(approved.identityHash, {
     serverName: approved.serverName,
     domains: [...approved.domains],
-    capabilities: approvedCapabilities,
+    capabilities: [...approvedCapabilities],
     cookieKeys: [...(approved.cookieKeys ?? [])],
     localStorageKeys: [...(approved.localStorageKeys ?? [])],
     sessionStorageKeys: [...(approved.sessionStorageKeys ?? [])],
@@ -239,15 +261,25 @@ export async function onApproval(approved: AnyPendingRecord): Promise<void> {
     if (applied) broadcastConnectionsChanged();
   }
 
-  // 0.6.0+: clear popup state for the entire approved key entry. All waiting
-  // mcpIds were handled in the loop above. The popup's onApprove handler
+  await clearApprovedEntry(area, approved.key);
+}
+
+/**
+ * Drop the approved entry from the pairing queue and clear `approvedPair`.
+ */
+async function clearApprovedEntry(
+  area: NonNullable<ReturnType<typeof pendingArea>>,
+  key: string,
+): Promise<void> {
+  // 0.6.0+: clear popup state for the entire approved key entry. Every
+  // waiting mcpId has been handled by the caller. The popup's onApprove handler
   // writes approvedPair → this listener fires → we clean up here. The RMW
   // shares `withPendingPairLock` with `onServerHello` so a hello arriving
   // mid-approval can't race the get/set pair.
   await withPendingPairLock(async () => {
     const got = await area.get(PENDING_PAIR_KEY);
     const remaining = mergePending(got[PENDING_PAIR_KEY]);
-    delete remaining[approved.key];
+    delete remaining[key];
     if (Object.keys(remaining).length === 0) {
       await area.remove(PENDING_PAIR_KEY);
       // Badge clears only when the queue is fully drained — other queued
