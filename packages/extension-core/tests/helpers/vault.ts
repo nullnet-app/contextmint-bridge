@@ -11,11 +11,66 @@
  * script CAN read and write. Tests hand its `data` object to the "attacker"
  * and assert what that does and does not buy.
  */
-import { IDBFactory } from 'fake-indexeddb';
+import { vi } from 'vitest';
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 
 export function freshVault(): IDBFactory {
   const f = new IDBFactory();
   (globalThis as { indexedDB?: IDBFactory }).indexedDB = f;
+  return f;
+}
+
+/** Does `v` — or anything reachable inside it — hold a CryptoKey of an algorithm in `algs`? */
+function holdsKeyOf(v: unknown, algs: ReadonlySet<string>, seen = new Set<object>()): boolean {
+  if (typeof v !== 'object' || v === null) return false;
+  if (v instanceof CryptoKey) return algs.has(v.algorithm.name);
+  if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer) return false;
+  if (seen.has(v)) return false;
+  seen.add(v);
+  const values = v instanceof Map ? [...v.keys(), ...v.values()] : Object.values(v);
+  return values.some((x) => holdsKeyOf(x, algs, seen));
+}
+
+/** Databases opened through a `webkitLikeVault()` factory — the only ones it degrades. */
+const webkitDbs = new WeakMap<IDBDatabase, ReadonlySet<string>>();
+
+/**
+ * A `freshVault()` that stores values the way WebKit's IndexedDB does
+ * (macOS Safari 27, measured in the spike — chrischall/fetchproxy
+ * docs/superpowers/specs/2026-09-25-contextmint-bridge-chrome-safari-design.md,
+ * *Spike results — macOS*): a `put` of an X25519 `CryptoKey`, or of any value
+ * that contains one, silently stores `null`. No error. Ed25519 keys and
+ * `Uint8Array`s round-trip. `nullAes` extends the nulling to AES-GCM keys —
+ * the "even a wrapping key cannot be kept" fallback.
+ *
+ * Only databases opened through THIS factory are degraded, so a test can hold
+ * a plain vault and a WebKit-like one side by side. The `put` patch lives on
+ * the fake-indexeddb object-store prototype; call `vi.restoreAllMocks()` in
+ * `afterEach` to take it off.
+ */
+export function webkitLikeVault({ nullAes = false }: { nullAes?: boolean } = {}): IDBFactory {
+  const f = freshVault();
+  const algs = new Set(nullAes ? ['X25519', 'AES-GCM'] : ['X25519']);
+  const open = f.open.bind(f);
+  f.open = (name: string, version?: number) => {
+    const req = open(name, version);
+    req.addEventListener('success', () => webkitDbs.set(req.result, algs));
+    return req;
+  };
+  const proto = IDBObjectStore.prototype as unknown as {
+    put: (this: IDBObjectStore, value: unknown, key?: IDBValidKey) => IDBRequest;
+  };
+  if (!vi.isMockFunction(proto.put)) {
+    const original = proto.put;
+    vi.spyOn(proto, 'put').mockImplementation(function (
+      this: IDBObjectStore,
+      value: unknown,
+      key?: IDBValidKey,
+    ) {
+      const nulled = webkitDbs.get(this.transaction.db);
+      return original.call(this, nulled && holdsKeyOf(value, nulled) ? null : value, key);
+    });
+  }
   return f;
 }
 
@@ -61,3 +116,18 @@ export function chromeSession(): LocalArea {
   return (globalThis as unknown as { chrome: { storage: { session: LocalArea } } }).chrome.storage
     .session;
 }
+
+/**
+ * The three vaults the identity must survive, by the storage form each one
+ * forces: Chrome's (X25519 keys persist), Safari's as measured (X25519 keys
+ * nulled, AES keys persist), and a worse WebKit (AES keys nulled too).
+ */
+export const VAULTS = [
+  { name: 'plain (Chrome)', form: 'cryptokey', make: () => freshVault() },
+  { name: 'WebKit-like (Safari)', form: 'wrapped', make: () => webkitLikeVault() },
+  {
+    name: 'WebKit-like, AES nulled too',
+    form: 'pkcs8',
+    make: () => webkitLikeVault({ nullAes: true }),
+  },
+] as const;

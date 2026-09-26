@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   loadOrCreateExtensionIdentity,
   signWithExtensionIdentity,
@@ -12,7 +12,7 @@ import {
   ecdhX25519,
 } from '@fetchproxy/protocol';
 import { noteInstalled } from '../src/vault-migration.js';
-import { freshVault, installChromeLocal, type LocalArea } from './helpers/vault.js';
+import { VAULTS, installChromeLocal, type LocalArea } from './helpers/vault.js';
 
 /**
  * FOLLOWUP-2 (fleet-audit #253): the extension's long-term private keys used
@@ -49,12 +49,13 @@ function allStrings(v: unknown): string {
   return JSON.stringify(v);
 }
 
-describe('loadOrCreateExtensionIdentity — fresh install', () => {
+describe.each(VAULTS)('loadOrCreateExtensionIdentity — fresh install, $name vault', (vault) => {
   let local: LocalArea;
   beforeEach(() => {
-    freshVault();
+    vault.make();
     local = installChromeLocal();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it('generates an identity whose private keys are NON-EXTRACTABLE CryptoKeys', async () => {
     const id = await loadOrCreateExtensionIdentity();
@@ -108,7 +109,7 @@ describe('loadOrCreateExtensionIdentity — fresh install', () => {
 
   it('a new profile (fresh IndexedDB) mints a different identity', async () => {
     const id1 = await loadOrCreateExtensionIdentity();
-    freshVault();
+    vault.make();
     installChromeLocal();
     const id2 = await loadOrCreateExtensionIdentity();
     expect(toB64(id2.x25519Pub)).not.toBe(toB64(id1.x25519Pub));
@@ -124,77 +125,85 @@ describe('loadOrCreateExtensionIdentity — fresh install', () => {
   });
 });
 
-describe('loadOrCreateExtensionIdentity — migration from storage.local (no re-pair)', () => {
-  let local: LocalArea;
-  beforeEach(async () => {
-    freshVault();
-    local = installChromeLocal();
-    // What Chrome tells the service worker when a pre-vault build updates to
-    // this build — the only thing that authorises reading storage.local.
-    await noteInstalled({ reason: 'update', previousVersion: '3.2.0' });
-  });
+describe.each(VAULTS)(
+  'loadOrCreateExtensionIdentity — migration from storage.local (no re-pair), $name vault',
+  (vault) => {
+    let local: LocalArea;
+    afterEach(() => vi.restoreAllMocks());
+    beforeEach(async () => {
+      vault.make();
+      local = installChromeLocal();
+      // What Chrome tells the service worker when a pre-vault build updates to
+      // this build — the only thing that authorises reading storage.local.
+      await noteInstalled({ reason: 'update', previousVersion: '3.2.0' });
+    });
 
-  it('keeps the SAME keys: pubs unchanged, signatures byte-identical to the legacy key', async () => {
-    const legacy = await legacyStored();
-    local.data['extensionIdentity'] = legacy.stored;
-    const id = await loadOrCreateExtensionIdentity();
-    expect(toB64(id.x25519Pub)).toBe(toB64(legacy.x.publicKey));
-    expect(toB64(id.ed25519Pub)).toBe(toB64(legacy.ed.publicKey));
-    expect(id.createdAt).toBe(1234);
-    // Ed25519 is deterministic: the imported key IS the legacy key.
-    const msg = enc.encode('same key');
-    expect(toB64(await signWithExtensionIdentity(id, msg))).toBe(
-      toB64(await ed25519Sign(legacy.ed.privateKey, msg)),
-    );
-    // Same for X25519: the imported private key derives the same secret.
-    const peer = await generateX25519();
-    const peerPub = await crypto.subtle.importKey(
-      'raw',
-      peer.publicKey as BufferSource,
-      { name: 'X25519' },
-      false,
-      [],
-    );
-    const bits = new Uint8Array(
-      await crypto.subtle.deriveBits({ name: 'X25519', public: peerPub }, id.x25519PrivateKey, 256),
-    );
-    expect(toB64(bits)).toBe(toB64(await ecdhX25519(legacy.x.privateKey, peer.publicKey)));
-  });
+    it('keeps the SAME keys: pubs unchanged, signatures byte-identical to the legacy key', async () => {
+      const legacy = await legacyStored();
+      local.data['extensionIdentity'] = legacy.stored;
+      const id = await loadOrCreateExtensionIdentity();
+      expect(toB64(id.x25519Pub)).toBe(toB64(legacy.x.publicKey));
+      expect(toB64(id.ed25519Pub)).toBe(toB64(legacy.ed.publicKey));
+      expect(id.createdAt).toBe(1234);
+      // Ed25519 is deterministic: the imported key IS the legacy key.
+      const msg = enc.encode('same key');
+      expect(toB64(await signWithExtensionIdentity(id, msg))).toBe(
+        toB64(await ed25519Sign(legacy.ed.privateKey, msg)),
+      );
+      // Same for X25519: the imported private key derives the same secret.
+      const peer = await generateX25519();
+      const peerPub = await crypto.subtle.importKey(
+        'raw',
+        peer.publicKey as BufferSource,
+        { name: 'X25519' },
+        false,
+        [],
+      );
+      const bits = new Uint8Array(
+        await crypto.subtle.deriveBits(
+          { name: 'X25519', public: peerPub },
+          id.x25519PrivateKey,
+          256,
+        ),
+      );
+      expect(toB64(bits)).toBe(toB64(await ecdhX25519(legacy.x.privateKey, peer.publicKey)));
+    });
 
-  it('imports the legacy keys as NON-EXTRACTABLE and deletes them from storage.local', async () => {
-    const legacy = await legacyStored();
-    local.data['extensionIdentity'] = legacy.stored;
-    const id = await loadOrCreateExtensionIdentity();
-    expect(id.ed25519PrivateKey.extractable).toBe(false);
-    expect(id.x25519PrivateKey.extractable).toBe(false);
-    expect('extensionIdentity' in local.data).toBe(false);
-    const dump = allStrings(local.data);
-    expect(dump).not.toContain(legacy.stored.ed25519Priv as string);
-    expect(dump).not.toContain(legacy.stored.x25519Priv as string);
-  });
+    it('imports the legacy keys as NON-EXTRACTABLE and deletes them from storage.local', async () => {
+      const legacy = await legacyStored();
+      local.data['extensionIdentity'] = legacy.stored;
+      const id = await loadOrCreateExtensionIdentity();
+      expect(id.ed25519PrivateKey.extractable).toBe(false);
+      expect(id.x25519PrivateKey.extractable).toBe(false);
+      expect('extensionIdentity' in local.data).toBe(false);
+      const dump = allStrings(local.data);
+      expect(dump).not.toContain(legacy.stored.ed25519Priv as string);
+      expect(dump).not.toContain(legacy.stored.x25519Priv as string);
+    });
 
-  it('migrates once: the identity survives the legacy copy being gone', async () => {
-    const legacy = await legacyStored();
-    local.data['extensionIdentity'] = legacy.stored;
-    await loadOrCreateExtensionIdentity();
-    const again = await loadOrCreateExtensionIdentity();
-    expect(toB64(again.ed25519Pub)).toBe(toB64(legacy.ed.publicKey));
-  });
+    it('migrates once: the identity survives the legacy copy being gone', async () => {
+      const legacy = await legacyStored();
+      local.data['extensionIdentity'] = legacy.stored;
+      await loadOrCreateExtensionIdentity();
+      const again = await loadOrCreateExtensionIdentity();
+      expect(toB64(again.ed25519Pub)).toBe(toB64(legacy.ed.publicKey));
+    });
 
-  it('refuses a legacy record whose private key does not match its public key', async () => {
-    const legacy = await legacyStored();
-    const other = await generateEd25519();
-    local.data['extensionIdentity'] = { ...legacy.stored, ed25519Pub: toB64(other.publicKey) };
-    const id = await loadOrCreateExtensionIdentity();
-    expect(toB64(id.ed25519Pub)).not.toBe(toB64(other.publicKey));
-    expect(toB64(id.ed25519Pub)).not.toBe(toB64(legacy.ed.publicKey));
-    expect('extensionIdentity' in local.data).toBe(false);
-  });
+    it('refuses a legacy record whose private key does not match its public key', async () => {
+      const legacy = await legacyStored();
+      const other = await generateEd25519();
+      local.data['extensionIdentity'] = { ...legacy.stored, ed25519Pub: toB64(other.publicKey) };
+      const id = await loadOrCreateExtensionIdentity();
+      expect(toB64(id.ed25519Pub)).not.toBe(toB64(other.publicKey));
+      expect(toB64(id.ed25519Pub)).not.toBe(toB64(legacy.ed.publicKey));
+      expect('extensionIdentity' in local.data).toBe(false);
+    });
 
-  it('refuses a malformed legacy record and mints a fresh identity', async () => {
-    local.data['extensionIdentity'] = { x25519Priv: 'nope', createdAt: 'x' };
-    const id = await loadOrCreateExtensionIdentity();
-    expect(id.ed25519Pub.byteLength).toBe(32);
-    expect('extensionIdentity' in local.data).toBe(false);
-  });
-});
+    it('refuses a malformed legacy record and mints a fresh identity', async () => {
+      local.data['extensionIdentity'] = { x25519Priv: 'nope', createdAt: 'x' };
+      const id = await loadOrCreateExtensionIdentity();
+      expect(id.ed25519Pub.byteLength).toBe(32);
+      expect('extensionIdentity' in local.data).toBe(false);
+    });
+  },
+);
