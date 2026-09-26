@@ -67,13 +67,6 @@ published.
 The bridge's version line is its own (it started at 1.0.0), independent of
 fetchproxy's; compatibility is the protocol number, not a version comparison.
 
-`"release-as": "1.0.0"` in the config exists only for the first release:
-delete it once v1.0.0 ships. `tests/release-workflow.test.ts` enforces that
-from CHANGELOG.md, not the manifest (which `release-as` pins at 1.0.0): a
-`1.0.0` changelog entry beside `release-as` is allowed only on the release PR
-itself (a `release-please--*` head branch), so main goes red the moment the
-v1.0.0 release PR merges, until a follow-up deletes the key.
-
 ## Icons
 
 The extension icons in `packages/extension-chrome/icons/` are copies of the

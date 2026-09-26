@@ -10,10 +10,6 @@ name: release-please
 # and tests/release-workflow.test.ts fails if any workflow grows an
 # `npm publish`. The Chrome Web Store upload is a later, separate job.
 #
-# FIRST RELEASE: release-please-config.json carries `"release-as": "1.0.0"`
-# so the bridge starts its own line at 1.0.0 rather than continuing
-# fetchproxy's 3.x. Delete it once v1.0.0 is released.
-#
 # A green tag does not mean the zip is attached: the two jobs are
 # independent. Check the Release's assets; to finish a release whose tag
 # exists but whose zip never attached, dispatch this workflow FROM MAIN with
