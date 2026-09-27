@@ -85,6 +85,17 @@ describe.each(cases)('%s keeps parity with Chrome', (_label, safari) => {
     expect(chrome.background).toHaveProperty('service_worker');
     expect(safari().background).toEqual({ scripts: ['background.js'], persistent: false });
   });
+
+  // Safari 27 silently drops the WHOLE extension (gone from Settings → Extensions,
+  // no log line) when action.default_icon names an SVG, as a string or a size-keyed
+  // map (T8 check 7, 2026-09-27). Keep the PNGs.
+  it('keeps action.default_icon a size-keyed map of PNGs — Safari 27 drops the extension for an SVG', () => {
+    const icon = safari().action?.default_icon as unknown;
+    expect(icon).toBeTypeOf('object');
+    const paths = Object.values(icon as Record<string, string>);
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) expect(path).toMatch(/\.png$/);
+  });
 });
 
 describe('safariManifest', () => {

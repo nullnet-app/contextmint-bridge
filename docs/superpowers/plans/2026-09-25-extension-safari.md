@@ -780,8 +780,8 @@ Recorded as the owner reported them; nothing below goes further than that.
   `main` at the time, with the ContextMint Bridge Safari `dist/` from this repo's `main`.
 - **Second session, 2026-09-27:** ContextMint for Mac from mcp-host-app `main` `4a7e08a`,
   with the ContextMint Bridge Safari `dist/` from this repo's `main` `9d5f0fc` (#25), a
-  signed dev build; `fpx` 3.3.0. It re-ran check 4's header capture, ran check 6, and
-  checked the capability subset (#25).
+  signed dev build; `fpx` 3.3.0. It re-ran check 4's header capture, ran check 6,
+  checked the capability subset (#25), and tried check 7's SVG toolbar icon.
 
 | Check | Result | What was seen |
 | ----- | ------ | ------------- |
@@ -792,7 +792,7 @@ Recorded as the owner reported them; nothing below goes further than that.
 | 5. `download` refused at hello | **Passed** (2026-09-26; superseded by #25) | A profile declaring `download` was refused at hello with `unsupported-capability: download (not available in this browser)` (#18). Since #25 a profile with anything servable is granted the subset instead (next row); the whole-hello refusal remains only for a profile of which nothing is servable. |
 | 5a. Capability subset (#25 / fetchproxy#418) | **Passed** (2026-09-27) | A profile declaring `download` and `cookie` `GeoIP` was **not** refused: it paired (pair code verified), `cookies` returned `GeoIP`, and `fpx download` returned the typed error `capability "download" is not available in this browser (safari) … The rest of this MCP still works here…`. |
 | 6. Content script and `chrome.storage.session` | **Passed** (2026-09-27) | In ContextMint Bridge's content-script context on `en.wikipedia.org`, `[typeof chrome, typeof chrome.storage, typeof chrome.storage.local, typeof chrome.storage.session]` was `["object","object","object","undefined"]`, and `chrome.storage.session.get` threw `undefined is not an object`. Safari does not expose `storage.session` to content scripts, so fetchproxy `docs/SECURITY.md` Defense 4 holds on Safari; no `fix:` task is needed. |
-| 7. SVG toolbar template icon | **Not run** | Optional and cosmetic; v1 ships the PNGs. |
+| 7. SVG toolbar template icon | **FAILED** (2026-09-27) — do not retry blindly | Second session: with `action.default_icon` set to `system/assets/contextmint-bridge-toolbar.svg` (copied in as `icons/toolbar.svg`) — either as the string `"icons/toolbar.svg"` or as a size-keyed object `{"16": "icons/toolbar.svg", …}` — Safari silently dropped the whole extension: it vanished from Safari → Settings → Extensions, while `pluginkit` still listed the appex and no log line explained it. Reverting to the PNG `default_icon` brought it back. Safari 27 does not accept an SVG toolbar icon in a web-extension manifest; the PNGs (16/32/48/128) stay, and no `feat:` task follows. `extension-safari/tests/manifest-parity.test.ts` now asserts `default_icon` is PNGs. |
 
 Also passed, outside the numbered checks (the Mac app and the T7 hand-off):
 
@@ -862,7 +862,10 @@ For chrischall/fetchproxy, as an additive minor protocol change, when the owner 
   check 2 becomes "the same identity survives a restart" (there is no form to observe).
 - **Safari toolbar template icon — DECIDED: PNG for v1.** T4's PNGs ship. Whether Safari
   27 takes `contextmint-bridge-toolbar.svg` in `action.default_icon`, and whether it
-  tints correctly, is T8 check 7.
+  tints correctly, was T8 check 7. **SVG test, 2026-09-27: Safari 27 rejects it** — an
+  SVG `default_icon` (string or size-keyed) makes Safari silently drop the whole
+  extension. PNG is not just the v1 choice but the only one that works; do not retry
+  the SVG without a newer Safari to test on.
 - **Safari version floor — DECIDED: `27.0`.** The generated Safari manifest sets
   `browser_specific_settings.safari.strict_min_version` to `"27.0"`, the version the
   build was proven on (`extension-safari/tests/manifest-parity.test.ts` pins it).
