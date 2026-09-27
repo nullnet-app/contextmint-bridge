@@ -77,6 +77,16 @@ describe.each(cases)('%s keeps parity with Chrome', (_label, safari) => {
     );
   });
 
+  it('has a description App Store Connect accepts: a string of at most 112 characters', () => {
+    // App Store Connect error 90849 rejected ContextMint Mac build 201
+    // (nullnet-app/mcp-host-app run 36323416643) for a 131-character
+    // description: the appex manifest's must be a string of <= 112 characters.
+    // Chrome's limit is 132, so the Chrome-side check alone never caught it.
+    const description = safari().description;
+    expect(description).toBeTypeOf('string');
+    expect([...(description as string)].length).toBeLessThanOrEqual(112);
+  });
+
   it('requires Safari 27.0, the version the build was proven on', () => {
     expect(safari().browser_specific_settings).toEqual({ safari: { strict_min_version: '27.0' } });
   });

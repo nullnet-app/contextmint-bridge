@@ -22,6 +22,9 @@ import { tempSafariBuild } from './helpers/temp-build.js';
  *   string or a size-keyed map (proven live 2026-09-27; #28);
  * - requires `browser_specific_settings.safari.strict_min_version` 27.0 — the
  *   Safari every rule above was proven on (proven live 2026-09-27).
+ * - has a `description` string of at most 112 characters — App Store Connect
+ *   rejects the whole app upload otherwise (error 90849, ContextMint Mac build
+ *   201, run 36323416643); Chrome's 132-character limit is looser.
  *
  * If that repo's check changes, this one must change with it.
  * `manifest-parity.test.ts` pins how the generator gets there; this file pins
@@ -72,6 +75,11 @@ describe('the built Safari manifest passes mcp-host-app’s appex build check', 
       }
     },
   );
+
+  it('has a description of at most 112 characters — App Store Connect error 90849 otherwise', () => {
+    expect(built.manifest.description).toBeTypeOf('string');
+    expect([...(built.manifest.description as string)].length).toBeLessThanOrEqual(112);
+  });
 
   it('requires Safari 27.0 — browser_specific_settings.safari.strict_min_version', () => {
     expect(built.manifest.browser_specific_settings.safari.strict_min_version).toBe('27.0');
