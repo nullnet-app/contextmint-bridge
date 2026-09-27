@@ -26,6 +26,10 @@
  *                            (`vault-records.ts`; these three are fleet-audit
  *                            #252 — a content script could forge or revoke
  *                            them while they lived in `storage.local`);
+ * - `bridgeBindings`       — which bridge credentials are bound to this
+ *                            extension's identity, and which gateways predate
+ *                            binding (`bridge-bind-store.ts`, mcp-host plan
+ *                            task C2). Credentials appear only as SHA-256s;
  * - `legacyStoresMigrated` — marker: the one-time import of those three out of
  *                            `storage.local` has happened (`vault-migration.ts`).
  *
@@ -46,6 +50,7 @@ export type VaultKey =
   | 'trustedMcps'
   | 'remoteBridges'
   | 'dismissedScopeHashes'
+  | 'bridgeBindings'
   | 'legacyStoresMigrated';
 
 function factory(): IDBFactory {

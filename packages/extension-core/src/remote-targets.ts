@@ -66,6 +66,24 @@ export interface RemoteTarget {
   label?: string;
   /** A disabled target is remembered but never dialled. */
   enabled: boolean;
+  /**
+   * The credential's mcp-host id (`brt_*`), when known — typed into the
+   * Bridges form beside the token, or from a pairing-code redemption. It is
+   * what `POST /bridge/bind` signs over (mcp-host plan task
+   * C2), so a target without one is never bound after the fact. Not a secret.
+   */
+  tokenId?: string;
+}
+
+/**
+ * An mcp-host credential id: `brt_` + an id. Bounded and NUL-free, because it
+ * is a field of a signed message (`bridge-binding.ts`) and a NUL inside it
+ * would let one message be read as another split.
+ */
+const TOKEN_ID = /^brt_[A-Za-z0-9_-]{1,64}$/;
+
+export function isBridgeTokenId(value: unknown): value is string {
+  return typeof value === 'string' && TOKEN_ID.test(value);
 }
 
 export type Validation = { ok: true } | { ok: false; reason: string };
@@ -138,7 +156,7 @@ export function normaliseRemoteTargets(stored: unknown): RemoteTarget[] {
   for (const row of rows) {
     if (out.length >= MAX_REMOTE_TARGETS) break;
     if (!isRecord(row)) continue;
-    const { id, url, token, label, enabled } = row;
+    const { id, url, token, label, enabled, tokenId } = row;
     if (typeof id !== 'string' || id === '') continue;
     if (typeof url !== 'string' || !validateRemoteTargetUrl(url).ok) continue;
     if (typeof token !== 'string' || !validateRemoteTargetToken(token).ok) continue;
@@ -153,6 +171,9 @@ export function normaliseRemoteTargets(stored: unknown): RemoteTarget[] {
       // Absent means enabled: a row written by an older popup has no flag, and
       // refusing to dial it would look like the target had been lost.
       enabled: enabled === undefined ? true : enabled === true,
+      // Kept only when it is a credential id; anything else is dropped rather
+      // than signed over.
+      ...(isBridgeTokenId(tokenId) ? { tokenId } : {}),
     });
   }
   return out;

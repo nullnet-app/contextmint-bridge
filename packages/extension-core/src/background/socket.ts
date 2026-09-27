@@ -53,6 +53,7 @@ import { unavailableCapabilities } from '../capabilities.js';
 // states the same fact to the browser user, and two copies of a remedy are two
 // things to forget to bump.
 import { MIN_SERVER_VERSION } from '../lib/version-mismatch.js';
+import { EXTENSION_MISMATCH_CLOSE, EXTENSION_MISMATCH_MESSAGE } from '../bridge-binding.js';
 
 import { state } from './state.js';
 import { setConnectionStatus, flashActivity } from './badge.js';
@@ -61,6 +62,7 @@ import { onServerHello, sendHelloRejected } from './server-hello.js';
 import { forgetVersionMismatch, noteVersionMismatch } from './version-mismatch-store.js';
 import { handleRequest } from './handlers/dispatch.js';
 import { broadcastConnectionsChanged, clearSessionScopeFor } from './session-scope.js';
+import { bindOnConnect } from './bind-on-connect.js';
 import {
   HANDOFF_LINK_PREFIX,
   LOCAL_LINK_ID,
@@ -131,7 +133,16 @@ export function reconcileRemoteLinks(targets: RemoteTarget[]): void {
 export function setHandoffTarget(target: HandoffTarget | null): void {
   handoffTarget =
     target && isUsableHandoffTarget(target)
-      ? { id: target.id, url: target.url, token: target.token, label: target.name, enabled: true }
+      ? {
+          id: target.id,
+          url: target.url,
+          token: target.token,
+          label: target.name,
+          enabled: true,
+          // The hand-off contract names the credential's `brt_*` id, which is
+          // what binding it signs over (`bind-on-connect.ts`).
+          tokenId: target.id,
+        }
       : null;
   reconcileLinks();
 }
@@ -228,6 +239,8 @@ export function connect(): void {
 
 function connectLink(link: Link): void {
   if (link.closed) return;
+  // Refused for good (4004): the keepalive tick must not re-dial it either.
+  if (link.refusal !== null) return;
   if (!state.trust || !state.sessions || !state.extIdentity) return;
   if (Date.now() < link.nextAttemptAt) return;
   if (link.ws && (link.ws.readyState === WebSocket.CONNECTING || link.ws.readyState === WebSocket.OPEN)) {
@@ -285,6 +298,10 @@ function connectLink(link: Link): void {
       ...unavailableCapabilitiesHelloField(unavailableCapabilities(chrome)),
     };
     ws.send(JSON.stringify(extHello));
+    // mcp-host plan task C2: the gateway just accepted this credential, so
+    // bind it to this extension if it is not known to be bound. After the
+    // hello, fire-and-forget — it never delays or blocks the handshake.
+    void bindOnConnect(link);
   });
   ws.addEventListener('message', (ev: MessageEvent) => {
     void onMessage(link, ev.data as string).catch((e) =>
@@ -304,6 +321,20 @@ function connectLink(link: Link): void {
     // blip in the retry log.
     if (link.kind === 'remote' && ev?.code === 1008) {
       console.warn(`[fetchproxy] ${link.label} refused this browser: ${ev.reason || 'no reason given'}`);
+    }
+    // 4004 EXTENSION_MISMATCH: this credential is bound to a DIFFERENT
+    // browser's identity (mcp-host spec §4.3). Final for this credential — a
+    // binding never moves — so stop dialling it rather than retrying into the
+    // same refusal forever, and say why in the popup. A new credential is a
+    // new link and starts clean. Every other close, 4003 (revoked) included,
+    // keeps the reconnect it always had.
+    if (link.kind === 'remote' && ev?.code === EXTENSION_MISMATCH_CLOSE) {
+      link.refusal = EXTENSION_MISMATCH_MESSAGE;
+      console.warn(
+        `[fetchproxy] ${link.label}: ${EXTENSION_MISMATCH_MESSAGE} — revoke this credential and pair this browser again`,
+      );
+      broadcastConnectionsChanged();
+      return;
     }
     scheduleReconnect(link);
   });

@@ -158,7 +158,25 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `nativeMessaging`), so Chrome is inert. The handed-off target is a
   `contextmint:<brt id>` link held IN MEMORY beside the vault's targets
   (`background/socket.ts` `setHandoffTarget`), re-validated like a typed-in
-  one, never persisted or logged, and shown read-only in the popup.
+  one, never persisted or logged, and shown read-only in the popup. (Only a
+  SHA-256 of its credential reaches the vault, in `bridgeBindings` — below.)
+- **A remote credential binds itself to this extension on its first attach**
+  (mcp-host plan task C2, spec §4.3). `background/bind-on-connect.ts` sends
+  `POST /bridge/bind` once, after the socket opens, to that link's own gateway
+  origin (`bridge-binding.ts` `gatewayOriginFor`: `wss://h` → `https://h`),
+  signed by the vault's Ed25519 key over mcp-host's exact message — only when
+  the credential's `brt_*` id is known (a hand-off's `id`, or a vault target's
+  `tokenId`, which the popup's Bridges form takes beside the token). A pasted
+  credential saved without its id is never bound — the one residual of I-13
+  on this side; the form's hint asks for the id. A `refused` bind is logged
+  with the origin it was signed for. The answer is remembered in the vault's `bridgeBindings`
+  (`bridge-bind-store.ts`, keyed by the credential's SHA-256): `bound`,
+  `conflict` and `refused` are final — 400/401 are counted on `/bridge`'s own
+  failure allowance, so never retry them — and a 404 (a gateway that predates
+  binding) is left alone for a day. A `4004 EXTENSION_MISMATCH` close stops
+  that link for good (`link.refusal`, shown in the popup); every other close,
+  `4003` included, reconnects as before. `redeemPairingCode` sends the same
+  signed block with a pairing-code redemption; nothing calls it yet.
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is
@@ -178,7 +196,8 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   site's content script can read AND write it. Keys, trust records, remote
   bridge targets and dismissed scope hashes live in the extension-origin
   IndexedDB vault (`extension-core/src/vault.ts`, reached through
-  `TrustStore` / `vault-records.ts` / `loadOrCreateExtensionIdentity`); the
+  `TrustStore` / `vault-records.ts` / `bridge-bind-store.ts` /
+  `loadOrCreateExtensionIdentity`); the
   pairing queue lives in `storage.session`. `vault-migration.ts` is the only
   reader of the legacy `storage.local` keys, and only once. The identity
   keeps NO X25519 private key (protocol 4 never uses one; the X25519 pub is

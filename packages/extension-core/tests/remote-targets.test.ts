@@ -106,6 +106,17 @@ describe('normaliseRemoteTargets', () => {
     expect(normaliseRemoteTargets(rows)).toHaveLength(MAX_REMOTE_TARGETS);
   });
 
+  // mcp-host plan task C2: the credential's `brt_*` id is what binding signs
+  // over, so only a credential id is kept — anything else is dropped from the
+  // row (the row itself still dials; it just is never bound after the fact).
+  it('keeps a credential id, and drops a tokenId that is not one', () => {
+    expect(normaliseRemoteTargets([{ ...good, tokenId: 'brt_0123abcd' }])[0]?.tokenId).toBe('brt_0123abcd');
+    for (const tokenId of ['b1', 'brt_', 'brt_a\0b', 7, 'brt_' + 'a'.repeat(65)]) {
+      const [row] = normaliseRemoteTargets([{ ...good, tokenId }]);
+      expect(row, String(tokenId)).toEqual({ ...good, enabled: true });
+    }
+  });
+
   it('treats anything that is not an array as no targets', () => {
     for (const stored of [undefined, null, {}, 'wss://x', 7]) {
       expect(normaliseRemoteTargets(stored), String(stored)).toEqual([]);

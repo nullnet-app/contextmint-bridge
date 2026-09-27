@@ -39,6 +39,12 @@ describe('PRIVACY.md §4 names every network path', () => {
     expect(s4).toMatch(/mcpId|MCP identifier/i);
   });
 
+  it('names the one HTTPS request binding a remote credential sends, and to where', () => {
+    // mcp-host plan task C2: `POST /bridge/bind` on the relay's own origin.
+    expect(s4).toMatch(/\/bridge\/bind/);
+    expect(s4).toMatch(/same relay/i);
+  });
+
   it('no longer claims the extension makes no outbound connections at all', () => {
     expect(s4).not.toMatch(/makes no outbound network connections of its own\./);
   });
