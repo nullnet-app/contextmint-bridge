@@ -62,8 +62,8 @@ export function unavailableCapabilities(api: CapabilityProbeApi): ReadonlySet<Ca
   // (`background/handlers/download.ts`), so both halves are needed.
   if (!isFn(api.downloads?.download) || !api.downloads?.onChanged) out.add('download');
 
-  // Present-but-unproven counts as present: the macOS spike neither proved
-  // nor disproved Safari's webRequest header capture. Only absence refuses.
+  // Present counts as present; only absence refuses. Safari 27's webRequest
+  // header capture was proven live (plan T8 check 4, 2026-09-27).
   if (!isFn(api.webRequest?.onBeforeSendHeaders?.addListener)) out.add('capture_request_header');
   if (!isFn(api.webRequest?.onBeforeRedirect?.addListener)) out.add('capture_redirect');
 
