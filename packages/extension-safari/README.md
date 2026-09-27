@@ -58,6 +58,11 @@ _Spike results — macOS_):
 - **Safari 27 or later.** `browser_specific_settings.safari.strict_min_version`
   is `"27.0"`: the build was proven on Safari 27 and nothing older, so an older
   Safari refuses to load it instead of running it untested.
+- **PNG toolbar icons only.** Never point `action.default_icon` at an SVG (such
+  as the design system's `contextmint-bridge-toolbar.svg`), as a string or a
+  size-keyed map: Safari 27 silently drops the whole extension — it vanishes
+  from Settings → Extensions with no log line (live check, 2026-09-27).
+  `tests/manifest-parity.test.ts` pins the PNGs.
 
 The manifest is **generated** from Chrome's (`manifest.ts`), so name, version,
 icons, popup, content scripts and host permissions cannot drift;
