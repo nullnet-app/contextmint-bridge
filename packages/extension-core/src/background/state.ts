@@ -32,10 +32,18 @@ export interface BackgroundState {
   // the Ed25519 private key as a non-extractable CryptoKey and no X25519
   // private key at all (see identity-keys.ts).
   extIdentity: ExtensionIdentity | null;
+  /**
+   * The gateway's fingerprint of `extIdentity` (`account-confirm.ts`
+   * `extensionKeyFingerprint`), computed once it loads. The popup shows it
+   * beside a confirmation, so the person can check the confirm page is about
+   * THIS browser. Public.
+   */
+  extFingerprint: string | null;
 }
 
 export const state: BackgroundState = {
   trust: null,
   sessions: null,
   extIdentity: null,
+  extFingerprint: null,
 };

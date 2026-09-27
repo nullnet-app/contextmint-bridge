@@ -177,6 +177,31 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   that link for good (`link.refusal`, shown in the popup); every other close,
   `4003` included, reconnects as before. `redeemPairingCode` sends the same
   signed block with a pairing-code redemption; nothing calls it yet.
+- **"Confirm this browser" marks a remote credential account-confirmed**
+  (mcp-host plan task C3, cut as C3a for the managed-pin slice; spec §4.4,
+  I-7), so the account's host-managed pin sets admit this browser's key. Only
+  the person starts it, from a connected remote row in the popup
+  (`account-confirm-begin`, honoured only with no `sender.tab`).
+  `background/account-confirm.ts` then either asks ContextMint over native
+  messaging (Safari, the handed-off credential only: `{type:"account-confirm",
+  tokenId, extFingerprint, ts, sig}`, no challenge; anything but `{ok:true}`
+  falls back) or runs the tab flow: a signed `POST /bridge/account-confirm/start`
+  at the link's own gateway origin, the challenge URL (checked to be exactly
+  `<origin>/bridge/confirm#<22 chars>`) opened in a tab whose id is recorded in
+  `storage.session` with the credential's SHA-256, never the credential. The
+  confirm page posts its completion to its own window; the content script
+  (`account-confirm-relay.ts`) relays it; the background accepts it ONLY from
+  that tab id, top frame, gateway origin, `/bridge/confirm`, within ten
+  minutes, once, for the same credential and the same gateway origin (a link
+  whose URL was edited finishes nothing) — then a signed
+  `POST /bridge/account-confirm/finish`. A sender the browser reports no `url`
+  for is refused. The popup has no field that takes a completion or challenge
+  (red-team R4-3). A `4005 ACCOUNT_CONFIRMED` or `4006 FACTS_CHANGED` close
+  re-dials at once (once per 5 s, then the backoff, which the immediate re-dial
+  does not reset — only an open does). A 4005 shows "confirmed" only when a
+  confirmation this browser started is in flight.
+  It writes no trust: no `trustedMcps`, no account record — `link.confirm` is
+  popup display state. The account card and `trustedAccounts` are C1/C3/C4.
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is

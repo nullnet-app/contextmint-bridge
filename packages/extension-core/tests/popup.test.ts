@@ -1780,3 +1780,155 @@ describe('remoteTargetFromForm — the row the Bridges form saves', () => {
     }
   });
 });
+
+/**
+ * mcp-host plan task C3a: "Confirm this browser" on a remote bridge row. The
+ * person asks here; the confirmation itself happens on the gateway's page (or
+ * in ContextMint). The popup has NO field that takes a completion or a
+ * challenge — a forwarded link must complete nothing (red-team R4-3).
+ */
+describe('renderPopup — confirm this browser (C3a)', () => {
+  let container: HTMLElement;
+  const FP = '2def1941009a7f30';
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    container = document.getElementById('root')!;
+  });
+
+  const withBridges = (bridges: BridgesView): void =>
+    renderPopup(container, { mode: 'status', trusted: [], bridges });
+
+  it('offers it on a connected, confirmable bridge, and asks for that link', async () => {
+    const asked: string[] = [];
+    withBridges({
+      extensionFingerprint: FP,
+      targets: [
+        { id: 'b1', url: 'wss://h/b', enabled: true, connected: true, confirmable: true },
+        { id: 'b2', url: 'wss://h2/b', enabled: true, connected: true },
+        { id: 'b3', url: 'wss://h3/b', enabled: true, connected: false, confirmable: true },
+      ],
+      onConfirm: async (linkId) => {
+        asked.push(linkId);
+        return null;
+      },
+    });
+    const button = container.querySelector<HTMLButtonElement>('[data-target-id="b1"] .bridge-confirm');
+    expect(button?.textContent).toBe('Confirm this browser');
+    // Not confirmable (no credential id), or not connected (it binds on connect).
+    expect(container.querySelector('[data-target-id="b2"] .bridge-confirm')).toBeNull();
+    expect(container.querySelector('[data-target-id="b3"] .bridge-confirm')).toBeNull();
+    button!.click();
+    await Promise.resolve();
+    expect(asked).toEqual(['remote:b1']);
+  });
+
+  it('shows why a start failed', async () => {
+    withBridges({
+      targets: [{ id: 'b1', url: 'wss://h/b', enabled: true, connected: true, confirmable: true }],
+      onConfirm: async () => 'this browser could not be confirmed for the account',
+    });
+    container.querySelector<HTMLButtonElement>('[data-target-id="b1"] .bridge-confirm')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container.querySelector('[data-target-id="b1"] .bridge-confirm-status')?.textContent).toBe(
+      'this browser could not be confirmed for the account',
+    );
+  });
+
+  it('offers it on the ContextMint hand-off row too, by its link id', async () => {
+    const asked: string[] = [];
+    withBridges({
+      targets: [],
+      handoff: {
+        name: 'Safari',
+        url: 'wss://mcp.nullnet.app/bridge',
+        connected: true,
+        confirmable: true,
+        linkId: 'contextmint:brt_one',
+      },
+      onConfirm: async (linkId) => {
+        asked.push(linkId);
+        return null;
+      },
+    });
+    container.querySelector<HTMLButtonElement>('.bridge.handoff .bridge-confirm')!.click();
+    await Promise.resolve();
+    expect(asked).toEqual(['contextmint:brt_one']);
+  });
+
+  it('says where the confirmation stands, with this browser’s key while the page is open', () => {
+    const row = (phase: string, message?: string) => ({
+      id: phase,
+      url: `wss://${phase}.test/b`,
+      enabled: true,
+      connected: true,
+      confirmable: true as const,
+      confirm: { phase: phase as 'tab', ...(message ? { message } : {}) },
+    });
+    withBridges({
+      extensionFingerprint: FP,
+      targets: [row('tab'), row('app'), row('finishing'), row('confirmed'), row('failed', 'refused')],
+      onConfirm: async () => null,
+    });
+    const status = (id: string) =>
+      container.querySelector(`[data-target-id="${id}"] .bridge-confirm-status`)?.textContent ?? '';
+    expect(status('tab')).toContain(FP);
+    expect(status('tab')).toContain('signed in as the person who paired this browser');
+    expect(status('app')).toBe('Confirm in ContextMint');
+    expect(status('finishing')).toContain('Finishing');
+    expect(status('confirmed')).toBe('This browser is confirmed for its account.');
+    expect(status('failed')).toBe('refused');
+    // Confirmed: nothing more to ask for.
+    expect(container.querySelector('[data-target-id="confirmed"] .bridge-confirm')).toBeNull();
+    expect(container.querySelector('[data-target-id="failed"] .bridge-confirm')).not.toBeNull();
+  });
+
+  it('adds no field that could take a completion or a challenge', () => {
+    withBridges({
+      extensionFingerprint: FP,
+      targets: [
+        {
+          id: 'b1',
+          url: 'wss://h/b',
+          enabled: true,
+          connected: true,
+          confirmable: true,
+          confirm: { phase: 'tab' },
+        },
+      ],
+      onConfirm: async () => null,
+    });
+    // No add form here (no onAdd), so the only inputs are the row's own toggle — none.
+    expect(container.querySelectorAll('input, textarea, [contenteditable]')).toHaveLength(0);
+  });
+});
+
+describe('handoffBridgeView — confirmation (C3a)', () => {
+  const HANDOFF = {
+    id: 'contextmint:brt_one',
+    connected: true,
+    label: 'Safari',
+    url: 'wss://mcp.nullnet.app/bridge',
+    handoff: true,
+  };
+
+  it('carries the link id, confirmable and the confirmation state when the link is confirmable', () => {
+    expect(
+      handoffBridgeView([{ ...HANDOFF, confirmable: true, confirm: { phase: 'app' } }]),
+    ).toEqual({
+      name: 'Safari',
+      url: 'wss://mcp.nullnet.app/bridge',
+      connected: true,
+      confirmable: true,
+      linkId: 'contextmint:brt_one',
+      confirm: { phase: 'app' },
+    });
+  });
+
+  it('carries only a well-formed confirmation state', () => {
+    const view = handoffBridgeView([
+      { ...HANDOFF, confirmable: true, confirm: { phase: 'owned', message: 7 } } as unknown as typeof HANDOFF,
+    ]);
+    expect(view?.confirm).toBeUndefined();
+  });
+});

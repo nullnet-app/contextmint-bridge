@@ -49,6 +49,14 @@ import { onApproval, onScopeUpdateDismiss } from './approval.js';
 import { maybeReinjectOnInstalled } from '../reinject-content-scripts.js';
 import { mainBridgeScriptFor, syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 import { armInstallSignal, noteInstalled } from '../vault-migration.js';
+import { extensionKeyFingerprint } from '../account-confirm.js';
+import { ACCOUNT_CONFIRM_COMPLETION } from '../account-confirm-relay.js';
+import {
+  ACCOUNT_CONFIRM_BEGIN,
+  beginAccountConfirm,
+  onConfirmCompletion,
+  type MessageSenderLike,
+} from './account-confirm.js';
 
 // Boot: only run in a real MV3 service worker context. Skipped under vitest
 // (no chrome.runtime.getManifest, no chrome.storage.local.onChanged).
@@ -130,8 +138,43 @@ export function maybeBoot(): void {
         // The link statuses ride the same query rather than a second one: the
         // popup asks once, and a bridge row that says "configured" while its
         // socket is down is the state this exists to make visible.
-        sendResponse({ connectedHashes: [...connectedIdentityHashes()], links: linkStatuses() });
+        sendResponse({
+          connectedHashes: [...connectedIdentityHashes()],
+          links: linkStatuses(),
+          ...(state.extFingerprint !== null ? { extensionFingerprint: state.extFingerprint } : {}),
+        });
         return true;
+      }
+      // mcp-host plan task C3a: "Confirm this browser" — the person's own
+      // request, so only from an extension page (the popup). A content
+      // script, which every site gets, can reach onMessage too: from a tab it
+      // starts nothing and opens nothing.
+      if (
+        msg !== null &&
+        typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === ACCOUNT_CONFIRM_BEGIN &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        const linkId = (msg as { linkId?: unknown }).linkId;
+        if (typeof linkId !== 'string') return;
+        void beginAccountConfirm(linkId)
+          .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))
+          .then(sendResponse);
+        return true;
+      }
+      // The confirm page's completion, relayed by the content script in the
+      // tab this extension opened. Handed on WITH the browser's own sender —
+      // the tab id, origin and page the flow checks — and only from a tab.
+      if (
+        msg !== null &&
+        typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === ACCOUNT_CONFIRM_COMPLETION &&
+        (sender as { tab?: unknown } | undefined)?.tab !== undefined
+      ) {
+        void onConfirmCompletion(msg, sender as MessageSenderLike).catch((e) =>
+          console.error('[fetchproxy] account confirmation:', e),
+        );
+        return;
       }
     });
   }
@@ -227,6 +270,10 @@ export function maybeBoot(): void {
   void loadOrCreateExtensionIdentity()
     .then((id) => {
       state.extIdentity = id;
+      // Shown beside a confirmation (C3a); public, computed once.
+      void extensionKeyFingerprint(id.x25519Pub).then((fp) => {
+        state.extFingerprint = fp;
+      });
       connect();
       // Remote targets are additional and asynchronous: the loopback link is
       // dialled above without waiting on storage, so a slow (or empty) target
