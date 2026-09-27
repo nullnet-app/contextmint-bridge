@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.1.0...v1.1.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **safari:** keep the extension description within the App Store's 112-character limit ([#31](https://github.com/nullnet-app/contextmint-bridge/issues/31)) ([4800925](https://github.com/nullnet-app/contextmint-bridge/commit/48009251ac19ba48f5b5609e2c7d73d4561c4bfa))
+
+
+### Documentation
+
+* **plan:** record the second live Safari check ([#26](https://github.com/nullnet-app/contextmint-bridge/issues/26)) ([d614c31](https://github.com/nullnet-app/contextmint-bridge/commit/d614c310f5d42d883255fdd0c7745a0ba0b9d98e))
+* **store:** Chrome Web Store listing assets for ContextMint Bridge ([#29](https://github.com/nullnet-app/contextmint-bridge/issues/29)) ([f709642](https://github.com/nullnet-app/contextmint-bridge/commit/f709642058486d39063560b6dfa3c665d7a61709))
+
 ## [1.1.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.0.0...v1.1.0) (2026-09-27)
 
 
