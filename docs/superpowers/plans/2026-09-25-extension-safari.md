@@ -622,7 +622,7 @@ Handlers already null-check some APIs mid-request (`download.ts`: `if
   - `capture_request_header` ← `api.webRequest?.onBeforeSendHeaders?.addListener`;
     `capture_redirect` ← `api.webRequest?.onBeforeRedirect?.addListener` — if Safari
     exposes these objects they count as present (spike: unproven, not absent; T8
-    checks them live);
+    checks them live — header capture passed on 2026-09-27);
   - `fetch_in_page`, `graphql` ← both reach the page through the MAIN-world bridge
     (`capture-logger.js`), which `main-world-bridge.ts` places with
     `scripting.getRegisteredContentScripts` / `registerContentScripts` /
@@ -771,21 +771,28 @@ the throwaway container afterwards.
    2026-09-26); a pass here becomes its own `feat:` task to generate the SVG into the
    Safari manifest only.
 
-### Results — 2026-09-26 (owner's Mac)
+### Results — 2026-09-26 and 2026-09-27 (owner's Mac)
 
-Safari 27; ContextMint for Mac built from nullnet-app/mcp-host-app `main` at the time,
-with the ContextMint Bridge Safari `dist/` from this repo's `main`, signed with the dev
-profiles. Recorded as the owner reported them; nothing below goes further than that.
+Two sessions, both Safari 27 on the owner's Mac, signed with the dev profiles.
+Recorded as the owner reported them; nothing below goes further than that.
+
+- **First session, 2026-09-26:** ContextMint for Mac built from nullnet-app/mcp-host-app
+  `main` at the time, with the ContextMint Bridge Safari `dist/` from this repo's `main`.
+- **Second session, 2026-09-27:** ContextMint for Mac from mcp-host-app `main` `4a7e08a`,
+  with the ContextMint Bridge Safari `dist/` from this repo's `main` `9d5f0fc` (#25), a
+  signed dev build; `fpx` 3.3.0. It re-ran check 4's header capture, ran check 6, and
+  checked the capability subset (#25).
 
 | Check | Result | What was seen |
 | ----- | ------ | ------------- |
 | 1. Background runs, popup renders | **Passed** (popup); background inferred from links, status report and pairing | The popup rendered, and the links, status report and pairing all worked, which needs the background running. No Web Inspector console line from the event page was recorded. |
 | 2. The same identity survives a restart | **Passed** | The hand-off and the extension identity survived a Safari restart — the first live test of #21 dropping the X25519 private key. The vault `identity` record was not inspected in Web Inspector. |
 | 3. `fetch`, keyed `read_cookies`, `read_local_storage`, `fetch` with `inPage: true` | **Passed** | Pairing with the pair-code match; content-script `fetch` 200 with real data; `fetch` with `inPage` (MAIN world) 200; `chrome.cookies` with declared keys returned exactly the two declared keys; the `localStorage` read answered. |
-| 4. `capture_request_header`; MAIN-world registration | **Inconclusive** (header capture) | Header capture via `webRequest` timed out once; it is unclear whether the page made a request in the window. Re-run pending with the owner. The `inPage` fetch in check 3 went through the MAIN-world bridge (`main-world-bridge.ts`) and returned 200; whether through the registered script or the open-tab `executeScript` was not told apart, and the GraphQL capture through it was not run. |
-| 5. `download` refused at hello | **Passed** | A profile declaring `download` was refused at hello with `unsupported-capability: download (not available in this browser)` (#18). |
-| 6. Content script and `chrome.storage.session` | **Not run** | Still open (see *Open questions*). |
-| 7. SVG toolbar template icon | **Not run** | v1 ships the PNGs. |
+| 4. `capture_request_header`; MAIN-world registration | **Passed** (header capture, 2026-09-27) | Second session: `fpx capture accept@en.wikipedia.org` returned the page's real `accept` header (`text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8`) after a tab reload. The first session's timeout was a missed reload (no request in the window), not a Safari limitation: `webRequest` header capture works in Safari 27. The `inPage` fetch in check 3 went through the MAIN-world bridge (`main-world-bridge.ts`) and returned 200; whether through the registered script or the open-tab `executeScript` was not told apart, and the GraphQL capture through it was not run. |
+| 5. `download` refused at hello | **Passed** (2026-09-26; superseded by #25) | A profile declaring `download` was refused at hello with `unsupported-capability: download (not available in this browser)` (#18). Since #25 a profile with anything servable is granted the subset instead (next row); the whole-hello refusal remains only for a profile of which nothing is servable. |
+| 5a. Capability subset (#25 / fetchproxy#418) | **Passed** (2026-09-27) | A profile declaring `download` and `cookie` `GeoIP` was **not** refused: it paired (pair code verified), `cookies` returned `GeoIP`, and `fpx download` returned the typed error `capability "download" is not available in this browser (safari) … The rest of this MCP still works here…`. |
+| 6. Content script and `chrome.storage.session` | **Passed** (2026-09-27) | In ContextMint Bridge's content-script context on `en.wikipedia.org`, `[typeof chrome, typeof chrome.storage, typeof chrome.storage.local, typeof chrome.storage.session]` was `["object","object","object","undefined"]`, and `chrome.storage.session.get` threw `undefined is not an object`. Safari does not expose `storage.session` to content scripts, so fetchproxy `docs/SECURITY.md` Defense 4 holds on Safari; no `fix:` task is needed. |
+| 7. SVG toolbar template icon | **Not run** | Optional and cosmetic; v1 ships the PNGs. |
 
 Also passed, outside the numbered checks (the Mac app and the T7 hand-off):
 
@@ -808,7 +815,8 @@ Observations:
 results — macOS* table (title `docs(spec): record the Safari build's live checks`), and,
 if check 4 finds `webRequest` or MAIN-world registration absent, a new task here to add
 it to T6's detection (and to the Safari manifest's dropped permissions if it is a
-permission).
+permission). Check 4 found `webRequest` header capture present and working (2026-09-27),
+so no such task is needed for it.
 
 ---
 
@@ -859,9 +867,13 @@ For chrischall/fetchproxy, as an additive minor protocol change, when the owner 
   `browser_specific_settings.safari.strict_min_version` to `"27.0"`, the version the
   build was proven on (`extension-safari/tests/manifest-parity.test.ts` pins it).
 
-Still open:
+**Answered by T8, 2026-09-27:**
 
-- **`storage.session` access level on Safari** is unverified (T8 check 6). The pairing
-  channel's integrity rests on a Chrome default today.
+- **`storage.session` access level on Safari — closed to content scripts.** T8 check 6:
+  in a content script `chrome.storage.session` is `undefined` (`get` throws), so the
+  pairing channel's integrity holds on Safari as on Chrome, and fetchproxy
+  `docs/SECURITY.md` Defense 4 holds on Safari. No `setAccessLevel` fix is needed.
+
+Still open:
 - **iOS** rows of the spike are still open; nothing here is iOS-specific, but the event
   page's lifetime on iOS may change what T7 must do on wake.
