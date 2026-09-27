@@ -54,6 +54,7 @@ import { unavailableCapabilities } from '../capabilities.js';
 // things to forget to bump.
 import { MIN_SERVER_VERSION } from '../lib/version-mismatch.js';
 import { EXTENSION_MISMATCH_CLOSE, EXTENSION_MISMATCH_MESSAGE } from '../bridge-binding.js';
+import { ACCOUNT_CONFIRMED_CLOSE, FACTS_CHANGED_CLOSE } from '../account-confirm.js';
 
 import { state } from './state.js';
 import { setConnectionStatus, flashActivity } from './badge.js';
@@ -65,6 +66,7 @@ import { broadcastConnectionsChanged, clearSessionScopeFor } from './session-sco
 import { bindOnConnect } from './bind-on-connect.js';
 import {
   HANDOFF_LINK_PREFIX,
+  IMMEDIATE_REDIAL_SPACING_MS,
   LOCAL_LINK_ID,
   anyLinkOpen,
   linkForMcp,
@@ -335,6 +337,37 @@ function connectLink(link: Link): void {
       );
       broadcastConnectionsChanged();
       return;
+    }
+    // 4005 ACCOUNT_CONFIRMED (the gateway just confirmed this credential for
+    // its account, `background/account-confirm.ts`) and 4006 FACTS_CHANGED
+    // (what the room knows about this credential changed): not errors. The
+    // next attach is the one that counts, so re-dial now rather than after a
+    // backoff — once per spacing, so a room that kept closing is still dialled
+    // at the backoff's pace. The re-dial leaves `reconnectAttempt` alone (only
+    // a successful open resets it), so a room that keeps closing climbs the
+    // backoff rather than sitting at its floor. Remote only: the loopback link
+    // has no account.
+    if (
+      link.kind === 'remote' &&
+      (ev?.code === ACCOUNT_CONFIRMED_CLOSE || ev?.code === FACTS_CHANGED_CLOSE)
+    ) {
+      // Display only, and only for a confirmation THIS browser asked for: a
+      // 4005 nobody here started grants nothing and says nothing in the popup.
+      const asked = link.confirm?.phase;
+      if (
+        ev.code === ACCOUNT_CONFIRMED_CLOSE &&
+        (asked === 'tab' || asked === 'app' || asked === 'finishing')
+      ) {
+        link.confirm = { phase: 'confirmed' };
+        broadcastConnectionsChanged();
+      }
+      const now = Date.now();
+      if (now - link.lastImmediateRedialAt >= IMMEDIATE_REDIAL_SPACING_MS) {
+        link.lastImmediateRedialAt = now;
+        link.nextAttemptAt = 0;
+        connectLink(link);
+        return;
+      }
     }
     scheduleReconnect(link);
   });

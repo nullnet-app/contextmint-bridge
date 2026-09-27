@@ -45,6 +45,15 @@ describe('PRIVACY.md §4 names every network path', () => {
     expect(s4).toMatch(/same relay/i);
   });
 
+  it('names the confirmation requests, the page it opens, and what goes to ContextMint', () => {
+    // mcp-host plan task C3a: "Confirm this browser".
+    expect(s4).toMatch(/\/bridge\/account-confirm\/start/);
+    expect(s4).toMatch(/\/bridge\/account-confirm\/finish/);
+    expect(s4).toMatch(/\/bridge\/confirm/);
+    expect(s4).toMatch(/only when you (click|ask)/i);
+    expect(s4).toMatch(/account-confirm/);
+  });
+
   it('no longer claims the extension makes no outbound connections at all', () => {
     expect(s4).not.toMatch(/makes no outbound network connections of its own\./);
   });

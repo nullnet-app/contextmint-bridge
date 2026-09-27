@@ -139,7 +139,12 @@ export async function redeemRequestBody(
   return { code, extension: await signExtensionBinding(identity, origin, code) };
 }
 
-async function post(
+/**
+ * POST JSON to a gateway: never following a redirect, never carrying cookies,
+ * bounded in time. Shared with `account-confirm.ts`, whose calls carry the
+ * same bearer to the same origin.
+ */
+export async function post(
   url: string,
   body: unknown,
   headers: Record<string, string> = {},
@@ -160,7 +165,8 @@ async function post(
   });
 }
 
-async function readJson(response: Response): Promise<Record<string, unknown> | null> {
+/** The body as a JSON object, or null for anything else. */
+export async function readJson(response: Response): Promise<Record<string, unknown> | null> {
   try {
     const parsed: unknown = await response.json();
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)

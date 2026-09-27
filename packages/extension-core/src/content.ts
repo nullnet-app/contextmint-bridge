@@ -1,6 +1,7 @@
 import { evalJsonPointer } from '@fetchproxy/protocol';
 import { csrfSoftMiss } from './lib/csrf-soft-miss.js';
 import { MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES } from './content-limits.js';
+import { installAccountConfirmRelay } from './account-confirm-relay.js';
 
 /**
  * Content script (isolated world). Listens for fetch RPC messages
@@ -224,6 +225,13 @@ chrome.runtime.onMessage.addListener(
     return false;
   },
 );
+
+// mcp-host plan task C3a: hand the gateway confirm page's completion to the
+// background, which accepts it only from the tab it opened for it
+// (`account-confirm-relay.ts`, `background/account-confirm.ts`).
+if (typeof window !== 'undefined' && typeof chrome.runtime.sendMessage === 'function') {
+  installAccountConfirmRelay(window, (message) => chrome.runtime.sendMessage(message));
+}
 
 /**
  * Relay a `graphql_query` to the MAIN-world Apollo bridge and await its

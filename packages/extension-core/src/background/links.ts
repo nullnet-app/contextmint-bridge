@@ -83,6 +83,37 @@ export interface Link {
    * new credential (which is a new link) clears it. Shown in the popup.
    */
   refusal: string | null;
+  /**
+   * Where confirming this browser for its account stands (mcp-host plan task
+   * C3a, `background/account-confirm.ts`), for the popup. In memory only and
+   * advisory: it grants nothing and no decision reads it. Null until the
+   * person asks, or the room says the credential was confirmed (`4005`).
+   */
+  confirm: ConfirmState | null;
+  /**
+   * Epoch ms of this link's last IMMEDIATE re-dial (after `4005` / `4006`).
+   * Those closes are not errors, so they skip the backoff — but only once per
+   * {@link IMMEDIATE_REDIAL_SPACING_MS}, so a room that kept closing would
+   * still be dialled at the backoff's pace, never in a tight loop.
+   */
+  lastImmediateRedialAt: number;
+}
+
+/** See {@link Link.lastImmediateRedialAt}. */
+export const IMMEDIATE_REDIAL_SPACING_MS = 5000;
+
+/**
+ * - `tab`: the confirm page is open; the person confirms there.
+ * - `app`: ContextMint was asked to confirm (Safari).
+ * - `finishing`: the page handed back its completion; `finish` is in flight.
+ * - `confirmed`: the gateway confirmed this credential.
+ * - `failed`: it did not; `message` says why.
+ */
+export type ConfirmPhase = 'tab' | 'app' | 'finishing' | 'confirmed' | 'failed';
+
+export interface ConfirmState {
+  phase: ConfirmPhase;
+  message?: string;
 }
 
 /**
@@ -115,6 +146,8 @@ export function localLink(): Link {
     credentialId: null,
     bind: 'settled',
     refusal: null,
+    confirm: null,
+    lastImmediateRedialAt: 0,
   };
 }
 
@@ -135,6 +168,8 @@ export function remoteLink(target: RemoteTarget, protocols: string[], handoff = 
     credentialId: isBridgeTokenId(target.tokenId) ? target.tokenId : null,
     bind: 'idle',
     refusal: null,
+    confirm: null,
+    lastImmediateRedialAt: 0,
   };
 }
 
@@ -200,6 +235,25 @@ export interface LinkStatus {
   handoff?: true;
   /** Why the bridge refused this browser for good (`4004`), when it did. */
   refusal?: string;
+  /**
+   * Present (and true) on a remote link this browser can ask to confirm for
+   * its account: its credential id is known (the start signs over it) and the
+   * bridge has not refused this browser.
+   */
+  confirmable?: true;
+  /** Where a confirmation stands, when one was asked for or reported. */
+  confirm?: ConfirmState;
+}
+
+/** Can this link's credential be confirmed for its account from here? */
+export function isConfirmable(link: Link): boolean {
+  return (
+    link.kind === 'remote' &&
+    !link.closed &&
+    link.refusal === null &&
+    link.credential !== null &&
+    link.credentialId !== null
+  );
 }
 
 /**
@@ -222,6 +276,8 @@ export function linkStatuses(): LinkStatus[] {
       sessions: mcpIdsForLink(link).length,
       ...(link.handoff ? { handoff: true as const } : {}),
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
+      ...(isConfirmable(link) ? { confirmable: true as const } : {}),
+      ...(link.confirm !== null ? { confirm: { ...link.confirm } } : {}),
     });
   }
   return out.sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1));
