@@ -131,14 +131,23 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `clients`, `skipWaiting`) — `extension-safari/tests/classic-scripts.test.ts`
   guards the first two. The Safari manifest is generated from Chrome's
   (`extension-safari/manifest.ts`): never hand-keep a second manifest.
-- **Capabilities are refused at hello by runtime API detection.**
+- **Capabilities this browser cannot serve are found by runtime API detection,
+  and the servable subset is granted (fetchproxy#418).**
   `extension-core/src/capabilities.ts` (`unavailableCapabilities`) reads which
-  `chrome.*` APIs exist — never `currentPlatform()` or a user agent — and
-  `handleServerHello` refuses a hello declaring any of them, after the
-  signature check and before trust or a pair prompt, with the stable reason
-  `unsupported-capability: <sorted, comma-separated> (not available in this browser)`
-  (Safari 27: `download`). `handlers/dispatch.ts` re-checks per request. A new
-  capability whose API can be absent in some browser MUST be added to
+  `chrome.*` APIs exist — never `currentPlatform()` or a user agent. The
+  extension hello lists them (`unavailableCapabilities`, sorted, only when
+  non-empty, so Chrome's wire is unchanged). `handleServerHello` subtracts them
+  from what the MCP declared, after the signature check and before trust: the
+  pair prompt, the trust record (`approval.ts` filters too), the auto-trust
+  grant and any scope-update offer see only the servable set, and the popup
+  shows the rest greyed as "not available in this browser". Only an MCP of
+  which NOTHING is servable is refused, with the stable reason
+  `unsupported-capability: <sorted, comma-separated> (not available in this browser)`.
+  `handlers/dispatch.ts` checks availability per request BEFORE the grant (so
+  the answer never says "not granted") and answers
+  `code: 'capability_unavailable'` with `capabilityUnavailableMessage()` from
+  `@fetchproxy/protocol`, from its own probe — never from anything on the wire.
+  A new capability whose API can be absent in some browser MUST be added to
   `capabilities.ts`, or it is treated as always available.
 - **Safari takes a bridge target from ContextMint over native messaging.**
   `extension-core/src/native-handoff.ts` implements nullnet-app/mcp-host-app

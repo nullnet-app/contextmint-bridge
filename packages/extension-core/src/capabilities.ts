@@ -3,10 +3,14 @@
  *
  * Found by runtime API detection — never by `currentPlatform()` and never by
  * a user agent — so one rule is right for Chrome, Safari and a future
- * Firefox alike. Safari 27 has no `chrome.downloads`, for example; an MCP
- * that declares `download` there is refused at its hello, naming the
- * capability (`background/hello.ts`), instead of being paired and then
- * failing mid-request with `undefined is not a function`.
+ * Firefox alike. Safari 27 has no `chrome.downloads`, for example. An MCP
+ * that declares `download` there is paired for what it declared that IS
+ * servable, with `download` left out of the grant and shown as unavailable
+ * (`background/hello.ts`, fetchproxy#418); the extension hello lists the set
+ * (`background/socket.ts`), and a request for it gets the typed
+ * `capability_unavailable` error (`background/handlers/dispatch.ts`) instead
+ * of failing mid-request with `undefined is not a function`. Only an MCP of
+ * which nothing is servable is refused at its hello.
  *
  * Every probe READS a property and compares its `typeof`; none calls or
  * detaches a method. #7 is why: Safari's `tabs.query` returned `undefined`

@@ -37,6 +37,7 @@ import {
   type HelloFrameFromExtension,
   type InnerFrame,
   type EncryptedFrame,
+  unavailableCapabilitiesHelloField,
 } from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../chrome-api.js';
@@ -44,6 +45,7 @@ import { bridgeSubprotocols, type RemoteTarget } from '../remote-targets.js';
 import { loadRemoteTargets } from '../vault-records.js';
 import { isUsableHandoffTarget, type HandoffTarget } from '../native-handoff.js';
 import { currentPlatform } from '../platform.js';
+import { unavailableCapabilities } from '../capabilities.js';
 // `MIN_SERVER_VERSION` — the `@fetchproxy/server` version at which protocol 4
 // lands — is named in the refusal below, because a version number with no
 // remedy beside it is a diagnosis the reader cannot act on. It lives in
@@ -271,6 +273,16 @@ function connectLink(link: Link): void {
       // B-BUG-9: host → extension notices this build understands. A host
       // sends `peer-gone` only to an extension that lists it.
       accepts: ['peer-gone'],
+      // #418: what this browser cannot serve, found by runtime API detection,
+      // so an MCP can refuse those verbs locally with a hint that blames the
+      // browser. Sent on EVERY link, before any MCP hello: every published
+      // validator ends the extension hello with `return raw`, so an MCP that
+      // predates the field ignores it and an older host relays it intact.
+      // The helper returns `{}` for an empty list, so a browser missing
+      // nothing (Chrome) puts the same bytes on the wire as before. Unsigned
+      // and advisory — the authority is `dispatch.ts`, which answers from its
+      // own probe, never from anything on the wire.
+      ...unavailableCapabilitiesHelloField(unavailableCapabilities(chrome)),
     };
     ws.send(JSON.stringify(extHello));
   });

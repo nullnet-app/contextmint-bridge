@@ -32,6 +32,14 @@ interface PendingRecordBase {
   domains: string[];
   identityX25519Pub: string;
   identityEd25519Pub: string;
+  /**
+   * #418: capabilities the MCP declared that THIS browser cannot serve,
+   * sorted. Display only: the popup shows them greyed as "not available in
+   * this browser". They are already excluded from `capabilities`, so
+   * approving never grants them. Absent when none (and on every record
+   * queued before #418).
+   */
+  unavailableCapabilities?: string[];
 }
 
 /**
@@ -196,6 +204,14 @@ export function applyNeedsPairRecord(
     // into this one record and no longer share one number, which is inherent
     // to a per-session code and is why the popup shows the latest.
     currentEntry.pairCode = newRecord.pairCode;
+    // #418: display-only, and like the code it follows the latest hello. The
+    // key hashes the SERVABLE scope, so two hellos that differ only in what
+    // this browser cannot serve collapse here.
+    if (newRecord.unavailableCapabilities) {
+      currentEntry.unavailableCapabilities = [...newRecord.unavailableCapabilities];
+    } else {
+      delete currentEntry.unavailableCapabilities;
+    }
   } else if (!currentEntry) {
     // Case 2: New entry.
     existing[pendingKey] = newRecord;

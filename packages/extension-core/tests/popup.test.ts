@@ -1286,6 +1286,93 @@ describe('pair popup — renders when capabilities is absent', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #418: capabilities this browser cannot serve are shown, greyed, and never
+// approved.
+// ---------------------------------------------------------------------------
+
+describe('pair popup — capabilities not available in this browser', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    container = document.getElementById('root')!;
+  });
+
+  const pending = (extra: Record<string, unknown> = {}) => ({
+    mode: 'pending-pair' as const,
+    pending: {
+      serverName: 'etix-mcp',
+      version: '1.0.0',
+      domains: ['etix.com'],
+      capabilities: ['fetch'],
+      pairCode: '8812-3149',
+      ...extra,
+    },
+    onApprove: () => undefined,
+    onCancel: () => undefined,
+  });
+
+  it('lists them greyed as "not available in this browser", apart from what Approve grants', () => {
+    renderPopup(container, pending({ unavailableCapabilities: ['download'] }) as never);
+
+    const granted = container.querySelector('ul.capabilities')!;
+    expect(granted.textContent).toContain('HTTP fetches');
+    expect(granted.textContent).not.toContain('Download files');
+
+    const rows = [...container.querySelectorAll('li.cap-unavailable')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain('Download files to your computer');
+    expect(rows[0]!.textContent).toMatch(/not available in this browser/);
+    expect(rows[0]!.getAttribute('aria-disabled')).toBe('true');
+    // Nothing to tick: they are never part of the approval.
+    expect(container.querySelector('li.cap-unavailable input')).toBeNull();
+  });
+
+  it('renders nothing extra when every capability is available (Chrome)', () => {
+    renderPopup(container, pending() as never);
+    expect(container.querySelector('.cap-unavailable')).toBeNull();
+    expect(container.textContent).not.toMatch(/not available in this browser/);
+  });
+
+  it('shows them on a scope-update too, and never as "No longer requested"', () => {
+    const scope = {
+      capabilities: ['fetch'],
+      cookieKeys: [] as string[],
+      localStorageKeys: [],
+      sessionStorageKeys: [],
+      captureHeaders: [],
+      indexedDbScopes: [],
+      domSelectors: [],
+      domListSelectors: [],
+      graphqlOps: [],
+      localStoragePointers: [],
+      sessionStoragePointers: [],
+    };
+    renderPopup(container, {
+      mode: 'scope-update',
+      serverName: 'etix-mcp',
+      pending: {
+        ...scope,
+        capabilities: ['fetch', 'read_cookies'],
+        cookieKeys: ['sid'],
+        unavailableCapabilities: ['download'],
+      },
+      // A record approved before #418 still holds `download`.
+      previous: { ...scope, capabilities: ['fetch', 'download'] },
+      onGrant: () => undefined,
+      onKeepAsIs: () => undefined,
+    });
+    expect(container.querySelector('.scope-diff')!.textContent).not.toContain(
+      'Capability: download',
+    );
+    const rows = [...container.querySelectorAll('li.cap-unavailable')];
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining('Download files to your computer'),
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Bridges section (2.1.0): where this browser is willing to answer MCPs from.
 // ---------------------------------------------------------------------------
 

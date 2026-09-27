@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@fetchproxy/extension-core": "*",
-    "@fetchproxy/protocol": "^3.2.2"
+    "@fetchproxy/protocol": "^3.3.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",

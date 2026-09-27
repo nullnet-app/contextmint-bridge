@@ -20,6 +20,7 @@ import {
   fromB64,
   toHex,
   HKDF_SESSION_INFO,
+  UNSUPPORTED_CAPABILITY_REASON_PREFIX,
   type Capability,
   type GraphqlOpDeclaration,
   type IndexedDbScopeDecl,
@@ -60,6 +61,10 @@ export interface HandleHelloDeps {
    * found by runtime API detection). Computed by the caller so this function
    * stays pure. Absent means nothing is unavailable — Chrome's case, and every
    * test that predates the capability seam.
+   *
+   * #418: they are subtracted from what the MCP declared, and the rest — the
+   * SERVABLE subset — is what gets asked for, approved and granted. Only an
+   * MCP of which nothing is servable is refused.
    */
   unavailableCapabilities?: ReadonlySet<Capability>;
 }
@@ -84,6 +89,14 @@ export type HandleHelloResult =
       graphqlOps: GraphqlOpDeclaration[];
       localStoragePointers: StoragePointerDecl[];
       sessionStoragePointers: StoragePointerDecl[];
+      /**
+       * #418: the declared capabilities this browser cannot serve, sorted and
+       * de-duplicated — for the popup to show greyed, never to approve.
+       * `capabilities` above already excludes them. Present only when
+       * non-empty, so a browser missing nothing (Chrome) returns exactly what
+       * it did before.
+       */
+      unavailableCapabilities?: string[];
       version: string;
       identityX25519Pub: string;
       identityEd25519Pub: string;
@@ -181,6 +194,12 @@ export type HandleHelloResult =
         approvedGraphqlOps: GraphqlOpDeclaration[];
         approvedLocalStoragePointers: StoragePointerDecl[];
         approvedSessionStoragePointers: StoragePointerDecl[];
+        /**
+         * #418: declared capabilities this browser cannot serve, for the
+         * popup to show greyed. `declaredCapabilities` excludes them. Present
+         * only when non-empty.
+         */
+        unavailableCapabilities?: string[];
       };
     };
 
@@ -292,28 +311,40 @@ export async function handleServerHello(
   }
   if (!sigOk) return { kind: 'reject', reason: 'sessionSig invalid' };
 
-  // 2. Refuse what this browser cannot serve (the capability seam).
+  // 2. The capability seam (#418): grant what this browser CAN serve.
   //
   // After the signature, so an unauthenticated hello learns nothing about
   // this browser's APIs it could not learn from a forged one. Before the
-  // trust lookup and any pair prompt, because asking a person to approve an
-  // MCP that cannot work is worse than refusing it — and an already-trusted
-  // MCP is refused the same way: trust does not make an API exist.
+  // trust lookup and any pair prompt, because everything below — the prompt,
+  // the trust record, the auto-trust grant, the scope-growth offer — is
+  // computed from the SERVABLE subset, never from what was declared. Trust
+  // does not make an API exist: an already-trusted MCP whose record holds an
+  // unavailable capability (approved before #418) is granted the
+  // intersection with `servable`, which drops it from every session.
   //
-  // The reason's `unsupported-capability: ` prefix and its sorted,
-  // comma-separated list are the de facto machine contract until the
-  // protocol carries a typed rejection code; keep them stable.
-  const capabilities = effectiveCapabilities(hello);
+  // Refused only when NOTHING declared is servable: a pair prompt for an MCP
+  // that can do nothing here is worse than a refusal. The reason's
+  // `unsupported-capability: ` prefix and its sorted, comma-separated list
+  // are a documented machine contract (fetchproxy PROTOCOL.md,
+  // `UNSUPPORTED_CAPABILITY_REASON_PREFIX`); keep them byte-stable.
+  const declaredCapabilities = effectiveCapabilities(hello);
   const unavailable = deps.unavailableCapabilities;
-  if (unavailable && unavailable.size > 0) {
-    const refused = [...new Set(capabilities.filter((c) => unavailable.has(c)))].sort();
-    if (refused.length > 0) {
-      return {
-        kind: 'reject',
-        reason: `unsupported-capability: ${refused.join(', ')} (not available in this browser)`,
-      };
-    }
+  const unavailableDeclared =
+    unavailable && unavailable.size > 0
+      ? [...new Set(declaredCapabilities.filter((c) => unavailable.has(c)))].sort()
+      : [];
+  const capabilities =
+    unavailableDeclared.length > 0
+      ? declaredCapabilities.filter((c) => !unavailable!.has(c))
+      : declaredCapabilities;
+  if (capabilities.length === 0) {
+    return {
+      kind: 'reject',
+      reason: `${UNSUPPORTED_CAPABILITY_REASON_PREFIX} ${unavailableDeclared.join(', ')} (not available in this browser)`,
+    };
   }
+  const unavailableField =
+    unavailableDeclared.length > 0 ? { unavailableCapabilities: unavailableDeclared } : {};
 
   // 3. Look up trust.
   const hash = toHex(await sha256(identityX25519Pub));
@@ -492,6 +523,7 @@ export async function handleServerHello(
             approvedGraphqlOps: approvedScope.graphqlOps.map((d) => ({ ...d })),
             approvedLocalStoragePointers: approvedScope.localStoragePointers.map((d) => ({ ...d })),
             approvedSessionStoragePointers: approvedScope.sessionStoragePointers.map((d) => ({ ...d })),
+            ...unavailableField,
           },
         } : {}),
       };
@@ -525,6 +557,7 @@ export async function handleServerHello(
     domains: [...hello.domains],
     capabilities,
     ...scope,
+    ...unavailableField,
     version: hello.version,
     identityX25519Pub: hello.identityX25519Pub,
     identityEd25519Pub: hello.identityEd25519Pub,
