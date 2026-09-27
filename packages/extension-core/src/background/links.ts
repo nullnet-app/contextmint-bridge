@@ -23,7 +23,7 @@
  * sessions.
  */
 
-import type { RemoteTarget } from '../remote-targets.js';
+import { isBridgeTokenId, type RemoteTarget } from '../remote-targets.js';
 
 export const LOCAL_LINK_ID = 'local';
 
@@ -62,6 +62,27 @@ export interface Link {
    * the popup as "from ContextMint" rather than as an editable row.
    */
   readonly handoff: boolean;
+  /**
+   * The remote credential and its mcp-host id (`brt_*`), when known — what
+   * `POST /bridge/bind` needs (`bind-on-connect.ts`). Null on the loopback
+   * link, and `credentialId` null for a pasted target that never learned its
+   * id. The credential is already in `protocols`; it is never shown.
+   */
+  readonly credential: string | null;
+  readonly credentialId: string | null;
+  /**
+   * Whether this link's credential still needs a bind attempt: `idle` until
+   * one is due, `inflight` while one runs, `settled` once there is nothing
+   * more to ask this link's gateway (bound, refused, or a gateway that
+   * predates binding). Per link, so a new credential starts over.
+   */
+  bind: 'idle' | 'inflight' | 'settled';
+  /**
+   * Why the bridge refused this browser for good — set on a `4004
+   * EXTENSION_MISMATCH` close. A refused link is never dialled again; only a
+   * new credential (which is a new link) clears it. Shown in the popup.
+   */
+  refusal: string | null;
 }
 
 /**
@@ -90,6 +111,10 @@ export function localLink(): Link {
     sessionNonce: null,
     closed: false,
     handoff: false,
+    credential: null,
+    credentialId: null,
+    bind: 'settled',
+    refusal: null,
   };
 }
 
@@ -106,6 +131,10 @@ export function remoteLink(target: RemoteTarget, protocols: string[], handoff = 
     sessionNonce: null,
     closed: false,
     handoff,
+    credential: target.token,
+    credentialId: isBridgeTokenId(target.tokenId) ? target.tokenId : null,
+    bind: 'idle',
+    refusal: null,
   };
 }
 
@@ -169,6 +198,8 @@ export interface LinkStatus {
   sessions: number;
   /** Present (and true) only on the link ContextMint handed over. */
   handoff?: true;
+  /** Why the bridge refused this browser for good (`4004`), when it did. */
+  refusal?: string;
 }
 
 /**
@@ -190,6 +221,7 @@ export function linkStatuses(): LinkStatus[] {
       connected: link.ws?.readyState === WebSocket.OPEN,
       sessions: mcpIdsForLink(link).length,
       ...(link.handoff ? { handoff: true as const } : {}),
+      ...(link.refusal !== null ? { refusal: link.refusal } : {}),
     });
   }
   return out.sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1));

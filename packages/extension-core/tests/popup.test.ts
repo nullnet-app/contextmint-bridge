@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
   handoffBridgeView,
+  remoteTargetFromForm,
   renderPopup,
   type BridgesView,
   type PopupState,
@@ -1442,7 +1443,32 @@ describe('renderPopup — bridges', () => {
     (container.querySelector('.bridge-label-input') as HTMLInputElement).value = 'home';
     (container.querySelector('.bridge-save') as HTMLButtonElement).click();
 
-    expect(onAdd).toHaveBeenCalledWith({ url: 'wss://h/b', token: 'mcpb_x', label: 'home' });
+    expect(onAdd).toHaveBeenCalledWith({ url: 'wss://h/b', token: 'mcpb_x', label: 'home', tokenId: '' });
+  });
+
+  // mcp-host plan task C2 (I-13): a pasted credential binds only if the
+  // extension knows its `brt_*` id, which the portal shows beside the token.
+  it('passes an optional credential id through, so a pasted credential can bind', () => {
+    const onAdd = vi.fn(async () => null);
+    withBridges({ targets: [], onAdd });
+    (container.querySelector('.bridge-url-input') as HTMLInputElement).value = 'wss://h/b';
+    (container.querySelector('.bridge-token-input') as HTMLInputElement).value = 'mcpb_x';
+    (container.querySelector('.bridge-token-id-input') as HTMLInputElement).value = ' brt_abc ';
+    (container.querySelector('.bridge-save') as HTMLButtonElement).click();
+
+    expect(onAdd).toHaveBeenCalledWith({ url: 'wss://h/b', token: 'mcpb_x', label: '', tokenId: 'brt_abc' });
+  });
+
+  it('refuses a credential id that is not a brt_* id, before any write', () => {
+    const onAdd = vi.fn(async () => null);
+    withBridges({ targets: [], onAdd });
+    (container.querySelector('.bridge-url-input') as HTMLInputElement).value = 'wss://h/b';
+    (container.querySelector('.bridge-token-input') as HTMLInputElement).value = 'mcpb_x';
+    (container.querySelector('.bridge-token-id-input') as HTMLInputElement).value = 'mcpb_x';
+    (container.querySelector('.bridge-save') as HTMLButtonElement).click();
+
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(container.querySelector('.bridge-error')?.textContent).toContain('Credential id');
   });
 
   it('shows what the save path refused', async () => {
@@ -1549,6 +1575,13 @@ describe('handoffBridgeView — the hand-off row from the link statuses', () => 
     const view = handoffBridgeView([{ ...HANDOFF, token: 'mcpb_secret' } as typeof HANDOFF]);
     expect(Object.keys(view!).sort()).toEqual(['connected', 'name', 'url']);
   });
+
+  it('carries a 4004 refusal through, and only a string one', () => {
+    const why = 'This bridge is paired with a different browser';
+    expect(handoffBridgeView([{ ...HANDOFF, refusal: why }])?.refusal).toBe(why);
+    const odd = handoffBridgeView([{ ...HANDOFF, refusal: 7 } as unknown as typeof HANDOFF]);
+    expect(Object.keys(odd!).sort()).toEqual(['connected', 'name', 'url']);
+  });
 });
 
 describe('renderPopup — bridge status dots', () => {
@@ -1577,6 +1610,23 @@ describe('renderPopup — bridge status dots', () => {
   it('renders no dot at all when the background did not answer', () => {
     withBridges({ targets: [{ id: 'b1', url: 'wss://h/b', enabled: true }] });
     expect(container.querySelector('.status-dot')).toBeNull();
+  });
+
+  // mcp-host plan task C2: a bridge that closed 4004 EXTENSION_MISMATCH is
+  // never dialled again, so a grey dot alone would read as "down, retrying".
+  it('says why a bridge refused this browser for good (4004)', () => {
+    const why = 'This bridge is paired with a different browser';
+    withBridges({
+      targets: [
+        { id: 'b1', url: 'wss://h/b', enabled: true, connected: false, refusal: why },
+        { id: 'b2', url: 'wss://h2/b', enabled: true, connected: false },
+      ],
+      handoff: { name: 'Safari', url: 'wss://mcp.nullnet.app/bridge', connected: false, refusal: why },
+    });
+    const refused = container.querySelector('[data-target-id="b1"] .bridge-refusal');
+    expect(refused?.textContent).toBe(why);
+    expect(container.querySelector('[data-target-id="b2"] .bridge-refusal')).toBeNull();
+    expect(container.querySelector('.bridge.handoff .bridge-refusal')?.textContent).toBe(why);
   });
 });
 
@@ -1709,5 +1759,24 @@ describe('renderPopup — version mismatch (Task 4.3)', () => {
     expect(container.querySelector('.version-mismatch')).toBeNull();
     expect(container.querySelector('.mismatch-heading')).toBeNull();
     expect(container.querySelector('.mismatch-list')).toBeNull();
+  });
+});
+
+describe('remoteTargetFromForm — the row the Bridges form saves', () => {
+  it('keeps a credential id, so the saved target binds on its first attach', () => {
+    expect(
+      remoteTargetFromForm('b1', { url: 'wss://h/b', token: 'mcpb_x', label: 'home', tokenId: 'brt_abc' }),
+    ).toEqual({ id: 'b1', url: 'wss://h/b', token: 'mcpb_x', label: 'home', enabled: true, tokenId: 'brt_abc' });
+  });
+
+  it('omits an empty label and an empty or malformed credential id', () => {
+    for (const tokenId of ['', 'nope']) {
+      expect(remoteTargetFromForm('b1', { url: 'wss://h/b', token: 'mcpb_x', label: '', tokenId })).toEqual({
+        id: 'b1',
+        url: 'wss://h/b',
+        token: 'mcpb_x',
+        enabled: true,
+      });
+    }
   });
 });

@@ -27,6 +27,7 @@ import {
   normaliseRemoteTargets,
   validateRemoteTargetToken,
   validateRemoteTargetUrl,
+  isBridgeTokenId,
   type RemoteTarget,
 } from '../remote-targets.js';
 import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
@@ -224,6 +225,12 @@ export interface RemoteTargetView {
    * than claiming a state nobody vouched for.
    */
   connected?: boolean;
+  /**
+   * Why this bridge refused this browser for good (a `4004` close: the
+   * credential is bound to another browser). It is never dialled again, so
+   * the row says so rather than showing a plain grey dot.
+   */
+  refusal?: string;
 }
 
 /**
@@ -237,6 +244,34 @@ export interface HandoffBridgeView {
   name: string;
   url: string;
   connected?: boolean;
+  /** As {@link RemoteTargetView.refusal}. */
+  refusal?: string;
+}
+
+/** What the Bridges form hands `onAdd`: every field trimmed, `''` when blank. */
+export interface BridgeFormInput {
+  url: string;
+  token: string;
+  label: string;
+  /**
+   * The credential's mcp-host id (`brt_*`), shown beside the token when it
+   * was created. Optional, but without it a pasted credential is never bound
+   * to this browser (mcp-host plan task C2): binding signs over the id, and
+   * the id cannot be derived from the token.
+   */
+  tokenId: string;
+}
+
+/** The vault row the Bridges form saves. */
+export function remoteTargetFromForm(id: string, input: BridgeFormInput): RemoteTarget {
+  return {
+    id,
+    url: input.url,
+    token: input.token,
+    ...(input.label === '' ? {} : { label: input.label }),
+    enabled: true,
+    ...(isBridgeTokenId(input.tokenId) ? { tokenId: input.tokenId } : {}),
+  };
 }
 
 export interface BridgesView {
@@ -246,7 +281,7 @@ export interface BridgesView {
   /** Whether the loopback link — the one every local MCP needs — is up. */
   localConnected?: boolean;
   /** Save a new target. Returns an error string to show, or null on success. */
-  onAdd?: (input: { url: string; token: string; label: string }) => Promise<string | null>;
+  onAdd?: (input: BridgeFormInput) => Promise<string | null>;
   onRemove?: (id: string) => void;
   onToggle?: (id: string, enabled: boolean) => void;
 }
@@ -781,6 +816,11 @@ function buildTrustedEntry(
 }
 
 
+/** The line under a bridge row that refused this browser for good. */
+function refusalLine(refusal: string | undefined): HTMLElement | null {
+  return refusal ? elem('span', { class: 'bridge-refusal hint' }, refusal) : null;
+}
+
 /** The green/grey dot a bridge row carries, with the state named for a11y. */
 function statusDot(connected: boolean): HTMLElement {
   return elem('span', {
@@ -822,6 +862,8 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
     if (h.connected !== undefined) li.appendChild(statusDot(h.connected));
     li.appendChild(elem('span', { class: 'bridge-url' }, `${h.name} — ${h.url}`));
     li.appendChild(elem('span', { class: 'bridge-source hint' }, ' from ContextMint'));
+    const refused = refusalLine(h.refusal);
+    if (refused) li.appendChild(refused);
     ul.appendChild(li);
   }
 
@@ -843,6 +885,8 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
       rm.addEventListener('click', () => bridges.onRemove!(t.id));
       li.appendChild(rm);
     }
+    const refused = refusalLine(t.refusal);
+    if (refused) li.appendChild(refused);
     ul.appendChild(li);
   }
   root.appendChild(ul);
@@ -853,6 +897,11 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
   const url = elem('input', { type: 'text', class: 'bridge-url-input', placeholder: 'wss://host/bridge' });
   const token = elem('input', { type: 'password', class: 'bridge-token-input', placeholder: 'bridge token' });
   const label = elem('input', { type: 'text', class: 'bridge-label-input', placeholder: 'label (optional)' });
+  const tokenId = elem('input', {
+    type: 'text',
+    class: 'bridge-token-id-input',
+    placeholder: 'credential id, brt_… (optional)',
+  });
   const err = elem('p', { class: 'bridge-error hint' });
   const save = elem('button', { class: 'bridge-save' }, 'Add bridge');
 
@@ -869,9 +918,19 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
       err.textContent = `Bridge token: ${tokenCheck.reason}`;
       return;
     }
+    const tokenIdValue = (tokenId as HTMLInputElement).value.trim();
+    if (tokenIdValue !== '' && !isBridgeTokenId(tokenIdValue)) {
+      err.textContent = 'Credential id: expected the brt_… id shown beside the token';
+      return;
+    }
     err.textContent = '';
     void Promise.resolve(
-      bridges.onAdd!({ url: urlValue, token: tokenValue, label: (label as HTMLInputElement).value.trim() }),
+      bridges.onAdd!({
+        url: urlValue,
+        token: tokenValue,
+        label: (label as HTMLInputElement).value.trim(),
+        tokenId: tokenIdValue,
+      }),
     ).then((problem) => {
       if (problem) err.textContent = problem;
     });
@@ -880,6 +939,7 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
   form.appendChild(url);
   form.appendChild(token);
   form.appendChild(label);
+  form.appendChild(tokenId);
   form.appendChild(save);
   form.appendChild(err);
   root.appendChild(form);
@@ -888,7 +948,8 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
     elem(
       'p',
       { class: 'hint' },
-      'A bridge can ask this browser to pair with MCPs it hosts. Add one only if you run it.',
+      'A bridge can ask this browser to pair with MCPs it hosts. Add one only if you run it. ' +
+        'Give the credential id too, so the token is locked to this browser once it connects.',
     ),
   );
 }
@@ -1233,6 +1294,8 @@ export interface LinkStatusMessage {
   url?: string;
   /** Only on the link ContextMint handed over. */
   handoff?: boolean;
+  /** Why the bridge refused this browser for good (`4004`), when it did. */
+  refusal?: string;
 }
 
 /**
@@ -1248,6 +1311,7 @@ export function handoffBridgeView(links: LinkStatusMessage[]): HandoffBridgeView
     name: typeof link.label === 'string' ? link.label : link.url,
     url: link.url,
     connected: link.connected,
+    ...(typeof link.refusal === 'string' ? { refusal: link.refusal } : {}),
   };
 }
 
@@ -1455,6 +1519,10 @@ async function bootstrap(): Promise<void> {
     const targets = await loadRemoteTargets();
     const statusFor = (id: string): boolean | undefined =>
       links.find((link) => link.id === id)?.connected;
+    const refusalFor = (id: string): string | undefined => {
+      const refusal = links.find((link) => link.id === id)?.refusal;
+      return typeof refusal === 'string' ? refusal : undefined;
+    };
     const write = async (next: RemoteTarget[]): Promise<void> => {
       await saveRemoteTargets(next);
       try {
@@ -1470,21 +1538,20 @@ async function bootstrap(): Promise<void> {
       ...(handoff === undefined ? {} : { handoff }),
       targets: targets.map((t) => {
         const connected = statusFor(`remote:${t.id}`);
+        const refusal = refusalFor(`remote:${t.id}`);
         return {
           id: t.id,
           url: t.url,
           ...(t.label === undefined ? {} : { label: t.label }),
           enabled: t.enabled,
           ...(connected === undefined ? {} : { connected }),
+          ...(refusal === undefined ? {} : { refusal }),
         };
       }),
-      onAdd: async ({ url, token, label }) => {
-        if (targets.some((t) => t.url === url)) return 'That bridge is already configured.';
+      onAdd: async (input) => {
+        if (targets.some((t) => t.url === input.url)) return 'That bridge is already configured.';
         const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
-        const next: RemoteTarget[] = [
-          ...targets,
-          { id, url, token, ...(label === '' ? {} : { label }), enabled: true },
-        ];
+        const next: RemoteTarget[] = [...targets, remoteTargetFromForm(id, input)];
         await write(next);
         if (normaliseRemoteTargets(next).length === targets.length) {
           return 'That bridge could not be saved — the list is full.';
