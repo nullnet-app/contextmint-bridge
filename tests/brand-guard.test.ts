@@ -73,8 +73,14 @@ describe('manifest identity', () => {
     expect(manifest.short_name).toBe('Bridge');
   });
 
-  it('has a Chrome Web Store description of at most 132 characters', () => {
-    expect([...manifest.description].length).toBeLessThanOrEqual(132);
+  // The Safari manifest is generated from this one, so this description ships
+  // in BOTH stores and must fit the tighter limit. The Chrome Web Store allows
+  // 132 characters; App Store Connect allows 112 and rejects the whole upload
+  // otherwise (error 90849: "The description field must be present, of string
+  // type, and 112 or fewer characters long" — ContextMint Mac build 201,
+  // nullnet-app/mcp-host-app run 36323416643, against a 131-character one).
+  it('has a description of at most 112 characters — App Store Connect’s limit, tighter than Chrome’s 132', () => {
+    expect([...manifest.description].length).toBeLessThanOrEqual(112);
   });
 
   it('describes connecting ContextMint and local MCP tools to signed-in tabs', () => {
