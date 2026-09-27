@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="ContextMint">
+  <!-- Cursor C: the nullnet cursor parked in the mouth of a C. -->
+  <rect width="100" height="100" rx="22" fill="#0b0b0f"/>
+  <g transform="translate(1.5 0)">
+    <path d="M66.71 30.08 A26 26 0 1 0 66.71 69.92" fill="none" stroke="#fafafa" stroke-width="12"/>
+    <rect x="71" y="38" width="8" height="24" fill="#f5c518"/>
+  </g>
+</svg>
