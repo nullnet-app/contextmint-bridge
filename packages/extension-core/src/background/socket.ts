@@ -162,6 +162,19 @@ export function handoffLinkOpen(): boolean {
   return false;
 }
 
+/**
+ * Whether the link to the handed-off target is open OR dialling right now —
+ * the page-load wake's "already served" test, so a load while the socket is
+ * still connecting does not ask ContextMint again (`page-load-wake.ts`).
+ */
+export function handoffLinkLive(): boolean {
+  for (const link of links.values()) {
+    const rs = link.ws?.readyState;
+    if (link.handoff && (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING)) return true;
+  }
+  return false;
+}
+
 function reconcileLinks(): void {
   const wanted = new Map<string, { target: RemoteTarget; handoff: boolean }>();
   for (const t of vaultTargets) {

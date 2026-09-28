@@ -23,6 +23,8 @@
  */
 
 import { isInjectableUrl, matchesAnyPattern } from './reinject-content-scripts.js';
+import { bridgeMatchPatterns } from './lib/host-match-patterns.js';
+import { syncPageLoadWake } from './page-load-wake.js';
 
 export const MAIN_BRIDGE_SCRIPT_ID = 'fetchproxy-main-bridge';
 export const MAIN_BRIDGE_FILE = 'capture-logger.js';
@@ -57,27 +59,7 @@ function api(): {
   return ((globalThis as { chrome?: unknown }).chrome ?? {}) as ReturnType<typeof api>;
 }
 
-const HOST_LABELS = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/;
-const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
-
-/**
- * Chrome match patterns for a set of approved domains. `*://*.d/*` covers the
- * apex and every subdomain, as the trust check does. An IP address or a
- * dotless host gets an exact pattern (`*.` is only meaningful before a
- * domain). Anything that is not a plain hostname is dropped rather than
- * passed through — one invalid pattern makes Chrome reject the whole
- * registration, and a wildcard must never widen it.
- */
-export function bridgeMatchPatterns(domains: Iterable<string>): string[] {
-  const out = new Set<string>();
-  for (const raw of domains) {
-    if (typeof raw !== 'string') continue;
-    const d = raw.toLowerCase();
-    if (!HOST_LABELS.test(d)) continue;
-    out.add(IPV4.test(d) || !d.includes('.') ? `*://${d}/*` : `*://*.${d}/*`);
-  }
-  return [...out].sort();
-}
+export { bridgeMatchPatterns };
 
 /** The registration `syncMainWorldBridge` maintains, for `reinjectContentScripts`. */
 export function mainBridgeScriptFor(domains: Iterable<string>): {
@@ -193,13 +175,19 @@ async function injectNewlyCovered(
   }
 }
 
-/** {@link syncMainWorldBridge} onto whatever the trust store approves now. Never throws. */
+/**
+ * {@link syncMainWorldBridge} (and the page-load wake, `page-load-wake.ts`)
+ * onto whatever the trust store approves now. Never throws.
+ */
 export async function syncMainWorldBridgeFromTrust(
   trust: { approvedDomains(): Promise<string[]> },
   opts: { injectIntoOpenTabs?: boolean } = {},
 ): Promise<void> {
   try {
-    await syncMainWorldBridge(await trust.approvedDomains(), opts);
+    const domains = await trust.approvedDomains();
+    // The page-load wake (contextmint-bridge#32) runs on exactly these hosts
+    // too, so every approval and revoke keeps the two in step.
+    await Promise.all([syncMainWorldBridge(domains, opts), syncPageLoadWake(domains)]);
   } catch (e) {
     console.error('[fetchproxy] could not read approved domains for the page bridge:', e);
   }

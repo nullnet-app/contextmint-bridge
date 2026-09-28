@@ -35,7 +35,9 @@ page's own context. Running there is what gives the request the page's session
 cookies, TLS session and browser identity — the core capability ContextMint
 Bridge provides. The extension also uses it to register a small page-world
 helper (for approved GraphQL queries and in-page requests) on the hosts of
-approved MCP servers only — never on every site — and, after an extension
+approved MCP servers only — never on every site — plus, on those same hosts
+only, a tiny script that tells the extension a page finished loading so it can
+reconnect promptly, and, after an extension
 update, to put the extension's own declared content scripts back into tabs that
 were already open. The injected code performs only the operation requested and
 returns the result; it does not modify the page.

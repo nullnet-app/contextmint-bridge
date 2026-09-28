@@ -46,6 +46,7 @@ describe('content scripts build as classic (injectable) scripts', () => {
     // Guard against the build silently producing nothing.
     expect(files.map((f) => f.path).join(',')).toMatch(/content\.js/);
     expect(files.map((f) => f.path).join(',')).toMatch(/capture-logger\.js/);
+    expect(files.map((f) => f.path).join(',')).toMatch(/page-load-wake\.js/);
 
     for (const { path, text } of files) {
       expect(TOP_LEVEL_EXPORT.test(text), `${path} has a top-level export`).toBe(false);

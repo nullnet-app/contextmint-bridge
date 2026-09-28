@@ -125,6 +125,8 @@ export function contentScriptEntryOptions(
     entryPoints: {
       content: join(CORE, 'content.ts'),
       'capture-logger': join(CORE, 'capture-logger.ts'),
+      // Registered at runtime on approved hosts only (`page-load-wake.ts`).
+      'page-load-wake': join(CORE, 'page-load-wake-script.ts'),
     },
   };
 }
