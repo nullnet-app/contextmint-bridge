@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.2.0...v1.3.0) (2026-09-28)
+
+
+### Features
+
+* **extension-core:** wake on a page load of an approved site, so a Safari session refresh runs in one tap ([#36](https://github.com/nullnet-app/contextmint-bridge/issues/36)) ([7a8d867](https://github.com/nullnet-app/contextmint-bridge/commit/7a8d8672ce6ee8f05400191fdfd5c8cf4810d5bf)), closes [#32](https://github.com/nullnet-app/contextmint-bridge/issues/32)
+
+
+### Bug Fixes
+
+* **extension-core:** stop a page-load wake from waiting forever when boot fails, and pin its sender check ([#38](https://github.com/nullnet-app/contextmint-bridge/issues/38)) ([b83e685](https://github.com/nullnet-app/contextmint-bridge/commit/b83e685da8c23d7866d514eaf33a178f4b8705ca))
+
 ## [1.2.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.1.1...v1.2.0) (2026-09-27)
 
 
