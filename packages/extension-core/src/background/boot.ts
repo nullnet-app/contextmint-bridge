@@ -36,7 +36,11 @@ import {
   onHandoffLinkState,
   setHandoffTarget,
 } from './socket.js';
-import { nativeMessagingRuntime, startNativeHandoff, type NativeHandoff } from '../native-handoff.js';
+import {
+  nativeMessagingRuntime,
+  startNativeHandoff,
+  type NativeHandoff,
+} from '../native-handoff.js';
 import { connectedIdentityHashes } from './session-scope.js';
 import { linkStatuses } from './links.js';
 import {
@@ -92,9 +96,12 @@ export function maybeBoot(): void {
     // keepalive repeats anyway, so one run per worker is plenty.
     linkLive: () => (handoff ? handoffLinkLive() : true),
   });
-  let markIdentityReady: () => void = () => {};
-  const identityReady = new Promise<void>((resolve) => {
-    markIdentityReady = resolve;
+  // Settles once, when the identity boot below does: true with an identity,
+  // false when it failed — then a wake has nothing to lift with and gives up
+  // rather than waiting on a promise that would never settle.
+  let settleIdentity: (ok: boolean) => void = () => {};
+  const identityReady = new Promise<boolean>((resolve) => {
+    settleIdentity = resolve;
   });
   // Audit #1003: the MAIN-world page bridge runs only on hosts an approved MCP
   // may reach. Re-assert that registration on every boot (it persists, but an
@@ -176,10 +183,10 @@ export function maybeBoot(): void {
         (msg as { type?: unknown }).type === PAGE_LOAD_WAKE
       ) {
         void identityReady
-          .then(() => state.trust!.approvedDomains())
-          .then((domains) => {
-            if (isApprovedPageLoadWake(msg, sender, domains)) return wakeLift.run();
-            return undefined;
+          .then(async (ok) => {
+            if (!ok) return; // the identity boot failed; logged there, once
+            const domains = await state.trust!.approvedDomains();
+            if (isApprovedPageLoadWake(msg, sender, domains)) await wakeLift.run();
           })
           .catch((e) => console.error('[fetchproxy] page-load wake:', e));
         return;
@@ -197,7 +204,10 @@ export function maybeBoot(): void {
         const linkId = (msg as { linkId?: unknown }).linkId;
         if (typeof linkId !== 'string') return;
         void beginAccountConfirm(linkId)
-          .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))
+          .catch((e: unknown) => ({
+            ok: false,
+            reason: e instanceof Error ? e.message : String(e),
+          }))
           .then(sendResponse);
         return true;
       }
@@ -232,11 +242,11 @@ export function maybeBoot(): void {
       }
       // Part 2: dismiss message from popup — remove scope-update entry + record dismissed hash.
       const dismiss = changes[DISMISS_SCOPE_UPDATE_KEY]?.newValue as
-        | { key: string; identityHash: string; scopeHash: string }
-        | undefined;
+        { key: string; identityHash: string; scopeHash: string } | undefined;
       if (dismiss) {
-        void onScopeUpdateDismiss(dismiss.key, dismiss.identityHash, dismiss.scopeHash)
-          .catch((e) => console.error('[fetchproxy] dismiss:', e));
+        void onScopeUpdateDismiss(dismiss.key, dismiss.identityHash, dismiss.scopeHash).catch((e) =>
+          console.error('[fetchproxy] dismiss:', e),
+        );
       }
       // 0.4.2: keep the badge in sync with the pending-pair state.
       // Cancel (popup) and the user-driven X removes the key without
@@ -306,21 +316,30 @@ export function maybeBoot(): void {
   // before connecting. The identity is required to construct the
   // extension hello on WS open.
   void loadOrCreateExtensionIdentity()
-    .then((id) => {
-      state.extIdentity = id;
-      // Shown beside a confirmation (C3a); public, computed once.
-      void extensionKeyFingerprint(id.x25519Pub).then((fp) => {
-        state.extFingerprint = fp;
-      });
-      connect();
-      // A page-load wake that arrived before the identity waits for this.
-      // It resolves before `wakeLift.run()` below starts, but the waiter
-      // resumes a microtask later, so it joins this lift, never repeats it.
-      markIdentityReady();
-      // Remote targets are additional and asynchronous: the loopback link is
-      // dialled above without waiting on storage, so a slow (or empty) target
-      // list cannot delay the bridge that has always worked.
-      return Promise.all([loadRemoteLinks(), wakeLift.run()]);
-    })
+    .then(
+      (id) => {
+        state.extIdentity = id;
+        // Shown beside a confirmation (C3a); public, computed once.
+        void extensionKeyFingerprint(id.x25519Pub).then((fp) => {
+          state.extFingerprint = fp;
+        });
+        connect();
+        // A page-load wake that arrived before the identity waits for this.
+        // It resolves before `wakeLift.run()` below starts, but the waiter
+        // resumes a microtask later, so it joins this lift, never repeats it.
+        settleIdentity(true);
+        // Remote targets are additional and asynchronous: the loopback link is
+        // dialled above without waiting on storage, so a slow (or empty) target
+        // list cannot delay the bridge that has always worked.
+        return Promise.all([loadRemoteLinks(), wakeLift.run()]);
+      },
+      (e: unknown) => {
+        console.error('[fetchproxy] extension identity boot:', e);
+        // No identity, no lift: release every wake waiting on it, and any
+        // later one, without running anything — and say so once, here.
+        settleIdentity(false);
+        console.error('[fetchproxy] page-load wake: off until the worker restarts (no identity)');
+      },
+    )
     .catch((e) => console.error('[fetchproxy] extension identity boot:', e));
 }
