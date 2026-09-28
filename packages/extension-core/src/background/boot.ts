@@ -30,6 +30,7 @@ import type { AnyPendingRecord } from './pending-records.js';
 import { state } from './state.js';
 import {
   connect,
+  handoffLinkLive,
   handoffLinkOpen,
   loadRemoteLinks,
   onHandoffLinkState,
@@ -51,6 +52,8 @@ import { mainBridgeScriptFor, syncMainWorldBridgeFromTrust } from '../main-world
 import { armInstallSignal, noteInstalled } from '../vault-migration.js';
 import { extensionKeyFingerprint } from '../account-confirm.js';
 import { ACCOUNT_CONFIRM_COMPLETION } from '../account-confirm-relay.js';
+import { createWakeLift, isApprovedPageLoadWake } from './page-load-wake.js';
+import { PAGE_LOAD_WAKE } from '../page-load-wake.js';
 import {
   ACCOUNT_CONFIRM_BEGIN,
   beginAccountConfirm,
@@ -76,6 +79,23 @@ export function maybeBoot(): void {
   }
   state.trust = new TrustStore(chrome.runtime.getManifest().version);
   state.sessions = new SessionKeys();
+  // What every wake runs, once (`page-load-wake.ts`): boot's own run below,
+  // and a page load on an approved site. `handoff` is assigned further down,
+  // before either can call this.
+  let handoff: NativeHandoff | null = null;
+  const wakeLift = createWakeLift({
+    lift: async () => {
+      connect();
+      await handoff?.refresh();
+    },
+    // Chrome has no hand-off: its lift is only `connect()`, which the
+    // keepalive repeats anyway, so one run per worker is plenty.
+    linkLive: () => (handoff ? handoffLinkLive() : true),
+  });
+  let markIdentityReady: () => void = () => {};
+  const identityReady = new Promise<void>((resolve) => {
+    markIdentityReady = resolve;
+  });
   // Audit #1003: the MAIN-world page bridge runs only on hosts an approved MCP
   // may reach. Re-assert that registration on every boot (it persists, but an
   // update or a store changed while no worker ran can leave it stale). No
@@ -144,6 +164,25 @@ export function maybeBoot(): void {
           ...(state.extFingerprint !== null ? { extensionFingerprint: state.extFingerprint } : {}),
         });
         return true;
+      }
+      // contextmint-bridge#32: a page on an approved site finished loading.
+      // The message itself is what woke this (Safari's event page); the lift
+      // waits for the identity boot is loading, joins boot's own lift when
+      // that is still running, and runs only for a top-frame tab on a host
+      // an approved MCP may reach — judged from the browser's `sender`.
+      if (
+        msg !== null &&
+        typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === PAGE_LOAD_WAKE
+      ) {
+        void identityReady
+          .then(() => state.trust!.approvedDomains())
+          .then((domains) => {
+            if (isApprovedPageLoadWake(msg, sender, domains)) return wakeLift.run();
+            return undefined;
+          })
+          .catch((e) => console.error('[fetchproxy] page-load wake:', e));
+        return;
       }
       // mcp-host plan task C3a: "Confirm this browser" — the person's own
       // request, so only from an extension page (the popup). A content
@@ -250,7 +289,6 @@ export function maybeBoot(): void {
   // there this is skipped entirely. The heartbeat alarm is registered now; the
   // first ask waits for the identity below, since the link it yields cannot
   // say hello without it.
-  let handoff: NativeHandoff | null = null;
   const nativeRuntime = nativeMessagingRuntime();
   if (nativeRuntime) {
     handoff = startNativeHandoff({
@@ -275,10 +313,14 @@ export function maybeBoot(): void {
         state.extFingerprint = fp;
       });
       connect();
+      // A page-load wake that arrived before the identity waits for this.
+      // It resolves before `wakeLift.run()` below starts, but the waiter
+      // resumes a microtask later, so it joins this lift, never repeats it.
+      markIdentityReady();
       // Remote targets are additional and asynchronous: the loopback link is
       // dialled above without waiting on storage, so a slow (or empty) target
       // list cannot delay the bridge that has always worked.
-      return Promise.all([loadRemoteLinks(), handoff?.refresh()]);
+      return Promise.all([loadRemoteLinks(), wakeLift.run()]);
     })
     .catch((e) => console.error('[fetchproxy] extension identity boot:', e));
 }

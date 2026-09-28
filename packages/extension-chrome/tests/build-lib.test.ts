@@ -122,7 +122,7 @@ describe('the entry factories honour the BuildTarget', () => {
     for (const target of [safariLike, chromeLike]) {
       const names = entryBuilds(target, 'release').flatMap(entryNames).sort();
       expect(names, target.platform).toEqual(
-        ['background', 'capture-logger', 'content', 'popup'].sort(),
+        ['background', 'capture-logger', 'content', 'page-load-wake', 'popup'].sort(),
       );
     }
   });

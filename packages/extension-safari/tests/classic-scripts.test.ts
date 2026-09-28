@@ -14,7 +14,7 @@ import { moduleEntryOptions as chromeModuleEntryOptions } from '../../extension-
  * tests). `import.meta` is a module-only form and must not appear either.
  */
 
-const CLASSIC = ['background.js', 'content.js', 'capture-logger.js'];
+const CLASSIC = ['background.js', 'content.js', 'capture-logger.js', 'page-load-wake.js'];
 
 async function emitted() {
   const files: { name: string; text: string }[] = [];

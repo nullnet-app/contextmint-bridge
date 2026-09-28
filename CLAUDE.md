@@ -160,6 +160,16 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   (`background/socket.ts` `setHandoffTarget`), re-validated like a typed-in
   one, never persisted or logged, and shown read-only in the popup. (Only a
   SHA-256 of its credential reaches the vault, in `bridgeBindings` — below.)
+- **A page load on an approved site wakes the background** (contextmint-bridge#32,
+  for mcp-host-app's iOS "Refresh from Safari"). `page-load-wake.js` is
+  registered at runtime beside the MAIN-world bridge, on the same approved-host
+  patterns (`syncMainWorldBridgeFromTrust` keeps both), never in the manifest:
+  waking Safari's event page runs boot, and boot runs the hand-off, so a
+  manifest `<all_urls>` wake would lift on every site. The background still
+  judges each wake by the browser's `sender` (tab, top frame, approved host;
+  `background/page-load-wake.ts`), and `createWakeLift` joins a lift in flight
+  and never repeats one while its link is open or dialling, nor within 30 s.
+  Boot's own "at every wake" run goes through the same lift.
 - **A remote credential binds itself to this extension on its first attach**
   (mcp-host plan task C2, spec §4.3). `background/bind-on-connect.ts` sends
   `POST /bridge/bind` once, after the socket opens, to that link's own gateway

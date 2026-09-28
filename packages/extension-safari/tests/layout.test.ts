@@ -44,9 +44,9 @@ describe('the Safari resources directory', () => {
   });
 
   it('contains the files the extension loads without the manifest naming them', () => {
-    // capture-logger.js is registered at runtime (main-world-bridge.ts); popup.js
-    // is loaded by popup.html.
-    for (const file of ['capture-logger.js', 'popup.js']) {
+    // capture-logger.js and page-load-wake.js are registered at runtime
+    // (main-world-bridge.ts, page-load-wake.ts); popup.js is loaded by popup.html.
+    for (const file of ['capture-logger.js', 'page-load-wake.js', 'popup.js']) {
       expect(existsSync(join(built.outdir, file)), file).toBe(true);
     }
     expect(readFileSync(join(built.outdir, 'popup.html'), 'utf8')).toContain('popup.js');
