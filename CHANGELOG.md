@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.1.1...v1.2.0) (2026-09-27)
+
+
+### Features
+
+* **extension-core:** bind the extension identity at redeem and on connect ([#33](https://github.com/nullnet-app/contextmint-bridge/issues/33)) ([0909586](https://github.com/nullnet-app/contextmint-bridge/commit/0909586aba5d5365438d32841c4a4bf7aef055b8))
+* **extension-core:** confirm this browser for its account from the popup ([#35](https://github.com/nullnet-app/contextmint-bridge/issues/35)) ([d23a759](https://github.com/nullnet-app/contextmint-bridge/commit/d23a759b42d7021eecefb570d1176f0909ebf396))
+
 ## [1.1.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.1.0...v1.1.1) (2026-09-27)
 
 
