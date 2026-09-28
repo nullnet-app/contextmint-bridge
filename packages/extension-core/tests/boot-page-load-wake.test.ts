@@ -37,7 +37,7 @@ function area() {
 
 type Listener = (msg: unknown, sender: unknown, sendResponse: (r: unknown) => void) => unknown;
 
-async function bootSafari() {
+async function bootSafari(opts: { identityFails?: boolean } = {}) {
   const listeners: Listener[] = [];
   vi.stubGlobal('chrome', {
     runtime: {
@@ -58,17 +58,30 @@ async function bootSafari() {
   };
   vi.stubGlobal('browser', { runtime });
   const { TrustStore } = await import('../src/trust-store.js');
-  vi.spyOn(TrustStore.prototype, 'approvedDomains').mockResolvedValue(['honeybook.com']);
+  const approvedDomains = vi
+    .spyOn(TrustStore.prototype, 'approvedDomains')
+    .mockResolvedValue(['honeybook.com']);
+  let failIdentity: (e: Error) => void = () => {};
+  if (opts.identityFails) {
+    vi.doMock('../src/extension-identity.js', () => ({
+      loadOrCreateExtensionIdentity: () =>
+        new Promise((_, reject) => {
+          failIdentity = reject;
+        }),
+    }));
+  }
   const { maybeBoot } = await import('../src/background/boot.js');
   maybeBoot();
-  // Boot's own ask (the "at every wake" of the contract).
-  await vi.waitUntil(() => asks.length >= 1, { timeout: 2000 });
-  await new Promise((r) => setTimeout(r, 20));
   const deliver = (url: string, frameId = 0) => {
     for (const l of listeners)
       l({ type: 'page-load-wake' }, { tab: { id: 3, url }, frameId, url }, () => {});
   };
-  return { asks, deliver };
+  if (!opts.identityFails) {
+    // Boot's own ask (the "at every wake" of the contract).
+    await vi.waitUntil(() => asks.length >= 1, { timeout: 2000 });
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return { asks, deliver, approvedDomains, failIdentity: (e: Error) => failIdentity(e) };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 50));
@@ -84,6 +97,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock('../src/extension-identity.js');
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -112,5 +126,26 @@ describe('boot and the page-load wake', () => {
     deliver('https://honeybook.com/');
     await settle();
     expect(asks).toHaveLength(1);
+  });
+
+  it('when the identity boot fails, waiting wakes and later ones give up with one log line, and lift nothing', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { asks, deliver, approvedDomains, failIdentity } = await bootSafari({
+      identityFails: true,
+    });
+    const { connect } = await import('../src/background/socket.js');
+    await settle(); // boot's own reads (the MAIN-world bridge sync) are done
+    const domainReads = approvedDomains.mock.calls.length;
+    deliver('https://honeybook.com/'); // waiting on the identity when it fails
+    deliver('https://www.honeybook.com/app');
+    failIdentity(new Error('vault unavailable'));
+    await settle();
+    deliver('https://honeybook.com/'); // after the failure
+    await settle();
+    const wakeLines = errors.mock.calls.filter((c) => String(c[0]).includes('page-load wake'));
+    expect(wakeLines).toHaveLength(1);
+    expect(asks).toHaveLength(0);
+    expect(approvedDomains).toHaveBeenCalledTimes(domainReads); // no wake got past the identity
+    expect(connect).not.toHaveBeenCalled();
   });
 });

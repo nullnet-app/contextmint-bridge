@@ -171,6 +171,25 @@ describe('isApprovedPageLoadWake (the background gate)', () => {
     expect(isApprovedPageLoadWake(forged, top('https://evil.test/'), approved)).toBe(false);
   });
 
+  it("judges the frame's own URL, not the tab's, when the browser reports both", () => {
+    // The tab is on an approved host, but the frame that sent this is not.
+    expect(
+      isApprovedPageLoadWake(
+        wake,
+        { tab: { id: 7, url: 'https://honeybook.com/' }, frameId: 0, url: 'https://evil.test/' },
+        approved,
+      ),
+    ).toBe(false);
+    // And the reverse: the frame is on an approved host, the tab's URL is not.
+    expect(
+      isApprovedPageLoadWake(
+        wake,
+        { tab: { id: 7, url: 'https://evil.test/' }, frameId: 0, url: 'https://honeybook.com/' },
+        approved,
+      ),
+    ).toBe(true);
+  });
+
   it('ignores anything but a top-frame tab sender with a URL', () => {
     expect(isApprovedPageLoadWake(wake, { url: 'https://honeybook.com/' }, approved)).toBe(false); // no tab: an extension page
     expect(
