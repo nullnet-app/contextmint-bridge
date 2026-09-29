@@ -46,6 +46,9 @@
     "downloads",
     "tabGroups"
   ],
+  "storage": {
+    "managed_schema": "managed-schema.json"
+  },
   "host_permissions": [
     "<all_urls>"
   ]

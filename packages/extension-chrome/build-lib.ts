@@ -154,10 +154,11 @@ export function entryBuilds(target: BuildTarget, mode: BuildMode = 'release'): B
  */
 export async function copyStatic(
   outdir: string,
-  { manifest, iconsDir }: { manifest: string; iconsDir: string },
+  { manifest, iconsDir, managedSchema }: { manifest: string; iconsDir: string; managedSchema?: string },
 ): Promise<void> {
   await mkdir(join(outdir, 'icons'), { recursive: true });
   await writeFile(join(outdir, 'manifest.json'), manifest);
+  if (managedSchema !== undefined) await writeFile(join(outdir, 'managed-schema.json'), managedSchema);
   await copyFile(join(CORE, 'popup', 'popup.html'), join(outdir, 'popup.html'));
   for (const f of await readdir(iconsDir)) {
     await copyFile(join(iconsDir, f), join(outdir, 'icons', f));

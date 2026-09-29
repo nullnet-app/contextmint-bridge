@@ -126,21 +126,8 @@
         border-radius: 4px;
       }
       button.bridge-remove:hover { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; }
-      /* mcp-host plan task C3a: "Confirm this browser" and where it stands.
-         The row wraps so a status line sits under the URL, not beside it. */
       li.bridge { flex-wrap: wrap; }
-      .bridge-confirm-status, .bridge-refusal { flex-basis: 100%; }
-      .bridge-confirm-status:empty { display: none; }
-      button.bridge-confirm {
-        background: transparent;
-        border: 1px solid #93c5fd;
-        color: #1d4ed8;
-        padding: 2px 8px;
-        cursor: pointer;
-        border-radius: 4px;
-      }
-      button.bridge-confirm:hover { background: #eff6ff; }
-      button.bridge-confirm:disabled { opacity: 0.5; cursor: default; }
+      .bridge-refusal { flex-basis: 100%; }
       .bridge-add { display: flex; flex-direction: column; gap: 4px; }
       .bridge-add input {
         padding: 4px 6px;

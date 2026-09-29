@@ -25,12 +25,12 @@ import {
 import {
   REMOTE_TARGETS_CHANGED,
   normaliseRemoteTargets,
-  validateRemoteTargetToken,
-  validateRemoteTargetUrl,
   isBridgeTokenId,
   type RemoteTarget,
 } from '../remote-targets.js';
 import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
+import { currentPlatform } from '../platform.js';
+import { DEFAULT_BRIDGE_ORIGIN } from '../bridge-connect-contract.js';
 
 const HIGH_RISK_KEYWORDS = ['bank', 'gov', 'mil'];
 
@@ -231,33 +231,6 @@ export interface RemoteTargetView {
    * the row says so rather than showing a plain grey dot.
    */
   refusal?: string;
-  /**
-   * This bridge's credential can be confirmed for its account from here
-   * (mcp-host plan task C3a): remote, its credential id known, not refused.
-   */
-  confirmable?: boolean;
-  /** Where a confirmation stands, when one was asked for or reported. */
-  confirm?: BridgeConfirmView;
-}
-
-/** A confirmation's state, as the background reports it (`background/links.ts`). */
-export interface BridgeConfirmView {
-  phase: 'tab' | 'app' | 'finishing' | 'confirmed' | 'failed';
-  message?: string;
-}
-
-const CONFIRM_PHASES: ReadonlySet<string> = new Set(['tab', 'app', 'finishing', 'confirmed', 'failed']);
-
-/** A well-formed confirmation state, copied field by field, or undefined. */
-export function bridgeConfirmView(v: unknown): BridgeConfirmView | undefined {
-  if (typeof v !== 'object' || v === null) return undefined;
-  const { phase, message } = v as { phase?: unknown; message?: unknown };
-  if (typeof phase !== 'string' || !CONFIRM_PHASES.has(phase)) return undefined;
-  if (message !== undefined && typeof message !== 'string') return undefined;
-  return {
-    phase: phase as BridgeConfirmView['phase'],
-    ...(typeof message === 'string' ? { message } : {}),
-  };
 }
 
 /**
@@ -273,12 +246,6 @@ export interface HandoffBridgeView {
   connected?: boolean;
   /** As {@link RemoteTargetView.refusal}. */
   refusal?: string;
-  /** As {@link RemoteTargetView.confirmable}; `linkId` is then present too. */
-  confirmable?: boolean;
-  /** The hand-off link's id, which a confirmation is asked for by. */
-  linkId?: string;
-  /** As {@link RemoteTargetView.confirm}. */
-  confirm?: BridgeConfirmView;
 }
 
 /** What the Bridges form hands `onAdd`: every field trimmed, `''` when blank. */
@@ -309,6 +276,10 @@ export function remoteTargetFromForm(id: string, input: BridgeFormInput): Remote
 
 export interface BridgesView {
   targets: RemoteTargetView[];
+  connectOrigins?: string[];
+  connectName?: string;
+  connectStatus?: string;
+  onConnect?: (origin: string, name: string) => Promise<string | null>;
   /** The ContextMint hand-off, when the background holds one. */
   handoff?: HandoffBridgeView;
   /** Whether the loopback link — the one every local MCP needs — is up. */
@@ -317,17 +288,6 @@ export interface BridgesView {
   onAdd?: (input: BridgeFormInput) => Promise<string | null>;
   onRemove?: (id: string) => void;
   onToggle?: (id: string, enabled: boolean) => void;
-  /**
-   * The person asked to confirm this browser for the account of the link
-   * `linkId` (mcp-host plan task C3a). Answers an error string to show, or
-   * null once it started.
-   */
-  onConfirm?: (linkId: string) => Promise<string | null>;
-  /**
-   * This browser's key fingerprint, as the gateway's confirm page shows it —
-   * so the person can check the page is about THIS browser.
-   */
-  extensionFingerprint?: string;
 }
 
 export type PopupState =
@@ -865,58 +825,6 @@ function refusalLine(refusal: string | undefined): HTMLElement | null {
   return refusal ? elem('span', { class: 'bridge-refusal hint' }, refusal) : null;
 }
 
-/** What a bridge row says about where its confirmation stands. */
-function confirmStatusText(confirm: BridgeConfirmView, fingerprint: string | undefined): string {
-  switch (confirm.phase) {
-    case 'tab':
-      return (
-        'Confirm on the page that opened, signed in as the person who paired this browser.' +
-        (fingerprint ? ` It should show this browser's key: ${fingerprint}` : '')
-      );
-    case 'app':
-      return 'Confirm in ContextMint';
-    case 'finishing':
-      return 'Finishing the confirmation…';
-    case 'confirmed':
-      return 'This browser is confirmed for its account.';
-    case 'failed':
-      return confirm.message ?? 'This browser could not be confirmed.';
-  }
-}
-
-/**
- * "Confirm this browser" and its status line, for a connected bridge whose
- * credential can be confirmed (mcp-host plan task C3a). A button and text
- * only — never a field: nothing typed or pasted here can complete a
- * confirmation.
- */
-function appendConfirm(
-  li: HTMLElement,
-  bridges: BridgesView,
-  row: { connected?: boolean; confirmable?: boolean; confirm?: BridgeConfirmView },
-  linkId: string,
-): void {
-  const status = elem('span', { class: 'bridge-confirm-status hint' });
-  if (row.confirm) status.textContent = confirmStatusText(row.confirm, bridges.extensionFingerprint);
-  const offer =
-    bridges.onConfirm !== undefined &&
-    row.confirmable === true &&
-    row.connected === true &&
-    row.confirm?.phase !== 'confirmed';
-  if (offer) {
-    const button = elem('button', { class: 'bridge-confirm' }, 'Confirm this browser');
-    button.addEventListener('click', () => {
-      (button as HTMLButtonElement).disabled = true;
-      void bridges.onConfirm!(linkId).then((problem) => {
-        (button as HTMLButtonElement).disabled = false;
-        if (problem) status.textContent = problem;
-      });
-    });
-    li.appendChild(button);
-  }
-  if (offer || row.confirm) li.appendChild(status);
-}
-
 /** The green/grey dot a bridge row carries, with the state named for a11y. */
 function statusDot(connected: boolean): HTMLElement {
   return elem('span', {
@@ -942,6 +850,32 @@ function statusDot(connected: boolean): HTMLElement {
 function appendBridges(root: HTMLElement, bridges: BridgesView): void {
   root.appendChild(elem('h3', {}, 'Bridges'));
 
+  if (bridges.onConnect && bridges.connectOrigins?.length) {
+    const connect = elem('section', { class: 'bridge-connect' });
+    connect.appendChild(elem('p', { class: 'hint' }, 'Connect this browser to your account'));
+    const name = elem('input', { type: 'text', class: 'bridge-connect-name', 'aria-label': 'Browser name' });
+    (name as HTMLInputElement).value = bridges.connectName ?? '';
+    const message = elem('p', { class: 'bridge-connect-error hint', 'aria-live': 'polite' }, bridges.connectStatus ?? '');
+    connect.appendChild(name);
+    for (const origin of bridges.connectOrigins) {
+      const button = elem('button', { class: 'bridge-connect-start' }, `Connect to ${new URL(origin).host}`);
+      button.addEventListener('click', () => {
+        (button as HTMLButtonElement).disabled = true;
+        message.textContent = '';
+        void bridges.onConnect!(origin, (name as HTMLInputElement).value).then((problem) => {
+          (button as HTMLButtonElement).disabled = false;
+          if (problem) message.textContent = problem;
+        }).catch(() => {
+          (button as HTMLButtonElement).disabled = false;
+          message.textContent = 'Could not start Connect. Try again.';
+        });
+      });
+      connect.appendChild(button);
+    }
+    connect.appendChild(message);
+    root.appendChild(connect);
+  }
+
   const ul = elem('ul', { class: 'bridge-list' });
   const local = elem('li', { class: 'bridge local' });
   // The dot is per LINK, and the loopback row is the reason. A single
@@ -960,7 +894,6 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
     li.appendChild(elem('span', { class: 'bridge-source hint' }, ' from ContextMint'));
     const refused = refusalLine(h.refusal);
     if (refused) li.appendChild(refused);
-    if (h.linkId !== undefined) appendConfirm(li, bridges, h, h.linkId);
     ul.appendChild(li);
   }
 
@@ -984,72 +917,10 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
     }
     const refused = refusalLine(t.refusal);
     if (refused) li.appendChild(refused);
-    appendConfirm(li, bridges, t, `remote:${t.id}`);
     ul.appendChild(li);
   }
   root.appendChild(ul);
 
-  if (!bridges.onAdd) return;
-
-  const form = elem('div', { class: 'bridge-add' });
-  const url = elem('input', { type: 'text', class: 'bridge-url-input', placeholder: 'wss://host/bridge' });
-  const token = elem('input', { type: 'password', class: 'bridge-token-input', placeholder: 'bridge token' });
-  const label = elem('input', { type: 'text', class: 'bridge-label-input', placeholder: 'label (optional)' });
-  const tokenId = elem('input', {
-    type: 'text',
-    class: 'bridge-token-id-input',
-    placeholder: 'credential id, brt_… (optional)',
-  });
-  const err = elem('p', { class: 'bridge-error hint' });
-  const save = elem('button', { class: 'bridge-save' }, 'Add bridge');
-
-  save.addEventListener('click', () => {
-    const urlValue = (url as HTMLInputElement).value.trim();
-    const tokenValue = (token as HTMLInputElement).value.trim();
-    const urlCheck = validateRemoteTargetUrl(urlValue);
-    if (!urlCheck.ok) {
-      err.textContent = `Bridge URL: ${urlCheck.reason}`;
-      return;
-    }
-    const tokenCheck = validateRemoteTargetToken(tokenValue);
-    if (!tokenCheck.ok) {
-      err.textContent = `Bridge token: ${tokenCheck.reason}`;
-      return;
-    }
-    const tokenIdValue = (tokenId as HTMLInputElement).value.trim();
-    if (tokenIdValue !== '' && !isBridgeTokenId(tokenIdValue)) {
-      err.textContent = 'Credential id: expected the brt_… id shown beside the token';
-      return;
-    }
-    err.textContent = '';
-    void Promise.resolve(
-      bridges.onAdd!({
-        url: urlValue,
-        token: tokenValue,
-        label: (label as HTMLInputElement).value.trim(),
-        tokenId: tokenIdValue,
-      }),
-    ).then((problem) => {
-      if (problem) err.textContent = problem;
-    });
-  });
-
-  form.appendChild(url);
-  form.appendChild(token);
-  form.appendChild(label);
-  form.appendChild(tokenId);
-  form.appendChild(save);
-  form.appendChild(err);
-  root.appendChild(form);
-
-  root.appendChild(
-    elem(
-      'p',
-      { class: 'hint' },
-      'A bridge can ask this browser to pair with MCPs it hosts. Add one only if you run it. ' +
-        'Give the credential id too, so the token is locked to this browser once it connects.',
-    ),
-  );
 }
 
 /**
@@ -1394,23 +1265,6 @@ export interface LinkStatusMessage {
   handoff?: boolean;
   /** Why the bridge refused this browser for good (`4004`), when it did. */
   refusal?: string;
-  /** This link's credential can be confirmed for its account (C3a). */
-  confirmable?: boolean;
-  /** Where a confirmation stands (C3a). */
-  confirm?: unknown;
-}
-
-/** The confirmation fields of one link status, only when well-formed. */
-function confirmFields(link: LinkStatusMessage | undefined): {
-  confirmable?: boolean;
-  confirm?: BridgeConfirmView;
-} {
-  if (!link) return {};
-  const confirm = bridgeConfirmView(link.confirm);
-  return {
-    ...(link.confirmable === true ? { confirmable: true } : {}),
-    ...(confirm ? { confirm } : {}),
-  };
 }
 
 /**
@@ -1427,7 +1281,6 @@ export function handoffBridgeView(links: LinkStatusMessage[]): HandoffBridgeView
     url: link.url,
     connected: link.connected,
     ...(typeof link.refusal === 'string' ? { refusal: link.refusal } : {}),
-    ...(link.confirmable === true ? { ...confirmFields(link), linkId: link.id } : {}),
   };
 }
 
@@ -1631,10 +1484,7 @@ async function bootstrap(): Promise<void> {
    * can hear, so a save is followed by a data-less nudge and the worker
    * re-reads the vault itself.
    */
-  const bridgesView = async (
-    links: LinkStatusMessage[],
-    extensionFingerprint?: string,
-  ): Promise<BridgesView> => {
+  const bridgesView = async (links: LinkStatusMessage[]): Promise<BridgesView> => {
     const targets = await loadRemoteTargets();
     const statusFor = (id: string): boolean | undefined =>
       links.find((link) => link.id === id)?.connected;
@@ -1651,11 +1501,20 @@ async function bootstrap(): Promise<void> {
       }
     };
     const localConnected = statusFor('local');
-    const handoff = handoffBridgeView(links);
+    let connectOrigins = [DEFAULT_BRIDGE_ORIGIN];
+    let connectStatus: string | undefined;
+    try {
+      const options = await chrome.runtime?.sendMessage?.({ type: 'bridge-connect-origins' }) as { origins?: unknown; status?: unknown } | undefined;
+      if (Array.isArray(options?.origins) && options.origins.every((o) => typeof o === 'string')) connectOrigins = options.origins as string[];
+      if (typeof options?.status === 'string') connectStatus = options.status;
+    } catch { /* retain the built-in gateway */ }
+    const browser = currentPlatform() === 'safari' ? 'Safari' : 'Chrome';
+    const host = typeof navigator !== 'undefined' && navigator.platform ? navigator.platform : 'this device';
     return {
       ...(localConnected === undefined ? {} : { localConnected }),
-      ...(handoff === undefined ? {} : { handoff }),
-      ...(extensionFingerprint === undefined ? {} : { extensionFingerprint }),
+      connectOrigins,
+      ...(connectStatus === undefined ? {} : { connectStatus }),
+      connectName: `${browser} on ${host}`,
       targets: targets.map((t) => {
         const connected = statusFor(`remote:${t.id}`);
         const refusal = refusalFor(`remote:${t.id}`);
@@ -1666,36 +1525,17 @@ async function bootstrap(): Promise<void> {
           enabled: t.enabled,
           ...(connected === undefined ? {} : { connected }),
           ...(refusal === undefined ? {} : { refusal }),
-          ...confirmFields(links.find((link) => link.id === `remote:${t.id}`)),
         };
       }),
-      // mcp-host plan task C3a: ask the background to start confirming this
-      // browser. The background opens the gateway's page (or asks
-      // ContextMint); the popup only reports how it went.
-      onConfirm: async (linkId) => {
+      onConnect: async (origin, name) => {
         try {
-          const answer = (await chrome.runtime?.sendMessage?.({ type: 'account-confirm-begin', linkId })) as
+          const answer = (await chrome.runtime?.sendMessage?.({ type: 'bridge-connect-begin', origin, name })) as
             | { ok?: unknown; reason?: unknown }
             | undefined;
-          if (answer?.ok === true) {
-            await renderTrustedStatus();
-            return null;
-          }
-          return typeof answer?.reason === 'string' ? answer.reason : 'This browser could not be confirmed.';
+          return answer?.ok === true ? null : typeof answer?.reason === 'string' ? answer.reason : 'Could not start Connect. Try again.';
         } catch {
           return 'The extension did not answer; try again.';
         }
-      },
-      onAdd: async (input) => {
-        if (targets.some((t) => t.url === input.url)) return 'That bridge is already configured.';
-        const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
-        const next: RemoteTarget[] = [...targets, remoteTargetFromForm(id, input)];
-        await write(next);
-        if (normaliseRemoteTargets(next).length === targets.length) {
-          return 'That bridge could not be saved — the list is full.';
-        }
-        await renderTrustedStatus();
-        return null;
       },
       onRemove: (id) => {
         void write(targets.filter((t) => t.id !== id)).then(() => renderTrustedStatus());
@@ -1720,17 +1560,13 @@ async function bootstrap(): Promise<void> {
     // did not answer, and a bridge row then renders WITHOUT a dot rather than
     // claiming a state nobody vouched for.
     let links: LinkStatusMessage[] = [];
-    let extensionFingerprint: string | undefined;
     if (chrome.runtime?.sendMessage) {
       try {
         const resp = await chrome.runtime.sendMessage({ type: 'get-connected-identities' }) as
-          | { connectedHashes?: string[]; links?: LinkStatusMessage[]; extensionFingerprint?: unknown }
+          | { connectedHashes?: string[]; links?: LinkStatusMessage[] }
           | undefined;
         connectedHashes = new Set(resp?.connectedHashes ?? []);
         links = resp?.links ?? [];
-        if (typeof resp?.extensionFingerprint === 'string') {
-          extensionFingerprint = resp.extensionFingerprint;
-        }
       } catch {
         // Background not available — dots will be absent.
       }
@@ -1742,7 +1578,7 @@ async function bootstrap(): Promise<void> {
       capabilities: r.capabilities ? [...r.capabilities] : ['fetch'],
       connected: connectedHashes.has(identityHash),
     }));
-    const bridges = await bridgesView(links, extensionFingerprint);
+    const bridges = await bridgesView(links);
     // Task 4.3: MCPs refused at the hello for speaking protocol 3. Read from
     // storage rather than from the background, because the refusal happens
     // while no popup is open and the service worker is usually gone by the

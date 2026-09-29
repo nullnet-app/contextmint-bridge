@@ -7,10 +7,8 @@ import { fileURLToPath } from 'node:url';
  * The privacy policy is read by people deciding whether to install the
  * extension, so a network path it leaves out is a claim the code contradicts.
  *
- * - fleet-audit #1004: PRIVACY.md §4 listed two network paths and said the
- *   extension makes no outbound connections, while user-configured remote
- *   bridge targets are outbound `wss://` connections carrying hellos, mcpIds
- *   and pair codes to a relay.
+ * - Pairing now has an explicit Connect path; keep the signed requests and
+ *   their gateway destination visible in this policy.
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -31,7 +29,7 @@ describe('PRIVACY.md §4 names every network path', () => {
   it('lists outbound connections to user-configured remote bridge targets', () => {
     expect(s4).toMatch(/remote bridge target/i);
     expect(s4).toMatch(/wss:\/\//);
-    expect(s4).toMatch(/off by default|none (are|is) configured by default|only if you add/i);
+    expect(s4).toMatch(/only after you (start and )?approve Connect/i);
   });
 
   it('says what the relay operator can see', () => {
@@ -39,19 +37,25 @@ describe('PRIVACY.md §4 names every network path', () => {
     expect(s4).toMatch(/mcpId|MCP identifier/i);
   });
 
-  it('names the one HTTPS request binding a remote credential sends, and to where', () => {
-    // mcp-host plan task C2: `POST /bridge/bind` on the relay's own origin.
-    expect(s4).toMatch(/\/bridge\/bind/);
-    expect(s4).toMatch(/same relay/i);
+  it('names the signed Connect start and finish requests, their data and destination', () => {
+    expect(s4).toMatch(/POST \/bridge\/connect\/start/);
+    expect(s4).toMatch(/POST \/bridge\/connect\/finish/);
+    expect(s4).toMatch(/https:\/\/mcp\.nullnet\.app/);
+    expect(s4).toMatch(/managed browser policy/i);
+    expect(s4).toMatch(/credential directly to the extension/i);
   });
 
-  it('names the confirmation requests, the page it opens, and what goes to ContextMint', () => {
-    // mcp-host plan task C3a: "Confirm this browser".
-    expect(s4).toMatch(/\/bridge\/account-confirm\/start/);
-    expect(s4).toMatch(/\/bridge\/account-confirm\/finish/);
-    expect(s4).toMatch(/\/bridge\/confirm/);
-    expect(s4).toMatch(/only when you (click|ask)/i);
-    expect(s4).toMatch(/account-confirm/);
+  it('does not describe the retired bind or confirm pairing routes', () => {
+    expect(s4).not.toMatch(/\/bridge\/bind/);
+    expect(s4).not.toMatch(/\/bridge\/account-confirm/);
+    expect(s4).not.toMatch(/Confirm this browser/);
+  });
+
+  it('documents the sensitive storage.session Connect record', () => {
+    const s3 = section(read('docs/PRIVACY.md'), /^## 3\. /);
+    expect(s3).toMatch(/storage\.session/);
+    expect(s3).toMatch(/bridgeConnectPending/);
+    expect(s3).toMatch(/tab id, request id, gateway origin, one-time nonce/i);
   });
 
   it('no longer claims the extension makes no outbound connections at all', () => {

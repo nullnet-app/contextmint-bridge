@@ -1,8 +1,8 @@
 # Privacy Policy — ContextMint Bridge (fetchproxy)
 
-**Last updated: 2026-09-27**
+**Last updated: 2026-09-29**
 
-ContextMint Bridge is a Chrome extension that bridges local MCP (Model Context Protocol) servers to your signed-in browser tabs. All communication is confined to your local machine. This policy describes exactly what data ContextMint Bridge processes, stores, and shares.
+ContextMint Bridge is a Chrome and Safari extension that bridges MCP (Model Context Protocol) servers to your signed-in browser tabs, either locally or through a remote bridge you connect. This policy describes what data ContextMint Bridge processes, stores, and shares.
 
 ---
 
@@ -10,7 +10,7 @@ ContextMint Bridge is a Chrome extension that bridges local MCP (Model Context P
 
 ContextMint Bridge acts as a relay between Node.js MCP servers running on your computer and web pages you have open in Chrome. When an MCP server makes a request, ContextMint Bridge executes that request inside the browser tab you have open — carrying your existing session cookies and authentication — and returns the result to the MCP server over a local WebSocket connection.
 
-No data leaves your machine through ContextMint Bridge. Every connection is `127.0.0.1` only.
+Local bridge traffic stays on your machine. When you connect to a remote bridge or approve an account pairing, the extension sends the pairing data described in §4 to that gateway.
 
 ---
 
@@ -58,32 +58,29 @@ When you approve an MCP server at pair time, ContextMint Bridge stores a trust r
 
 Trust records are stored in the extension's own IndexedDB, which websites and the extension's content scripts cannot read or change. (Earlier versions kept them in `chrome.storage.local`; the first start after upgrading moves them.) You can revoke any trust record from the extension popup at any time.
 
-### 3.3 Bridge Credential Binding
+### 3.3 Bridge Credentials
 
-When a remote bridge credential is bound to this browser (see §4), the extension remembers the outcome so it does not ask again: whether the credential is bound to this browser, bound to another one, or was refused, and which relays do not support binding yet. It is stored in the extension's own IndexedDB. The credential itself is not stored for this — only a one-way SHA-256 hash of it, which cannot be turned back into the credential.
+After you approve Connect, the extension stores the returned bridge credential with its bridge URL and name in the extension's own IndexedDB vault. Websites and content scripts cannot read that vault. The credential is sent only to the configured gateway's bridge connection; it is never placed in `chrome.storage.local` or `chrome.storage.session`.
 
 ### 3.4 Pending-Pair State
 
-While a pair confirmation is in progress (the 8-digit code dialog is showing), a transient pending-pair entry is held in `chrome.storage.local`. It is removed as soon as the pair is approved, rejected, or times out.
+While an MCP pair confirmation is in progress (the 8-digit code dialog is showing), its transient pending-pair entry is held in `chrome.storage.session`, not `chrome.storage.local`. It is removed as soon as the pair is approved, rejected, or times out.
 
-### 3.5 Pending Confirmation
+### 3.5 Pending Connect Request (`bridgeConnectPending`)
 
-While you are confirming this browser for a relay's account (see §4), the extension remembers which tab it opened for the relay's confirmation page, so it can accept the page's answer from that tab only: the tab's number, the relay's address, the credential's ID, a one-way SHA-256 hash of the credential and an expiry ten minutes later. It is held in `chrome.storage.session` (cleared when the browser closes, and unreadable by web pages), and removed as soon as the answer arrives or a new confirmation starts; an expired entry is never accepted, and is cleared the next time either happens. The credential itself is not stored for this.
+While Connect is waiting for you to approve it on the gateway page, the extension holds the tab id, request id, gateway origin, one-time nonce and ten-minute expiry under `bridgeConnectPending` in `chrome.storage.session`. This store is cleared when the browser closes and is inaccessible to web pages. The approval is accepted once, only from the recorded top-level tab on the matching gateway page. The bridge credential is not stored in this record.
 
 ---
 
 ## 4. Data Shared Externally
 
-**None.**
-
-ContextMint Bridge contains no telemetry, no analytics, no crash reporting, no remote configuration, no feature flags, and no A/B testing. It reports nothing to its developer or to any third party. The only network connections the extension is involved in are:
+ContextMint Bridge contains no telemetry, analytics, crash reporting, feature flags or A/B testing. The extension's network connections are:
 
 - The local WebSocket connection to `127.0.0.1:37149` (MCP server connections on your own machine).
 - HTTP requests made inside your browser tabs at the explicit direction of an approved MCP server.
-- **Outbound WebSocket connections to remote bridge targets you configure yourself** in the popup (a `wss://` relay that hosts MCP servers somewhere other than your machine). These are off by default: none exist until you add one, and removing or disabling a target closes its connection. The connection carries the access token you entered for that relay (as a WebSocket subprotocol). The contents of every request, response and cookie are end-to-end encrypted between the extension and each MCP server, so the relay cannot read them — but the relay operator can see the handshake metadata around them: the extension's hello (its ID, version and public identity keys), each MCP's hello (server name and version, `mcpId`, declared domains, capabilities and key names), the pair code shown during pairing, and the timing and size of frames. See [SECURITY.md §T-remote-bridge](https://github.com/chrischall/fetchproxy/blob/main/docs/SECURITY.md#t-remote-bridge--a-configured-remote-bridge-target).
-- **Binding a remote bridge credential to this browser.** The first time a remote bridge target accepts its credential, the extension sends one HTTPS request to that same relay's own address (`POST /bridge/bind`, carrying the same credential) so that the credential only works with this browser from then on. The request carries the extension's two public identity keys and a signature proving it holds the matching private key — nothing else: no browsing data, URLs, cookies or request content. A relay that does not support binding answers "not found", and the extension then leaves it alone for a day. If you trade a pairing code for a credential, the same keys and signature go with that one request instead.
-- **Confirming this browser for its account — only when you click "Confirm this browser"** in the popup, on a remote bridge. The extension sends one HTTPS request to that same relay's own address (`POST /bridge/account-confirm/start`, carrying the same credential and a signature by the extension's identity key) and opens the relay's confirmation page (`/bridge/confirm`) in a new tab, where you confirm while signed in to the relay. That page hands a one-time value back to the extension inside the same tab; the extension accepts it only from the tab it opened, on the relay's own address, and sends it back with one more signed request (`POST /bridge/account-confirm/finish`). Nothing else goes with them: no browsing data, URLs, cookies or request content. In Safari, for the bridge the ContextMint app handed over, the extension instead asks the app — on the same device, over native messaging — to confirm it (an `account-confirm` message carrying the credential's ID, the extension's public key fingerprint, a timestamp and a signature; no secret), and falls back to the page when the app cannot.
-- **Safari only — the bridge target the ContextMint app hands over.** In Safari, ContextMint Bridge ships inside the ContextMint app. When you set up the browser bridge in that app, the extension asks it — the app on the same device, over Safari's native messaging, never the network — for the bridge address and its access credential, and connects to that address exactly as it would to a remote bridge target you added yourself (the same `wss://` requirement and the same relay-visible metadata apply). The extension keeps the address and credential **in memory only**: they are never written to `chrome.storage`, IndexedDB or any other storage (only a one-way hash of the credential, recording whether it is bound — §3.3), never logged, and are asked for again each time Safari restarts the extension. The only things the extension tells the app are whether that one connection is currently up and, when you ask to confirm this browser, the confirmation request above — no browsing data, URLs, cookies or request content. Disconnecting in the ContextMint app removes the target. The Chrome build does not do any of this.
+- **Connect pairing with a gateway.** When you click a Connect button, the extension sends `POST /bridge/connect/start` to that configured HTTPS origin. It includes this browser's public identity keys, your editable browser name, a timestamp and a signature made with the extension's non-extractable identity key. The gateway returns a request id, one-time nonce and same-origin Connect page URL. After you approve on that page, the page relays only the approval value to the extension; the extension sends `POST /bridge/connect/finish` with the request id, nonce, approval and another signature. The gateway returns the bridge credential directly to the extension, which stores it in the vault described in §3.3. The credential and nonce are never sent to the page or put in a URL. The default origin is `https://mcp.nullnet.app`; any additional origins must be supplied by a managed browser policy. No browsing data, cookies or request content are sent in these pairing requests.
+- **Outbound WebSocket connections to remote bridge targets.** These begin only after you start and approve Connect. The extension stores the resulting `wss://` bridge URL and credential in its vault and uses the credential as a WebSocket subprotocol. Removing or disabling a target closes its connection. Request and response contents are end-to-end encrypted between the extension and each MCP server. The relay operator can see handshake metadata: the extension's ID, version and public identity keys; MCP server names, versions, `mcpId`, declared domains, capabilities and key names; each MCP's pair code and other pairing frames; and timing and frame sizes. See [SECURITY.md §T-remote-bridge](https://github.com/chrischall/fetchproxy/blob/main/docs/SECURITY.md#t-remote-bridge--a-configured-remote-bridge-target).
+- **Safari only — the temporary app hand-off.** In Safari, ContextMint Bridge still asks the containing ContextMint app over native messaging for a bridge target the app already holds. The extension keeps that address and credential in memory only, never writes them to browser storage or logs, and asks for them again after Safari restarts the extension. It reports only whether the handed-off connection is up. Connect pairing itself uses the extension popup and the gateway flow above; it does not use native messaging. The Chrome build does not use the app hand-off.
 
 ---
 

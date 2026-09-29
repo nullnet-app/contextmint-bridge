@@ -69,6 +69,7 @@ export async function buildSafari({
   await copyStatic(outdir, {
     manifest: JSON.stringify(safariManifest(chrome), null, 2) + '\n',
     iconsDir: join(CHROME, 'icons'),
+    managedSchema: await readFile(join(CHROME, 'managed-schema.json'), 'utf8'),
   });
 }
 
