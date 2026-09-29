@@ -245,7 +245,7 @@ describe('account trust is vault-only and has generation rollback protection', (
     const store = new AccountTrustStore();
     await store.put(account);
     await store.bumpHighWater(account.origin, account.accountId, 7);
-    await expect(store.put({ ...account, generation: 6 })).rejects.toThrow(/high-water/i);
+    await expect(store.put({ ...account, generation: 6, generationHighWater: 6 })).rejects.toThrow(/high-water/i);
     expect((await store.get(account.origin, account.accountId))?.generation).toBe(4);
     expect((await store.get(account.origin, account.accountId))?.generationHighWater).toBe(7);
   });
@@ -281,6 +281,17 @@ describe('account trust is vault-only and has generation rollback protection', (
     await store.deleteByToken('token-1');
     expect(await store.get(account.origin, account.accountId)).toBeNull();
     expect(await store.get(account.origin, 'acct-2')).not.toBeNull();
+  });
+
+  it('deleteByToken removes derived MCPs for removed accounts and preserves high-water marks', async () => {
+    const store = new AccountTrustStore();
+    await store.put(account);
+    await store.bumpHighWater(account.origin, account.accountId, 7);
+    await store.putDerived('identity-hash', derived);
+    await store.deleteByToken(account.tokenId);
+    expect(await store.get(account.origin, account.accountId)).toBeNull();
+    expect(await store.getDerived('identity-hash')).toBeNull();
+    await expect(store.put({ ...account, generation: 6, generationHighWater: 6 })).rejects.toThrow(/high-water/i);
   });
 
   it('ignores planted trustedAccounts without reading or migrating storage.local', async () => {

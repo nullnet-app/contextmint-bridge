@@ -23,6 +23,9 @@
  * - `trustedMcps`          — the MCP trust records (`trust-store.ts`);
  * - `trustedAccounts`      — account credentials and generation high-water marks
  *                            (`account-trust-store.ts`);
+ * - `accountGenerationHighWater` — generation high-water tombstones retained
+ *                            after account credentials are deleted
+ *                            (`account-trust-store.ts`);
  * - `accountDerivedMcps`   — account registration identity metadata;
  * - `remoteBridges`        — configured remote bridge targets;
  * - `dismissedScopeHashes` — scope-update offers the user said "keep as is" to

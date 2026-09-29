@@ -28,9 +28,6 @@ export interface AccountDerivedMcp {
 }
 
 type RecordMap<T> = Record<string, T>;
-type AccountMap = RecordMap<TrustedAccount>;
-type DerivedMap = RecordMap<AccountDerivedMcp>;
-type HighWaterMap = RecordMap<number>;
 
 export const accountKey = (origin: string, accountId: string): string => `${origin}\0${accountId}`;
 
@@ -78,10 +75,21 @@ export class AccountTrustStore {
 
   async deleteByToken(tokenId: string): Promise<void> {
     await ensureVault();
-    await vaultUpdate('trustedAccounts', (value) => {
-      const stored = records<TrustedAccount>(value);
-      for (const [key, account] of Object.entries(stored)) if (account.tokenId === tokenId) delete stored[key];
-      return stored;
+    await vaultUpdateMany(['trustedAccounts', 'accountGenerationHighWater', 'accountDerivedMcps'], (current) => {
+      const accounts = records<TrustedAccount>(current.trustedAccounts);
+      const marks = records<number>(current.accountGenerationHighWater);
+      const derived = records<AccountDerivedMcp>(current.accountDerivedMcps);
+      const removed = new Set<string>();
+      for (const [key, account] of Object.entries(accounts)) {
+        if (account.tokenId !== tokenId) continue;
+        removed.add(key);
+        marks[key] = Math.max(marks[key] ?? 0, account.generationHighWater, account.generation);
+        delete accounts[key];
+      }
+      for (const [hash, mcp] of Object.entries(derived)) {
+        if (removed.has(accountKey(mcp.origin, mcp.accountId))) delete derived[hash];
+      }
+      return { values: { trustedAccounts: accounts, accountGenerationHighWater: marks, accountDerivedMcps: derived }, result: undefined };
     });
   }
 
