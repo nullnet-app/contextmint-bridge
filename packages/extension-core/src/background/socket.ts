@@ -53,8 +53,8 @@ import { unavailableCapabilities } from '../capabilities.js';
 // states the same fact to the browser user, and two copies of a remedy are two
 // things to forget to bump.
 import { MIN_SERVER_VERSION } from '../lib/version-mismatch.js';
-import { EXTENSION_MISMATCH_CLOSE, EXTENSION_MISMATCH_MESSAGE } from '../bridge-binding.js';
-import { ACCOUNT_CONFIRMED_CLOSE, FACTS_CHANGED_CLOSE } from '../account-confirm.js';
+import { EXTENSION_MISMATCH_CLOSE, EXTENSION_MISMATCH_MESSAGE } from '../bridge-gateway.js';
+import { ACCOUNT_CONFIRMED_CLOSE, FACTS_CHANGED_CLOSE } from '../bridge-close-codes.js';
 
 import { state } from './state.js';
 import { setConnectionStatus, flashActivity } from './badge.js';
@@ -140,9 +140,6 @@ export function setHandoffTarget(target: HandoffTarget | null): void {
           token: target.token,
           label: target.name,
           enabled: true,
-          // The hand-off contract names the credential's `brt_*` id, which is
-          // what binding it signs over (`bind-on-connect.ts`).
-          tokenId: target.id,
         }
       : null;
   reconcileLinks();
@@ -346,9 +343,8 @@ function connectLink(link: Link): void {
       broadcastConnectionsChanged();
       return;
     }
-    // 4005 ACCOUNT_CONFIRMED (the gateway just confirmed this credential for
-    // its account, `background/account-confirm.ts`) and 4006 FACTS_CHANGED
-    // (what the room knows about this credential changed): not errors. The
+    // 4005 ACCOUNT_CONFIRMED and 4006 FACTS_CHANGED (what the room knows about
+    // this credential changed): not errors. The
     // next attach is the one that counts, so re-dial now rather than after a
     // backoff — once per spacing, so a room that kept closing is still dialled
     // at the backoff's pace. The re-dial leaves `reconnectAttempt` alone (only
@@ -359,16 +355,6 @@ function connectLink(link: Link): void {
       link.kind === 'remote' &&
       (ev?.code === ACCOUNT_CONFIRMED_CLOSE || ev?.code === FACTS_CHANGED_CLOSE)
     ) {
-      // Display only, and only for a confirmation THIS browser asked for: a
-      // 4005 nobody here started grants nothing and says nothing in the popup.
-      const asked = link.confirm?.phase;
-      if (
-        ev.code === ACCOUNT_CONFIRMED_CLOSE &&
-        (asked === 'tab' || asked === 'app' || asked === 'finishing')
-      ) {
-        link.confirm = { phase: 'confirmed' };
-        broadcastConnectionsChanged();
-      }
       const now = Date.now();
       if (now - link.lastImmediateRedialAt >= IMMEDIATE_REDIAL_SPACING_MS) {
         link.lastImmediateRedialAt = now;

@@ -158,8 +158,7 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `nativeMessaging`), so Chrome is inert. The handed-off target is a
   `contextmint:<brt id>` link held IN MEMORY beside the vault's targets
   (`background/socket.ts` `setHandoffTarget`), re-validated like a typed-in
-  one, never persisted or logged, and shown read-only in the popup. (Only a
-  SHA-256 of its credential reaches the vault, in `bridgeBindings` — below.)
+  one, never persisted or logged, and shown read-only in the popup.
 - **A page load on an approved site wakes the background** (contextmint-bridge#32,
   for mcp-host-app's iOS "Refresh from Safari"). `page-load-wake.js` is
   registered at runtime beside the MAIN-world bridge, on the same approved-host
@@ -170,48 +169,23 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `background/page-load-wake.ts`), and `createWakeLift` joins a lift in flight
   and never repeats one while its link is open or dialling, nor within 30 s.
   Boot's own "at every wake" run goes through the same lift.
-- **A remote credential binds itself to this extension on its first attach**
-  (mcp-host plan task C2, spec §4.3). `background/bind-on-connect.ts` sends
-  `POST /bridge/bind` once, after the socket opens, to that link's own gateway
-  origin (`bridge-binding.ts` `gatewayOriginFor`: `wss://h` → `https://h`),
-  signed by the vault's Ed25519 key over mcp-host's exact message — only when
-  the credential's `brt_*` id is known (a hand-off's `id`, or a vault target's
-  `tokenId`, which the popup's Bridges form takes beside the token). A pasted
-  credential saved without its id is never bound — the one residual of I-13
-  on this side; the form's hint asks for the id. A `refused` bind is logged
-  with the origin it was signed for. The answer is remembered in the vault's `bridgeBindings`
-  (`bridge-bind-store.ts`, keyed by the credential's SHA-256): `bound`,
-  `conflict` and `refused` are final — 400/401 are counted on `/bridge`'s own
-  failure allowance, so never retry them — and a 404 (a gateway that predates
-  binding) is left alone for a day. A `4004 EXTENSION_MISMATCH` close stops
-  that link for good (`link.refusal`, shown in the popup); every other close,
-  `4003` included, reconnects as before. `redeemPairingCode` sends the same
-  signed block with a pairing-code redemption; nothing calls it yet.
-- **"Confirm this browser" marks a remote credential account-confirmed**
-  (mcp-host plan task C3, cut as C3a for the managed-pin slice; spec §4.4,
-  I-7), so the account's host-managed pin sets admit this browser's key. Only
-  the person starts it, from a connected remote row in the popup
-  (`account-confirm-begin`, honoured only with no `sender.tab`).
-  `background/account-confirm.ts` then either asks ContextMint over native
-  messaging (Safari, the handed-off credential only: `{type:"account-confirm",
-  tokenId, extFingerprint, ts, sig}`, no challenge; anything but `{ok:true}`
-  falls back) or runs the tab flow: a signed `POST /bridge/account-confirm/start`
-  at the link's own gateway origin, the challenge URL (checked to be exactly
-  `<origin>/bridge/confirm#<22 chars>`) opened in a tab whose id is recorded in
-  `storage.session` with the credential's SHA-256, never the credential. The
-  confirm page posts its completion to its own window; the content script
-  (`account-confirm-relay.ts`) relays it; the background accepts it ONLY from
-  that tab id, top frame, gateway origin, `/bridge/confirm`, within ten
-  minutes, once, for the same credential and the same gateway origin (a link
-  whose URL was edited finishes nothing) — then a signed
-  `POST /bridge/account-confirm/finish`. A sender the browser reports no `url`
-  for is refused. The popup has no field that takes a completion or challenge
-  (red-team R4-3). A `4005 ACCOUNT_CONFIRMED` or `4006 FACTS_CHANGED` close
-  re-dials at once (once per 5 s, then the backoff, which the immediate re-dial
-  does not reset — only an open does). A 4005 shows "confirmed" only when a
-  confirmation this browser started is in flight.
-  It writes no trust: no `trustedMcps`, no account record — `link.confirm` is
-  popup display state. The account card and `trustedAccounts` are C1/C3/C4.
+- **Account pairing starts at the extension popup.** The person chooses a
+  configured gateway and browser name; the background signs a Connect request,
+  opens that gateway's Connect page, and accepts its approval only from the
+  exact tab, top frame, URL, origin, request and unexpired one-time approval
+  (background/bridge-connect.ts). The resulting credential is saved only
+  through the vault. The popup has no token-paste form or standalone browser
+  confirmation action. For Chrome, enterprise policy may extend the default
+  gateway through chrome.storage.managed.bridgeConnectOrigins; the schema is
+  packages/extension-chrome/managed-schema.json, and both the background and
+  relay validate origins before use. The native ContextMint hand-off remains a
+  separate, in-memory path for Safari.
+- **A refused remote browser is not retried forever.** A 4004
+  EXTENSION_MISMATCH close stops that link for good (link.refusal, shown in
+  the popup); only a new credential creates a fresh link. A 4005
+  ACCOUNT_CONFIRMED or 4006 FACTS_CHANGED close re-dials at once, at most
+  once per five seconds, then uses normal backoff. The immediate re-dial does
+  not reset the backoff; only an open does.
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is
@@ -231,8 +205,7 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   site's content script can read AND write it. Keys, trust records, remote
   bridge targets and dismissed scope hashes live in the extension-origin
   IndexedDB vault (`extension-core/src/vault.ts`, reached through
-  `TrustStore` / `vault-records.ts` / `bridge-bind-store.ts` /
-  `loadOrCreateExtensionIdentity`); the
+  `TrustStore` / `vault-records.ts` / `loadOrCreateExtensionIdentity`); the
   pairing queue lives in `storage.session`. `vault-migration.ts` is the only
   reader of the legacy `storage.local` keys, and only once. The identity
   keeps NO X25519 private key (protocol 4 never uses one; the X25519 pub is
