@@ -250,6 +250,30 @@ describe('account trust is vault-only and has generation rollback protection', (
     expect((await store.get(account.origin, account.accountId))?.generationHighWater).toBe(7);
   });
 
+  it('rejects invalid generations before they can poison rollback protection', async () => {
+    const store = new AccountTrustStore();
+    await store.put(account);
+    for (const generation of [NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(store.put({ ...account, generation })).rejects.toThrow(/safe integer/);
+    }
+    await expect(store.put({ ...account, generationHighWater: NaN })).rejects.toThrow(/safe integer/);
+    await expect(store.put({ ...account, generation: 5, generationHighWater: 4 })).rejects.toThrow(/below generation/);
+    expect(await store.get(account.origin, account.accountId)).toEqual(account);
+    await expect(store.put({ ...account, generation: 4 })).resolves.toBeUndefined();
+  });
+
+  it('retains high-water after forgetting an account and removes its derived MCPs', async () => {
+    const store = new AccountTrustStore();
+    await store.put(account);
+    await store.bumpHighWater(account.origin, account.accountId, 7);
+    await store.putDerived('identity-hash', derived);
+    await store.deleteByAccount(account.origin, account.accountId);
+    expect(await store.get(account.origin, account.accountId)).toBeNull();
+    expect(await store.getDerived('identity-hash')).toBeNull();
+    await expect(store.put({ ...account, generation: 6, generationHighWater: 7 })).rejects.toThrow(/high-water/i);
+    await expect(store.put({ ...account, generation: 7, generationHighWater: 7 })).resolves.toBeUndefined();
+  });
+
   it('deleteByToken removes only records for that token', async () => {
     const store = new AccountTrustStore();
     await store.put(account);

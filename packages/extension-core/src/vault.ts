@@ -49,6 +49,7 @@ export type VaultKey =
   | 'trustedMcps'
   | 'trustedAccounts'
   | 'accountDerivedMcps'
+  | 'accountGenerationHighWater'
   | 'remoteBridges'
   | 'dismissedScopeHashes'
   | 'legacyStoresMigrated';
@@ -149,6 +150,34 @@ export function vaultUpdate<T>(
       else store.put(next, key);
       done(next);
     };
+  });
+}
+
+/** Atomic read-modify-write across a small set of vault keys. */
+export function vaultUpdateMany<T>(
+  keys: readonly VaultKey[],
+  fn: (current: Record<string, unknown>) => { values: Partial<Record<VaultKey, unknown>>; result: T },
+): Promise<T> {
+  return transact<T>('readwrite', (store, done) => {
+    const current: Record<string, unknown> = {};
+    let remaining = keys.length;
+    const apply = () => {
+      const next = fn(current);
+      for (const key of keys) {
+        if (!(key in next.values) || next.values[key] === undefined) store.delete(key);
+        else store.put(next.values[key], key);
+      }
+      done(next.result);
+    };
+    if (remaining === 0) { apply(); return; }
+    for (const key of keys) {
+      const req = store.get(key);
+      req.onsuccess = () => {
+        current[key] = req.result;
+        remaining -= 1;
+        if (remaining === 0) apply();
+      };
+    }
   });
 }
 
