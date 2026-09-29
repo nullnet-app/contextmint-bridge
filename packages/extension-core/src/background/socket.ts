@@ -63,7 +63,6 @@ import { onServerHello, sendHelloRejected } from './server-hello.js';
 import { forgetVersionMismatch, noteVersionMismatch } from './version-mismatch-store.js';
 import { handleRequest } from './handlers/dispatch.js';
 import { broadcastConnectionsChanged, clearSessionScopeFor } from './session-scope.js';
-import { bindOnConnect } from './bind-on-connect.js';
 import {
   HANDOFF_LINK_PREFIX,
   IMMEDIATE_REDIAL_SPACING_MS,
@@ -313,10 +312,6 @@ function connectLink(link: Link): void {
       ...unavailableCapabilitiesHelloField(unavailableCapabilities(chrome)),
     };
     ws.send(JSON.stringify(extHello));
-    // mcp-host plan task C2: the gateway just accepted this credential, so
-    // bind it to this extension if it is not known to be bound. After the
-    // hello, fire-and-forget — it never delays or blocks the handshake.
-    void bindOnConnect(link);
   });
   ws.addEventListener('message', (ev: MessageEvent) => {
     void onMessage(link, ev.data as string).catch((e) =>

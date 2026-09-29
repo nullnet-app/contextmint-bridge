@@ -166,4 +166,14 @@ describe('copyStatic', () => {
     expect(await readFile(join(outdir, 'popup.html'), 'utf8')).toBe(await readFile(popup, 'utf8'));
     expect((await readdir(join(outdir, 'icons'))).sort()).toEqual((await readdir(iconsDir)).sort());
   });
+
+  it('copies the managed storage schema referenced by the manifest', async () => {
+    const { copyStatic } = await import('../build-lib.js');
+    const outdir = await mkdtemp(join(tmpdir(), 'build-lib-managed-schema-'));
+    dirs.push(outdir);
+    const iconsDir = fileURLToPath(new URL('../icons/', import.meta.url));
+    const schema = '{"type":"object"}\n';
+    await copyStatic(outdir, { manifest: '{"storage":{"managed_schema":"managed-schema.json"}}', iconsDir, managedSchema: schema });
+    expect(await readFile(join(outdir, 'managed-schema.json'), 'utf8')).toBe(schema);
+  });
 });

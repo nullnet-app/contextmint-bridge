@@ -54,6 +54,7 @@ async function main(mode: BuildMode): Promise<void> {
   await copyStatic(out, {
     manifest: await readFile(join(HERE, 'manifest.json'), 'utf8'),
     iconsDir: join(HERE, 'icons'),
+    managedSchema: await readFile(join(HERE, 'managed-schema.json'), 'utf8'),
   });
   console.log(`extension-chrome built (${mode}) →`, out);
 }

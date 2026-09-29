@@ -54,16 +54,17 @@ import { onApproval, onScopeUpdateDismiss } from './approval.js';
 import { maybeReinjectOnInstalled } from '../reinject-content-scripts.js';
 import { mainBridgeScriptFor, syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 import { armInstallSignal, noteInstalled } from '../vault-migration.js';
-import { extensionKeyFingerprint } from '../account-confirm.js';
-import { ACCOUNT_CONFIRM_COMPLETION } from '../account-confirm-relay.js';
 import { createWakeLift, isApprovedPageLoadWake } from './page-load-wake.js';
 import { PAGE_LOAD_WAKE } from '../page-load-wake.js';
 import {
-  ACCOUNT_CONFIRM_BEGIN,
-  beginAccountConfirm,
-  onConfirmCompletion,
-  type MessageSenderLike,
-} from './account-confirm.js';
+  BRIDGE_CONNECT_APPROVAL,
+  BRIDGE_CONNECT_BEGIN,
+  BRIDGE_CONNECT_ORIGINS,
+  beginBridgeConnect,
+  connectPopupOptions,
+  onBridgeConnectApproval,
+  type ConnectSender,
+} from './bridge-connect.js';
 
 // Boot: only run in a real MV3 service worker context. Skipped under vitest
 // (no chrome.runtime.getManifest, no chrome.storage.local.onChanged).
@@ -136,6 +137,35 @@ export function maybeBoot(): void {
   // Part 3: respond to popup queries for the connected identity hash set.
   if (typeof chrome.runtime.onMessage?.addListener === 'function') {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (
+        msg !== null && typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === BRIDGE_CONNECT_ORIGINS &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        void connectPopupOptions().then(sendResponse);
+        return true;
+      }
+      if (
+        msg !== null && typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === BRIDGE_CONNECT_BEGIN &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        const m = msg as { origin?: unknown; name?: unknown };
+        void beginBridgeConnect(m.origin, m.name)
+          .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))
+          .then(sendResponse);
+        return true;
+      }
+      if (
+        msg !== null && typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === BRIDGE_CONNECT_APPROVAL &&
+        (sender as { tab?: unknown } | undefined)?.tab !== undefined
+      ) {
+        void onBridgeConnectApproval(msg, sender as ConnectSender)
+          .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))
+          .then(sendResponse);
+        return true;
+      }
       // 2.1.0: the popup changed the configured remote bridge targets — a
       // target added, removed, disabled or repointed. Reconcile the live links
       // onto the new set rather than waiting for a restart, and note that a
@@ -168,7 +198,6 @@ export function maybeBoot(): void {
         sendResponse({
           connectedHashes: [...connectedIdentityHashes()],
           links: linkStatuses(),
-          ...(state.extFingerprint !== null ? { extensionFingerprint: state.extFingerprint } : {}),
         });
         return true;
       }
@@ -189,40 +218,6 @@ export function maybeBoot(): void {
             if (isApprovedPageLoadWake(msg, sender, domains)) await wakeLift.run();
           })
           .catch((e) => console.error('[fetchproxy] page-load wake:', e));
-        return;
-      }
-      // mcp-host plan task C3a: "Confirm this browser" — the person's own
-      // request, so only from an extension page (the popup). A content
-      // script, which every site gets, can reach onMessage too: from a tab it
-      // starts nothing and opens nothing.
-      if (
-        msg !== null &&
-        typeof msg === 'object' &&
-        (msg as { type?: unknown }).type === ACCOUNT_CONFIRM_BEGIN &&
-        (sender as { tab?: unknown } | undefined)?.tab === undefined
-      ) {
-        const linkId = (msg as { linkId?: unknown }).linkId;
-        if (typeof linkId !== 'string') return;
-        void beginAccountConfirm(linkId)
-          .catch((e: unknown) => ({
-            ok: false,
-            reason: e instanceof Error ? e.message : String(e),
-          }))
-          .then(sendResponse);
-        return true;
-      }
-      // The confirm page's completion, relayed by the content script in the
-      // tab this extension opened. Handed on WITH the browser's own sender —
-      // the tab id, origin and page the flow checks — and only from a tab.
-      if (
-        msg !== null &&
-        typeof msg === 'object' &&
-        (msg as { type?: unknown }).type === ACCOUNT_CONFIRM_COMPLETION &&
-        (sender as { tab?: unknown } | undefined)?.tab !== undefined
-      ) {
-        void onConfirmCompletion(msg, sender as MessageSenderLike).catch((e) =>
-          console.error('[fetchproxy] account confirmation:', e),
-        );
         return;
       }
     });
@@ -319,10 +314,6 @@ export function maybeBoot(): void {
     .then(
       (id) => {
         state.extIdentity = id;
-        // Shown beside a confirmation (C3a); public, computed once.
-        void extensionKeyFingerprint(id.x25519Pub).then((fp) => {
-          state.extFingerprint = fp;
-        });
         connect();
         // A page-load wake that arrived before the identity waits for this.
         // It resolves before `wakeLift.run()` below starts, but the waiter

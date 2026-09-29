@@ -1,22 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { fromB64 } from '@fetchproxy/protocol';
 
 import { loadOrCreateExtensionIdentity } from '../src/extension-identity.js';
 import { freshVault, installChromeLocal } from './helpers/vault.js';
 import { settle } from './helpers/settle.js';
 
-/**
- * Binding a remote bridge credential to this extension on connect (mcp-host
- * plan task C2, spec §4.3, invariant I-13's extension half), and honouring
- * the room's `4004 EXTENSION_MISMATCH`.
- *
- * - On the FIRST successful attach of a remote link whose credential is not
- *   known to be bound, `POST /bridge/bind` once, to that link's own gateway.
- * - A 404 means the gateway predates binding: remembered, not retried every
- *   wake.
- * - `4004` stops reconnecting that target and says why; every other close
- *   (`4003` included) keeps today's reconnect.
- */
+/** The retired C2 bind action stays absent while the room's close handling remains tested below. */
 
 class FakeSocket {
   static readonly CONNECTING = 0;
@@ -66,10 +54,7 @@ const { state } = await import('../src/background/state.js');
 const { links, linkStatuses, unbindAll } = await import('../src/background/links.js');
 const { TrustStore } = await import('../src/trust-store.js');
 const { SessionKeys } = await import('../src/session-keys.js');
-const { credentialKey, loadBindState, recordOriginUnsupported, BIND_UNSUPPORTED_RETRY_MS } =
-  await import('../src/bridge-bind-store.js');
 const { EXTENSION_MISMATCH_MESSAGE } = await import('../src/bridge-binding.js');
-const { bindOnConnect } = await import('../src/background/bind-on-connect.js');
 
 const CREDENTIAL = 'mcpb_' + 'B'.repeat(43);
 const HANDOFF = {
@@ -77,13 +62,6 @@ const HANDOFF = {
   url: 'wss://mcp.nullnet.app/bridge',
   token: CREDENTIAL,
   name: 'Safari',
-};
-const PASTED = {
-  id: 'b1',
-  url: 'wss://gw.test/bridge',
-  token: 'mcpb_' + 'P'.repeat(43),
-  tokenId: 'brt_pasted',
-  enabled: true,
 };
 
 type Call = { url: string; init: RequestInit };
@@ -126,182 +104,12 @@ afterEach(() => {
   reconcileRemoteLinks([]);
 });
 
-describe('bind on the first successful attach', () => {
-  it('binds a handed-off credential once, to its own gateway, and remembers it', async () => {
+describe('retired browser-side credential binding', () => {
+  it('does not bind credentials after a remote socket opens', async () => {
     setHandoffTarget(HANDOFF);
-    expect(bindCalls()).toHaveLength(0); // not before the attach succeeded
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    expect(bindCalls()).toHaveLength(1);
-    const [call] = bindCalls();
-    expect(call!.url).toBe('https://mcp.nullnet.app/bridge/bind');
-    expect(new Headers(call!.init.headers).get('authorization')).toBe(`Bearer ${CREDENTIAL}`);
-    const body = JSON.parse(String(call!.init.body));
-    // Signed over the handed-off credential's id, at the gateway it dials.
-    const message = new TextEncoder().encode(
-      [
-        'mcp-host/bridge-bind/v1',
-        'https://mcp.nullnet.app',
-        'brt_one',
-        body.x25519Pub,
-        body.ed25519Pub,
-      ].join('\0'),
-    );
-    const key = await crypto.subtle.importKey(
-      'raw',
-      fromB64(body.ed25519Pub) as BufferSource,
-      'Ed25519',
-      false,
-      ['verify'],
-    );
-    expect(
-      await crypto.subtle.verify('Ed25519', key, fromB64(body.sig) as BufferSource, message),
-    ).toBe(true);
-    expect(await loadBindState(await credentialKey(CREDENTIAL))).toBe('bound');
-
-    // A reconnect on the same link does not bind again...
-    lastSocket(HANDOFF.url).remoteClose(1006);
-    for (const link of links.values()) link.nextAttemptAt = 0;
-    connect();
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    // ...and neither does a fresh link (a new wake) for the same credential.
-    setHandoffTarget(null);
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    expect(bindCalls()).toHaveLength(1);
-  });
-
-  it('binds a vault target that knows its credential id, and never one that does not', async () => {
-    reconcileRemoteLinks([
-      PASTED,
-      { ...PASTED, id: 'b2', url: 'wss://noid.test/bridge', tokenId: undefined },
-    ]);
-    lastSocket(PASTED.url).open();
-    lastSocket('wss://noid.test/bridge').open();
-    await quiet();
-    expect(bindCalls().map((c) => c.url)).toEqual(['https://gw.test/bridge/bind']);
-  });
-
-  it('never binds the loopback link', async () => {
-    lastSocket('ws://127.0.0.1:37149').open();
-    await quiet();
-    expect(calls).toHaveLength(0);
-  });
-
-  it('remembers a 404 per gateway and does not ask it again on the next wake', async () => {
-    answer = () => new Response('not found', { status: 404 });
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    expect(bindCalls()).toHaveLength(1);
-    // A new wake (fresh link), and another credential on the same gateway.
-    setHandoffTarget(null);
-    setHandoffTarget({ ...HANDOFF, id: 'brt_two', token: 'mcpb_' + 'Z'.repeat(43) });
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    expect(bindCalls()).toHaveLength(1);
-    expect(await loadBindState(await credentialKey(CREDENTIAL))).toBeNull();
-  });
-
-  it('asks a gateway that answered 404 again once the retry window has passed', async () => {
-    await recordOriginUnsupported(
-      'https://mcp.nullnet.app',
-      Date.now() - BIND_UNSUPPORTED_RETRY_MS - 1,
-    );
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    expect(bindCalls()).toHaveLength(1);
-  });
-
-  it('does not retry a refused bind — it would spend /bridge’s own failure allowance', async () => {
-    for (const status of [400, 401]) {
-      calls = [];
-      answer = () => json(status, { error: 'no' });
-      const token = `mcpb_${String(status).repeat(12)}`;
-      setHandoffTarget({ ...HANDOFF, token });
-      lastSocket(HANDOFF.url).open();
-      await quiet();
-      setHandoffTarget(null);
-      setHandoffTarget({ ...HANDOFF, token });
-      lastSocket(HANDOFF.url).open();
-      await quiet();
-      expect(bindCalls()).toHaveLength(1);
-      expect(await loadBindState(await credentialKey(token))).toBe('refused');
-      setHandoffTarget(null);
-    }
-  });
-
-  it('records a 409 and does not ask again', async () => {
-    answer = () => json(409, { error: 'bound to a different extension' });
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    setHandoffTarget(null);
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    expect(bindCalls()).toHaveLength(1);
-    expect(await loadBindState(await credentialKey(CREDENTIAL))).toBe('conflict');
-  });
-
-  it('tries again on the next attach after a transient failure', async () => {
-    answer = () => json(503, { error: 'later' });
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    lastSocket(HANDOFF.url).remoteClose(1006);
-    for (const link of links.values()) link.nextAttemptAt = 0;
-    answer = () => json(200, { bound: true });
-    connect();
-    lastSocket(HANDOFF.url).open();
-    await quiet();
-    expect(bindCalls()).toHaveLength(2);
-    expect(await loadBindState(await credentialKey(CREDENTIAL))).toBe('bound');
-  });
-});
-
-describe('bind guards', () => {
-  it('never binds a hand-off whose id is not a brt_* credential id, and records nothing', async () => {
-    setHandoffTarget({ ...HANDOFF, id: 'not-a-credential-id' });
     lastSocket(HANDOFF.url).open();
     await quiet();
     expect(bindCalls()).toHaveLength(0);
-    expect(await loadBindState(await credentialKey(CREDENTIAL))).toBeNull();
-  });
-
-  it('does not bind for a link withdrawn while the vault was being read', async () => {
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open(); // bindOnConnect is now awaiting the vault
-    setHandoffTarget(null);
-    await quiet();
-    expect(bindCalls()).toHaveLength(0);
-  });
-
-  it('sends one bind when two opens race on the same link', async () => {
-    answer = () => json(400, { error: 'no' });
-    setHandoffTarget(HANDOFF);
-    const link = [...links.values()].find((l) => l.url === HANDOFF.url)!;
-    await Promise.all([bindOnConnect(link), bindOnConnect(link)]);
-    expect(bindCalls()).toHaveLength(1);
-  });
-
-  it('says which origin it signed over when the gateway refuses the bind', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      answer = () => json(400, { error: 'bad signature' });
-      setHandoffTarget(HANDOFF);
-      lastSocket(HANDOFF.url).open();
-      await quiet();
-      const lines = warn.mock.calls.map((c) => c.join(' '));
-      expect(
-        lines.some((l) => l.includes('refused') && l.includes('https://mcp.nullnet.app')),
-      ).toBe(true);
-    } finally {
-      warn.mockRestore();
-    }
   });
 });
 
