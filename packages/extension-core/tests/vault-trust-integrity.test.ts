@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   generateX25519,
   generateEd25519,
@@ -22,6 +22,7 @@ import {
 import { vaultInitIfAbsent } from '../src/vault.js';
 import { generateExtensionIdentity } from '../src/identity-keys.js';
 import { noteInstalled } from '../src/vault-migration.js';
+import { AccountTrustStore, type TrustedAccount, type AccountDerivedMcp } from '../src/account-trust-store.js';
 import { freshVault, installChromeLocal, type LocalArea } from './helpers/vault.js';
 
 /**
@@ -211,6 +212,67 @@ describe('remoteBridges and dismissedScopeHashes cannot be written through stora
     await recordDismissedScopeHash('idhash', 'other');
     expect(await loadDismissedScopeHashes()).toEqual({ idhash: ['scopehash', 'other'] });
     expect(local.data).toEqual({});
+  });
+});
+
+describe('account trust is vault-only and has generation rollback protection', () => {
+  let local: LocalArea;
+  const account: TrustedAccount = {
+    origin: 'https://gateway.example', accountId: 'acct-1', slug: 'alice', displayName: 'Alice',
+    tokenId: 'token-1', kid: 'key-1', publicKey: 'public-key', generation: 4,
+    generationHighWater: 4, approvedAt: 10,
+  };
+  const derived: AccountDerivedMcp = {
+    origin: account.origin, accountId: account.accountId, registrationId: 'reg-1', slug: 'alice',
+    scope: ['read'], firstSeenAt: 10, lastSeenAt: 11,
+  };
+  beforeEach(async () => {
+    freshVault();
+    local = installChromeLocal();
+    await loadOrCreateExtensionIdentity();
+  });
+
+  it('round trips trusted accounts and derived MCPs through the vault', async () => {
+    const store = new AccountTrustStore();
+    await store.put(account);
+    await store.putDerived('identity-hash', derived);
+    expect(await store.get(account.origin, account.accountId)).toEqual(account);
+    expect(await store.getDerived('identity-hash')).toEqual(derived);
+    expect(local.data).toEqual({});
+  });
+
+  it('refuses generations below the high-water mark', async () => {
+    const store = new AccountTrustStore();
+    await store.put(account);
+    await store.bumpHighWater(account.origin, account.accountId, 7);
+    await expect(store.put({ ...account, generation: 6 })).rejects.toThrow(/high-water/i);
+    expect((await store.get(account.origin, account.accountId))?.generation).toBe(4);
+    expect((await store.get(account.origin, account.accountId))?.generationHighWater).toBe(7);
+  });
+
+  it('deleteByToken removes only records for that token', async () => {
+    const store = new AccountTrustStore();
+    await store.put(account);
+    await store.put({ ...account, accountId: 'acct-2', tokenId: 'token-2' });
+    await store.deleteByToken('token-1');
+    expect(await store.get(account.origin, account.accountId)).toBeNull();
+    expect(await store.get(account.origin, 'acct-2')).not.toBeNull();
+  });
+
+  it('ignores planted trustedAccounts without reading or migrating storage.local', async () => {
+    local.data['trustedAccounts'] = { [`${account.origin}\0${account.accountId}`]: account };
+    const get = vi.spyOn(local, 'get');
+    const store = new AccountTrustStore();
+    expect(await store.get(account.origin, account.accountId)).toBeNull();
+    expect(local.data['trustedAccounts']).toBeDefined();
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('does not import trustedAccounts during a legacy storage.local upgrade', async () => {
+    local.data['trustedAccounts'] = { [`${account.origin}\0${account.accountId}`]: account };
+    await noteInstalled({ reason: 'update', previousVersion: '3.2.0' });
+    const store = new AccountTrustStore();
+    expect(await store.get(account.origin, account.accountId)).toBeNull();
   });
 });
 

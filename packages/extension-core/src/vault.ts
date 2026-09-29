@@ -21,6 +21,9 @@
  *                            Deleted on the first wake that finds it
  *                            (`vault-migration.ts`); never written;
  * - `trustedMcps`          — the MCP trust records (`trust-store.ts`);
+ * - `trustedAccounts`      — account credentials and generation high-water marks
+ *                            (`account-trust-store.ts`);
+ * - `accountDerivedMcps`   — account registration identity metadata;
  * - `remoteBridges`        — configured remote bridge targets;
  * - `dismissedScopeHashes` — scope-update offers the user said "keep as is" to
  *                            (`vault-records.ts`; these three are fleet-audit
@@ -44,6 +47,8 @@ export type VaultKey =
   | 'identity'
   | 'identityWrappingKey'
   | 'trustedMcps'
+  | 'trustedAccounts'
+  | 'accountDerivedMcps'
   | 'remoteBridges'
   | 'dismissedScopeHashes'
   | 'legacyStoresMigrated';
