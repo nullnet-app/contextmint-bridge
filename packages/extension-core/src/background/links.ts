@@ -23,7 +23,7 @@
  * sessions.
  */
 
-import { isBridgeTokenId, type RemoteTarget } from '../remote-targets.js';
+import type { RemoteTarget } from '../remote-targets.js';
 
 export const LOCAL_LINK_ID = 'local';
 
@@ -63,33 +63,11 @@ export interface Link {
    */
   readonly handoff: boolean;
   /**
-   * The remote credential and its mcp-host id (`brt_*`), when known — what
-   * `POST /bridge/bind` needs (`bind-on-connect.ts`). Null on the loopback
-   * link, and `credentialId` null for a pasted target that never learned its
-   * id. The credential is already in `protocols`; it is never shown.
-   */
-  readonly credential: string | null;
-  readonly credentialId: string | null;
-  /**
-   * Whether this link's credential still needs a bind attempt: `idle` until
-   * one is due, `inflight` while one runs, `settled` once there is nothing
-   * more to ask this link's gateway (bound, refused, or a gateway that
-   * predates binding). Per link, so a new credential starts over.
-   */
-  bind: 'idle' | 'inflight' | 'settled';
-  /**
    * Why the bridge refused this browser for good — set on a `4004
    * EXTENSION_MISMATCH` close. A refused link is never dialled again; only a
    * new credential (which is a new link) clears it. Shown in the popup.
    */
   refusal: string | null;
-  /**
-   * Where confirming this browser for its account stands (mcp-host plan task
-   * C3a, `background/account-confirm.ts`), for the popup. In memory only and
-   * advisory: it grants nothing and no decision reads it. Null until the
-   * person asks, or the room says the credential was confirmed (`4005`).
-   */
-  confirm: ConfirmState | null;
   /**
    * Epoch ms of this link's last IMMEDIATE re-dial (after `4005` / `4006`).
    * Those closes are not errors, so they skip the backoff — but only once per
@@ -101,20 +79,6 @@ export interface Link {
 
 /** See {@link Link.lastImmediateRedialAt}. */
 export const IMMEDIATE_REDIAL_SPACING_MS = 5000;
-
-/**
- * - `tab`: the confirm page is open; the person confirms there.
- * - `app`: ContextMint was asked to confirm (Safari).
- * - `finishing`: the page handed back its completion; `finish` is in flight.
- * - `confirmed`: the gateway confirmed this credential.
- * - `failed`: it did not; `message` says why.
- */
-export type ConfirmPhase = 'tab' | 'app' | 'finishing' | 'confirmed' | 'failed';
-
-export interface ConfirmState {
-  phase: ConfirmPhase;
-  message?: string;
-}
 
 /**
  * The id prefix of the ContextMint hand-off link, followed by the credential's
@@ -142,11 +106,7 @@ export function localLink(): Link {
     sessionNonce: null,
     closed: false,
     handoff: false,
-    credential: null,
-    credentialId: null,
-    bind: 'settled',
     refusal: null,
-    confirm: null,
     lastImmediateRedialAt: 0,
   };
 }
@@ -164,11 +124,7 @@ export function remoteLink(target: RemoteTarget, protocols: string[], handoff = 
     sessionNonce: null,
     closed: false,
     handoff,
-    credential: target.token,
-    credentialId: isBridgeTokenId(target.tokenId) ? target.tokenId : null,
-    bind: 'idle',
     refusal: null,
-    confirm: null,
     lastImmediateRedialAt: 0,
   };
 }
@@ -235,25 +191,6 @@ export interface LinkStatus {
   handoff?: true;
   /** Why the bridge refused this browser for good (`4004`), when it did. */
   refusal?: string;
-  /**
-   * Present (and true) on a remote link this browser can ask to confirm for
-   * its account: its credential id is known (the start signs over it) and the
-   * bridge has not refused this browser.
-   */
-  confirmable?: true;
-  /** Where a confirmation stands, when one was asked for or reported. */
-  confirm?: ConfirmState;
-}
-
-/** Can this link's credential be confirmed for its account from here? */
-export function isConfirmable(link: Link): boolean {
-  return (
-    link.kind === 'remote' &&
-    !link.closed &&
-    link.refusal === null &&
-    link.credential !== null &&
-    link.credentialId !== null
-  );
 }
 
 /**
@@ -276,8 +213,6 @@ export function linkStatuses(): LinkStatus[] {
       sessions: mcpIdsForLink(link).length,
       ...(link.handoff ? { handoff: true as const } : {}),
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
-      ...(isConfirmable(link) ? { confirmable: true as const } : {}),
-      ...(link.confirm !== null ? { confirm: { ...link.confirm } } : {}),
     });
   }
   return out.sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1));

@@ -67,18 +67,15 @@ export interface RemoteTarget {
   /** A disabled target is remembered but never dialled. */
   enabled: boolean;
   /**
-   * The credential's mcp-host id (`brt_*`), when known — typed into the
-   * Bridges form beside the token, or from a pairing-code redemption. It is
-   * what `POST /bridge/bind` signs over (mcp-host plan task
-   * C2), so a target without one is never bound after the fact. Not a secret.
+   * The credential's mcp-host id (`brt_*`) returned by account Connect.
+   * Used to avoid adding the same credential twice. Not a secret.
    */
   tokenId?: string;
 }
 
 /**
- * An mcp-host credential id: `brt_` + an id. Bounded and NUL-free, because it
- * is a field of a signed message (`bridge-binding.ts`) and a NUL inside it
- * would let one message be read as another split.
+ * An mcp-host credential id: `brt_` + an id. Bounded and NUL-free so malformed
+ * identifiers cannot enter the vault or duplicate-target check.
  */
 const TOKEN_ID = /^brt_[A-Za-z0-9_-]{1,64}$/;
 

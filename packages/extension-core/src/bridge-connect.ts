@@ -1,7 +1,7 @@
 /** Browser initiated account pairing (mcp-host X1, plan task X3). */
 import { toB64 } from '@fetchproxy/protocol';
 import { signWithExtensionIdentity, type ExtensionIdentity } from './extension-identity.js';
-import { post, gatewayOriginFor } from './bridge-binding.js';
+import { post, gatewayOriginFor } from './bridge-gateway.js';
 import { validateRemoteTargetToken, validateRemoteTargetUrl } from './remote-targets.js';
 import { BRIDGE_CONNECT_MESSAGE_TYPE, DEFAULT_BRIDGE_ORIGIN, isAllowedGatewayOrigin } from './bridge-connect-contract.js';
 

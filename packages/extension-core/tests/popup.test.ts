@@ -4,7 +4,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
   handoffBridgeView,
-  remoteTargetFromForm,
   renderPopup,
   type BridgesView,
   type PopupState,
@@ -1462,7 +1461,6 @@ describe('renderPopup — bridges', () => {
     withBridges({
       targets: [],
       handoff: { name: 'Safari on the Mac', url: 'wss://mcp.nullnet.app/bridge', connected: true },
-      onAdd: async () => null,
       onRemove: vi.fn(),
       onToggle: vi.fn(),
     });
@@ -1716,30 +1714,10 @@ describe('renderPopup — version mismatch (Task 4.3)', () => {
   });
 });
 
-describe('remoteTargetFromForm — the row the Bridges form saves', () => {
-  it('keeps a credential id, so the saved target binds on its first attach', () => {
-    expect(
-      remoteTargetFromForm('b1', { url: 'wss://h/b', token: 'mcpb_x', label: 'home', tokenId: 'brt_abc' }),
-    ).toEqual({ id: 'b1', url: 'wss://h/b', token: 'mcpb_x', label: 'home', enabled: true, tokenId: 'brt_abc' });
-  });
-
-  it('omits an empty label and an empty or malformed credential id', () => {
-    for (const tokenId of ['', 'nope']) {
-      expect(remoteTargetFromForm('b1', { url: 'wss://h/b', token: 'mcpb_x', label: '', tokenId })).toEqual({
-        id: 'b1',
-        url: 'wss://h/b',
-        token: 'mcpb_x',
-        enabled: true,
-      });
-    }
-  });
-});
-
 /**
- * mcp-host plan task C3a: "Confirm this browser" on a remote bridge row. The
- * person asks here; the confirmation itself happens on the gateway's page (or
- * in ContextMint). The popup has NO field that takes a completion or a
- * challenge — a forwarded link must complete nothing (red-team R4-3).
+ * The retired confirmation action stays absent. Pairing now starts through
+ * Connect when the remote target is created, with no completion or challenge
+ * pasted into the popup.
  */
 describe('renderPopup — retired confirmation action', () => {
   beforeEach(() => { document.body.innerHTML = '<div id="root"></div>'; });

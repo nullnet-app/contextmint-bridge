@@ -52,14 +52,14 @@ WebSocket. The request leaves your machine from Chrome, with your session.
 ### Connecting ContextMint
 
 ContextMint can host MCP servers for you rather than on your machine. To let
-them use this browser, add your ContextMint bridge under **Bridges** in the
-extension popup: paste the `wss://` address and the access token ContextMint
-gives you for this browser. ContextMint's servers then pair with this browser
-exactly like local ones — same pair code, same per-domain approval, same
-revoke button. Request and response contents are end-to-end encrypted between
-the extension and each MCP server, so the relay in between cannot read them.
-Remove or untick a bridge to disconnect it. None are configured until you add
-one.
+them use this browser, choose **Connect this browser to your account** in the
+extension popup and select ContextMint. A tab opens to ContextMint's Connect
+page; approve the browser there. The extension saves the resulting credential
+in its protected vault, so there is no access token to copy or paste. After
+pairing, ContextMint's servers use this browser with the same per-domain
+approval and revoke controls as local servers. Request and response contents
+are end-to-end encrypted between the extension and each MCP server, so the
+relay in between cannot read them.
 
 ### What an MCP server can do — only what you approved
 

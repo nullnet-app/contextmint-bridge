@@ -4,7 +4,7 @@ import { loadOrCreateExtensionIdentity } from '../src/extension-identity.js';
 import { freshVault, installChromeLocal } from './helpers/vault.js';
 import { settle } from './helpers/settle.js';
 
-/** The retired C2 bind action stays absent while the room's close handling remains tested below. */
+/** The retired bind endpoint stays unused while remote close handling remains covered. */
 
 class FakeSocket {
   static readonly CONNECTING = 0;
@@ -54,7 +54,7 @@ const { state } = await import('../src/background/state.js');
 const { links, linkStatuses, unbindAll } = await import('../src/background/links.js');
 const { TrustStore } = await import('../src/trust-store.js');
 const { SessionKeys } = await import('../src/session-keys.js');
-const { EXTENSION_MISMATCH_MESSAGE } = await import('../src/bridge-binding.js');
+const { EXTENSION_MISMATCH_MESSAGE } = await import('../src/bridge-gateway.js');
 
 const CREDENTIAL = 'mcpb_' + 'B'.repeat(43);
 const HANDOFF = {
@@ -105,7 +105,7 @@ afterEach(() => {
 });
 
 describe('retired browser-side credential binding', () => {
-  it('does not bind credentials after a remote socket opens', async () => {
+  it('does not call /bridge/bind when a remote socket opens', async () => {
     setHandoffTarget(HANDOFF);
     lastSocket(HANDOFF.url).open();
     await quiet();
@@ -160,5 +160,15 @@ describe('the room’s close codes', () => {
     for (const link of links.values()) link.nextAttemptAt = 0;
     connect();
     expect(socketsFor('ws://127.0.0.1:37149')).toHaveLength(before + 1);
+  });
+
+  it('4005 and 4006 immediately redial remote links without confirmation UI state', () => {
+    for (const code of [4005, 4006]) {
+      setHandoffTarget({ ...HANDOFF, id: `brt_${code}` });
+      const before = socketsFor(HANDOFF.url).length;
+      lastSocket(HANDOFF.url).remoteClose(code);
+      expect(socketsFor(HANDOFF.url)).toHaveLength(before + 1);
+      expect(linkStatuses().find((l) => l.url === HANDOFF.url)).not.toHaveProperty('confirm');
+    }
   });
 });

@@ -25,7 +25,6 @@ import {
 import {
   REMOTE_TARGETS_CHANGED,
   normaliseRemoteTargets,
-  isBridgeTokenId,
   type RemoteTarget,
 } from '../remote-targets.js';
 import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
@@ -248,32 +247,6 @@ export interface HandoffBridgeView {
   refusal?: string;
 }
 
-/** What the Bridges form hands `onAdd`: every field trimmed, `''` when blank. */
-export interface BridgeFormInput {
-  url: string;
-  token: string;
-  label: string;
-  /**
-   * The credential's mcp-host id (`brt_*`), shown beside the token when it
-   * was created. Optional, but without it a pasted credential is never bound
-   * to this browser (mcp-host plan task C2): binding signs over the id, and
-   * the id cannot be derived from the token.
-   */
-  tokenId: string;
-}
-
-/** The vault row the Bridges form saves. */
-export function remoteTargetFromForm(id: string, input: BridgeFormInput): RemoteTarget {
-  return {
-    id,
-    url: input.url,
-    token: input.token,
-    ...(input.label === '' ? {} : { label: input.label }),
-    enabled: true,
-    ...(isBridgeTokenId(input.tokenId) ? { tokenId: input.tokenId } : {}),
-  };
-}
-
 export interface BridgesView {
   targets: RemoteTargetView[];
   connectOrigins?: string[];
@@ -284,8 +257,6 @@ export interface BridgesView {
   handoff?: HandoffBridgeView;
   /** Whether the loopback link — the one every local MCP needs — is up. */
   localConnected?: boolean;
-  /** Save a new target. Returns an error string to show, or null on success. */
-  onAdd?: (input: BridgeFormInput) => Promise<string | null>;
   onRemove?: (id: string) => void;
   onToggle?: (id: string, enabled: boolean) => void;
 }
@@ -842,10 +813,9 @@ function statusDot(connected: boolean): HTMLElement {
  * it could would misdescribe what a remote target is (an addition, never a
  * replacement).
  *
- * Adding one is deliberately a two-field form with visible validation rather
- * than a paste-anything box: the URL decides who this browser's signed-in
- * sessions can be asked to act for, so a typo should fail here, in front of
- * the person making the decision, rather than in a reconnect loop.
+ * Connect offers the configured gateways as explicit choices and asks for a
+ * display name. The browser completes pairing through the gateway; no token or
+ * bridge URL is pasted into this popup.
  */
 function appendBridges(root: HTMLElement, bridges: BridgesView): void {
   root.appendChild(elem('h3', {}, 'Bridges'));
