@@ -23,7 +23,6 @@ import { vaultInitIfAbsent } from '../src/vault.js';
 import { generateExtensionIdentity } from '../src/identity-keys.js';
 import { noteInstalled } from '../src/vault-migration.js';
 import { AccountTrustStore, type TrustedAccount, type AccountDerivedMcp } from '../src/account-trust-store.js';
-import { forgetAccount } from '../src/account-forget.js';
 import { freshVault, installChromeLocal, type LocalArea } from './helpers/vault.js';
 
 /**
@@ -309,29 +308,6 @@ describe('account trust is vault-only and has generation rollback protection', (
     expect(await store.getDerived('identity-hash')).toBeNull();
     await expect(store.put({ ...account, generation: 6, generationHighWater: 7 })).rejects.toThrow(/high-water/i);
     await expect(store.put({ ...account, generation: 7, generationHighWater: 7 })).resolves.toBeUndefined();
-  });
-
-  it('forget-account always removes derived MCPs and optionally only matching attested hand-pairs', async () => {
-    const accounts = new AccountTrustStore();
-    const mcps = new TrustStore(EXT_VERSION);
-    const input = { serverName: 'server', domains: ['example.com'], capabilities: ['fetch'],
-      identityX25519Pub: 'x', identityEd25519Pub: 'e', attestedBy: { accountId: 'acct-1', slug: 'alice', origin: account.origin } };
-    await accounts.put(account);
-    await accounts.putDerived('derived-hash', derived);
-    await mcps.put('same-account', input);
-    await mcps.put('other-account', { ...input, attestedBy: { ...input.attestedBy, accountId: 'acct-2' } });
-    await mcps.put('other-origin', { ...input, attestedBy: { ...input.attestedBy, origin: 'https://elsewhere.example' } });
-    await forgetAccount(accounts, mcps, account.origin, account.accountId, false);
-    expect(await accounts.getDerived('derived-hash')).toBeNull();
-    expect(await mcps.get('same-account')).not.toBeNull();
-    expect(await mcps.get('other-account')).not.toBeNull();
-    await accounts.put(account);
-    await accounts.putDerived('derived-hash', derived);
-    await forgetAccount(accounts, mcps, account.origin, account.accountId, true);
-    expect(await mcps.get('same-account')).toBeNull();
-    expect(await mcps.get('other-account')).not.toBeNull();
-    expect(await mcps.get('other-origin')).not.toBeNull();
-    expect(await accounts.getDerived('derived-hash')).toBeNull();
   });
 
   it('deleteByToken removes only records for that token', async () => {

@@ -463,11 +463,6 @@ export async function onServerHello(
       } catch (error) {
         console.warn('[fetchproxy] could not save MCP account provenance:', error);
       }
-      if (accountEpoch !== null && origin && attestation &&
-          accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
-        revokeHelloSession(result.mcpId, link);
-        return;
-      }
     }
     if (accountEpoch !== null && origin && attestation &&
         accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {

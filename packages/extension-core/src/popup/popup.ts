@@ -181,6 +181,7 @@ export interface TrustedSummary {
    */
   connected?: boolean;
   source?: { slug: string; origin: string };
+  accountDerived?: boolean;
   isNew?: boolean;
   alwaysAsk?: boolean;
 }
@@ -200,6 +201,7 @@ export function mergeTrustedSummaries(
       capabilities: record.capabilities ? [...record.capabilities] : ['fetch'],
       connected: connectedHashes.has(identityHash),
       ...(derived ? {
+        accountDerived: true,
         source: { slug: derived.slug, origin: derived.origin },
         alwaysAsk: !!derived.alwaysAsk,
       } : record.attestedBy ? { source: { slug: record.attestedBy.slug, origin: record.attestedBy.origin } } : {}),
@@ -338,8 +340,8 @@ export type PopupState =
       onRevoke?: (identityHash: string) => void;
       accounts?: AccountSummary[];
       onAlwaysAsk?: (identityHash: string, enabled: boolean) => void;
-      onForget?: (identityHash: string) => void;
-      onForgetAccount?: (origin: string, accountId: string, alsoForgetMcps: boolean) => void;
+      onForget?: (identityHash: string) => void | Promise<boolean>;
+      onForgetAccount?: (origin: string, accountId: string, alsoForgetMcps: boolean) => void | Promise<boolean>;
     }
   | {
       mode: 'pending-pair';
@@ -806,7 +808,7 @@ function buildTrustedEntry(
   t: TrustedSummary,
   onRevoke?: (identityHash: string) => void,
   onAlwaysAsk?: (identityHash: string, enabled: boolean) => void,
-  onForget?: (identityHash: string) => void,
+  onForget?: (identityHash: string) => void | Promise<boolean>,
 ): HTMLLIElement {
   const li = elem('li', { class: 'trusted-entry' });
   // Connection-status dot — only when `connected` is explicitly set, so
@@ -825,14 +827,18 @@ function buildTrustedEntry(
   );
   li.appendChild(elem('span', { class: 'trusted-source' }, t.source ? `via ${t.source.slug} on ${t.source.origin}` : 'on this computer'));
   if (t.isNew) li.appendChild(elem('span', { class: 'trusted-new' }, 'new'));
-  if (t.identityHash && onAlwaysAsk) {
+  if (t.identityHash && t.accountDerived && onAlwaysAsk) {
     const ask = elem('button', { 'data-action': 'always-ask', 'aria-pressed': String(!!t.alwaysAsk) }, t.alwaysAsk ? 'stop always asking' : 'always ask');
     ask.addEventListener('click', () => onAlwaysAsk(t.identityHash!, !t.alwaysAsk));
     li.appendChild(ask);
   }
   if (t.identityHash && onForget) {
     const forget = elem('button', { 'data-action': 'forget-mcp' }, 'forget this MCP');
-    forget.addEventListener('click', () => onForget(t.identityHash!));
+    forget.addEventListener('click', () => {
+      void Promise.resolve(onForget(t.identityHash!)).then((ok) => {
+        if (ok === false) li.appendChild(elem('p', { role: 'alert', class: 'action-error' }, 'Could not forget this MCP. Try again.'));
+      });
+    });
     li.appendChild(forget);
   }
   // Revoke button — only when both an onRevoke callback and an identityHash
@@ -1057,47 +1063,46 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
     root.appendChild(elem('h3', {}, 'Trusted MCPs'));
     if (state.trusted.length === 0) {
       root.appendChild(elem('p', { class: 'hint' }, 'No trusted MCPs yet.'));
-      if (state.bridges) appendBridges(root, state.bridges);
-      return;
-    }
-    const onRevoke = state.onRevoke;
-    // Alphabetical by serverName (case-insensitive), stable within a group.
-    const byName = (a: TrustedSummary, b: TrustedSummary): number =>
-      a.serverName.localeCompare(b.serverName, undefined, { sensitivity: 'base' });
-    const sorted = [...state.trusted].sort(byName);
+    } else {
+      const onRevoke = state.onRevoke;
+      // Alphabetical by serverName (case-insensitive), stable within a group.
+      const byName = (a: TrustedSummary, b: TrustedSummary): number =>
+        a.serverName.localeCompare(b.serverName, undefined, { sensitivity: 'base' });
+      const sorted = [...state.trusted].sort(byName);
 
-    const buildList = (entries: TrustedSummary[]): HTMLElement => {
-      const ul = elem('ul', { class: 'trusted-list' });
-      for (const t of entries) ul.appendChild(buildTrustedEntry(t, onRevoke, state.onAlwaysAsk, state.onForget));
-      return ul;
-    };
+      const buildList = (entries: TrustedSummary[]): HTMLElement => {
+        const ul = elem('ul', { class: 'trusted-list' });
+        for (const t of entries) ul.appendChild(buildTrustedEntry(t, onRevoke, state.onAlwaysAsk, state.onForget));
+        return ul;
+      };
 
     // Split into Active (currently connected) / Inactive only when the
     // background supplied connection info (≥1 entry has `connected` set).
     // Legacy callers / unit tests with no connection info get a single
     // sorted list, unchanged. A header is rendered only for a non-empty
     // section, so all-active shows just "Active" and vice versa.
-    const hasConnInfo = sorted.some((t) => t.connected !== undefined);
-    if (hasConnInfo) {
-      const active = sorted.filter((t) => t.connected === true);
-      const inactive = sorted.filter((t) => t.connected !== true);
-      if (active.length > 0) {
-        root.appendChild(elem('h4', { class: 'trusted-section' }, `Active (${active.length})`));
-        root.appendChild(buildList(active));
+      const hasConnInfo = sorted.some((t) => t.connected !== undefined);
+      if (hasConnInfo) {
+        const active = sorted.filter((t) => t.connected === true);
+        const inactive = sorted.filter((t) => t.connected !== true);
+        if (active.length > 0) {
+          root.appendChild(elem('h4', { class: 'trusted-section' }, `Active (${active.length})`));
+          root.appendChild(buildList(active));
+        }
+        if (inactive.length > 0) {
+          // Collapsed by default — the currently-connected (Active) MCPs are
+          // what matter day-to-day; the rest tuck behind a native <details>
+          // disclosure the user can expand. No `open` attr ⇒ starts closed.
+          const details = elem('details', { class: 'trusted-inactive' });
+          details.appendChild(
+            elem('summary', { class: 'trusted-section' }, `Inactive (${inactive.length})`),
+          );
+          details.appendChild(buildList(inactive));
+          root.appendChild(details);
+        }
+      } else {
+        root.appendChild(buildList(sorted));
       }
-      if (inactive.length > 0) {
-        // Collapsed by default — the currently-connected (Active) MCPs are
-        // what matter day-to-day; the rest tuck behind a native <details>
-        // disclosure the user can expand. No `open` attr ⇒ starts closed.
-        const details = elem('details', { class: 'trusted-inactive' });
-        details.appendChild(
-          elem('summary', { class: 'trusted-section' }, `Inactive (${inactive.length})`),
-        );
-        details.appendChild(buildList(inactive));
-        root.appendChild(details);
-      }
-    } else {
-      root.appendChild(buildList(sorted));
     }
     if (state.accounts?.length) {
       root.appendChild(elem('h3', {}, 'Accounts'));
@@ -1109,7 +1114,11 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
         label.append(also, document.createTextNode(' also forget MCPs from this account'));
         row.appendChild(label);
         const forget = elem('button', { 'data-action': 'forget-account' }, 'forget this account');
-        forget.addEventListener('click', () => state.onForgetAccount?.(account.origin, account.accountId, also.checked));
+        forget.addEventListener('click', () => {
+          void Promise.resolve(state.onForgetAccount?.(account.origin, account.accountId, also.checked)).then((ok) => {
+            if (ok === false) row.appendChild(elem('p', { role: 'alert', class: 'action-error' }, 'Could not forget this account. Try again.'));
+          });
+        });
         row.appendChild(forget);
         root.appendChild(row);
       }
@@ -1714,7 +1723,7 @@ async function bootstrap(): Promise<void> {
     for (const [identityHash, derived] of Object.entries(derivedRecords)) {
       if (records[identityHash]) continue;
       trustedList.push({ identityHash, serverName: derived.slug, domains: [...(derived.approvedScope?.domains ?? derived.scope.domains)],
-        connected: connectedHashes.has(identityHash), source: { slug: derived.slug, origin: derived.origin },
+        connected: connectedHashes.has(identityHash), accountDerived: true, source: { slug: derived.slug, origin: derived.origin },
         alwaysAsk: !!derived.alwaysAsk, ...(Date.now() - derived.firstSeenAt < 15 * 60_000 ? { isNew: true } : {}) });
     }
     const bridges = await bridgesView(links);
@@ -1742,17 +1751,24 @@ async function bootstrap(): Promise<void> {
       const onRevoke = (identityHash: string): void => {
         void (async () => { await chrome.runtime?.sendMessage?.({ type: 'forget-mcp', identityHash }); await refresh(); })();
       };
-      const onForget = (identityHash: string): void => {
-        void (async () => { await chrome.runtime?.sendMessage?.({ type: 'forget-mcp', identityHash }); await refresh(); })();
+      const onForget = async (identityHash: string): Promise<boolean> => {
+        try {
+          const response = await chrome.runtime?.sendMessage?.({ type: 'forget-mcp', identityHash }) as { ok?: unknown } | undefined;
+          if (response?.ok !== true) return false;
+          await refresh();
+          return true;
+        } catch { return false; }
       };
       const onAlwaysAsk = (identityHash: string, enabled: boolean): void => {
         void accountTrust.setAlwaysAsk(identityHash, enabled).then(renderTrustedStatus);
       };
-      const onForgetAccount = (origin: string, accountId: string, alsoForgetMcps: boolean): void => {
-        void (async () => {
-          await chrome.runtime?.sendMessage?.({ type: 'forget-account', origin, accountId, alsoForgetMcps });
+      const onForgetAccount = async (origin: string, accountId: string, alsoForgetMcps: boolean): Promise<boolean> => {
+        try {
+          const response = await chrome.runtime?.sendMessage?.({ type: 'forget-account', origin, accountId, alsoForgetMcps }) as { ok?: unknown } | undefined;
+          if (response?.ok !== true) return false;
           await renderTrustedStatus();
-        })();
+          return true;
+        } catch { return false; }
       };
       renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, onForget, onAlwaysAsk, accounts, onForgetAccount, bridges, mismatches });
     }
