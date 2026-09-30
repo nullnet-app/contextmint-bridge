@@ -224,7 +224,10 @@ describe('account trust is vault-only and has generation rollback protection', (
   };
   const derived: AccountDerivedMcp = {
     origin: account.origin, accountId: account.accountId, registrationId: 'reg-1', slug: 'alice',
-    scope: ['read'], firstSeenAt: 10, lastSeenAt: 11,
+    scope: { domains: ['example.com'], capabilities: ['fetch'], cookieKeys: [], localStorageKeys: [],
+      sessionStorageKeys: [], captureHeaders: [], indexedDbScopes: [], domSelectors: [],
+      domListSelectors: [], graphqlOps: [], localStoragePointers: [], sessionStoragePointers: [] },
+    firstSeenAt: 10, lastSeenAt: 11,
   };
   beforeEach(async () => {
     freshVault();

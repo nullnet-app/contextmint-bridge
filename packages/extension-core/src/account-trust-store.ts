@@ -1,6 +1,7 @@
 /** Vault-only trust records for account credentials and account-derived MCPs. */
 import { vaultGet, vaultUpdate, vaultUpdateMany } from './vault.js';
 import { ensureVault } from './vault-migration.js';
+import type { AccountScope } from './lib/scope.js';
 
 export interface TrustedAccount {
   origin: string;
@@ -20,8 +21,8 @@ export interface AccountDerivedMcp {
   accountId: string;
   registrationId: string;
   slug: string;
-  scope: string[];
-  approvedScope?: string[];
+  scope: AccountScope;
+  approvedScope?: AccountScope;
   firstSeenAt: number;
   lastSeenAt: number;
   alwaysAsk?: boolean;
@@ -43,6 +44,14 @@ function assertGeneration(value: unknown, name: string): asserts value is number
 
 /** Account credentials never come from, or migrate out of, storage.local. */
 export class AccountTrustStore {
+  async getHighWater(origin: string, accountId: string): Promise<number> {
+    await ensureVault();
+    const key = accountKey(origin, accountId);
+    const marks = records<number>(await vaultGet('accountGenerationHighWater'));
+    const stored = records<TrustedAccount>(await vaultGet('trustedAccounts'));
+    return Math.max(marks[key] ?? 0, stored[key]?.generationHighWater ?? 0);
+  }
+
   async get(origin: string, accountId: string): Promise<TrustedAccount | null> {
     await ensureVault();
     return records<TrustedAccount>(await vaultGet('trustedAccounts'))[accountKey(origin, accountId)] ?? null;
@@ -73,40 +82,106 @@ export class AccountTrustStore {
     if (refused) throw new Error('generation is below the high-water mark');
   }
 
+  /** Write account trust and consume a target's Connect-click consent atomically. */
+  async putApproved(account: TrustedAccount, targetId: string, requireConnectApproval = false): Promise<boolean> {
+    assertGeneration(account?.generation, 'generation');
+    if (account.generationHighWater !== undefined) assertGeneration(account.generationHighWater, 'generationHighWater');
+    await ensureVault();
+    const key = accountKey(account.origin, account.accountId);
+    let refused = false;
+    let connected = false;
+    await vaultUpdateMany(['trustedAccounts', 'accountGenerationHighWater', 'remoteBridges'], (current) => {
+      const stored = records<TrustedAccount>(current.trustedAccounts);
+      const highWater = records<number>(current.accountGenerationHighWater);
+      const targets = Array.isArray(current.remoteBridges) ? [...current.remoteBridges] : [];
+      const targetIndex = targets.findIndex((value) => {
+        if (!value || typeof value !== 'object') return false;
+        const row = value as Record<string, unknown>;
+        if (row.id !== targetId || row.tokenId !== account.tokenId) return false;
+        try {
+          const url = new URL(String(row.url));
+          const origin = url.protocol === 'wss:' ? `https://${url.host}` : url.protocol === 'ws:' ? `http://${url.host}` : '';
+          return origin === account.origin;
+        } catch { return false; }
+      });
+      const target = targetIndex >= 0 ? targets[targetIndex] as Record<string, unknown> : undefined;
+      if (requireConnectApproval && (!target || target.connectApproved !== true ||
+        !target.connectAccount || typeof target.connectAccount !== 'object' ||
+        (target.connectAccount as Record<string, unknown>).slug !== account.slug ||
+        (target.connectAccount as Record<string, unknown>).displayName !== account.displayName)) {
+        refused = true;
+        return { values: { trustedAccounts: current.trustedAccounts, accountGenerationHighWater: current.accountGenerationHighWater, remoteBridges: current.remoteBridges }, result: undefined };
+      }
+      const mark = Math.max(highWater[key] ?? 0, stored[key]?.generationHighWater ?? 0);
+      if (account.generation < mark) {
+        refused = true;
+        return { values: { trustedAccounts: current.trustedAccounts, accountGenerationHighWater: current.accountGenerationHighWater, remoteBridges: current.remoteBridges }, result: undefined };
+      }
+      stored[key] = { ...account, generationHighWater: Math.max(mark, account.generation) };
+      highWater[key] = Math.max(mark, account.generation);
+      if (target) {
+        const nextTarget = { ...target };
+        delete nextTarget.connectApproved;
+        delete nextTarget.connectAccount;
+        targets[targetIndex] = nextTarget;
+      }
+      connected = true;
+      return { values: { trustedAccounts: stored, accountGenerationHighWater: highWater, remoteBridges: targets }, result: undefined };
+    });
+    if (refused) return false;
+    return connected;
+  }
+
   async deleteByToken(tokenId: string): Promise<void> {
     await ensureVault();
-    await vaultUpdateMany(['trustedAccounts', 'accountGenerationHighWater', 'accountDerivedMcps'], (current) => {
+    await vaultUpdateMany(['trustedAccounts', 'accountGenerationHighWater', 'accountDerivedMcps', 'remoteBridges'], (current) => {
       const accounts = records<TrustedAccount>(current.trustedAccounts);
       const marks = records<number>(current.accountGenerationHighWater);
       const derived = records<AccountDerivedMcp>(current.accountDerivedMcps);
+      const targets = Array.isArray(current.remoteBridges) ? [...current.remoteBridges] : [];
       const removed = new Set<string>();
+      const tokens = new Set<string>([tokenId]);
       for (const [key, account] of Object.entries(accounts)) {
         if (account.tokenId !== tokenId) continue;
         removed.add(key);
+        tokens.add(account.tokenId);
         marks[key] = Math.max(marks[key] ?? 0, account.generationHighWater, account.generation);
         delete accounts[key];
       }
       for (const [hash, mcp] of Object.entries(derived)) {
         if (removed.has(accountKey(mcp.origin, mcp.accountId))) delete derived[hash];
       }
-      return { values: { trustedAccounts: accounts, accountGenerationHighWater: marks, accountDerivedMcps: derived }, result: undefined };
+      const nextTargets = targets.map((value) => {
+        if (!value || typeof value !== 'object') return value;
+        const target = value as Record<string, unknown>;
+        if (!tokens.has(String(target.tokenId)) || target.connectApproved !== true) return value;
+        const next = { ...target }; delete next.connectApproved; delete next.connectAccount; return next;
+      });
+      return { values: { trustedAccounts: accounts, accountGenerationHighWater: marks, accountDerivedMcps: derived, remoteBridges: nextTargets }, result: undefined };
     });
   }
 
   async deleteByAccount(origin: string, accountId: string): Promise<void> {
     await ensureVault();
     const key = accountKey(origin, accountId);
-    await vaultUpdateMany(['trustedAccounts', 'accountGenerationHighWater', 'accountDerivedMcps'], (current) => {
+    await vaultUpdateMany(['trustedAccounts', 'accountGenerationHighWater', 'accountDerivedMcps', 'remoteBridges'], (current) => {
       const accounts = records<TrustedAccount>(current.trustedAccounts);
       const marks = records<number>(current.accountGenerationHighWater);
       const derived = records<AccountDerivedMcp>(current.accountDerivedMcps);
+      const targets = Array.isArray(current.remoteBridges) ? [...current.remoteBridges] : [];
       const existing = accounts[key];
       if (existing) marks[key] = Math.max(marks[key] ?? 0, existing.generationHighWater, existing.generation);
       delete accounts[key];
       for (const [hash, mcp] of Object.entries(derived)) {
         if (mcp.origin === origin && mcp.accountId === accountId) delete derived[hash];
       }
-      return { values: { trustedAccounts: accounts, accountGenerationHighWater: marks, accountDerivedMcps: derived }, result: undefined };
+      const nextTargets = existing ? targets.map((value) => {
+        if (!value || typeof value !== 'object') return value;
+        const target = value as Record<string, unknown>;
+        if (target.tokenId !== existing.tokenId || target.connectApproved !== true) return value;
+        const next = { ...target }; delete next.connectApproved; delete next.connectAccount; return next;
+      }) : targets;
+      return { values: { trustedAccounts: accounts, accountGenerationHighWater: marks, accountDerivedMcps: derived, remoteBridges: nextTargets }, result: undefined };
     });
   }
 

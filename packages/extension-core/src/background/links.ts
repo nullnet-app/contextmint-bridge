@@ -24,6 +24,7 @@
  */
 
 import type { RemoteTarget } from '../remote-targets.js';
+import type { AccountAttestFrame } from '@fetchproxy/protocol';
 
 export const LOCAL_LINK_ID = 'local';
 
@@ -54,6 +55,8 @@ export interface Link {
    * signature the MCP correctly rejects.
    */
   sessionNonce: Uint8Array | null;
+  /** One-use attestations received since this link's current extension hello. */
+  accountAttestations: Map<string, AccountAttestFrame>;
   /** True once this link has been removed from the registry; stops reconnects. */
   closed: boolean;
   /**
@@ -62,6 +65,12 @@ export interface Link {
    * the popup as "from ContextMint" rather than as an editable row.
    */
   readonly handoff: boolean;
+  readonly targetId?: string;
+  /** Credential identity, used to bind account-key frames to this live link. */
+  readonly tokenId?: string;
+  /** Connect-click consent applies only to the new account named by this credential. */
+  connectApproved?: true;
+  connectAccount?: { slug: string; displayName: string };
   /**
    * Why the bridge refused this browser for good — set on a `4004
    * EXTENSION_MISMATCH` close. A refused link is never dialled again; only a
@@ -104,8 +113,11 @@ export function localLink(): Link {
     reconnectAttempt: 0,
     nextAttemptAt: 0,
     sessionNonce: null,
+    accountAttestations: new Map(),
     closed: false,
     handoff: false,
+    targetId: undefined,
+    tokenId: undefined,
     refusal: null,
     lastImmediateRedialAt: 0,
   };
@@ -122,8 +134,13 @@ export function remoteLink(target: RemoteTarget, protocols: string[], handoff = 
     reconnectAttempt: 0,
     nextAttemptAt: 0,
     sessionNonce: null,
+    accountAttestations: new Map(),
     closed: false,
     handoff,
+    targetId: target.id,
+    ...(target.tokenId ? { tokenId: target.tokenId } : {}),
+    ...(target.connectApproved ? { connectApproved: true as const } : {}),
+    ...(target.connectAccount ? { connectAccount: target.connectAccount } : {}),
     refusal: null,
     lastImmediateRedialAt: 0,
   };
@@ -178,6 +195,24 @@ export function unbindAll(): void {
   mcpLink.clear();
 }
 
+export function storeAccountAttestation(link: Link, frame: AccountAttestFrame): boolean {
+  if (link.kind !== 'remote' || !link.tokenId || frame.tokenId !== link.tokenId) return false;
+  link.accountAttestations.set(frame.mcpId, frame);
+  return true;
+}
+
+/** Take exactly once; entries cannot cross link boundaries. */
+export function takeAccountAttestation(link: Link, mcpId: string): AccountAttestFrame | undefined {
+  const attestation = link.accountAttestations.get(mcpId);
+  link.accountAttestations.delete(mcpId);
+  return attestation;
+}
+
+/** Called immediately before sending a fresh extension hello. */
+export function clearAccountAttestations(link: Link): void {
+  link.accountAttestations.clear();
+}
+
 /** What the popup shows for one bridge: which it is, and whether it is up. */
 export interface LinkStatus {
   id: string;
@@ -215,7 +250,9 @@ export function linkStatuses(): LinkStatus[] {
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
     });
   }
-  return out.sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1));
+  return out.sort((a, b) =>
+    a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1,
+  );
 }
 
 /** True while at least one link has an open socket. */

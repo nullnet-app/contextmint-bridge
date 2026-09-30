@@ -27,11 +27,9 @@ import {
   normaliseRemoteTargets,
   type RemoteTarget,
 } from '../remote-targets.js';
-import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 import { currentPlatform } from '../platform.js';
 import { DEFAULT_BRIDGE_ORIGIN } from '../bridge-connect-contract.js';
-
-const HIGH_RISK_KEYWORDS = ['bank', 'gov', 'mil'];
+import { HIGH_RISK_KEYWORDS } from '../lib/scope.js';
 
 /**
  * UI labels for the inner-verb capabilities surfaced in the pair popup.
@@ -95,6 +93,7 @@ export interface PreviousScope {
 }
 
 export interface PendingPair {
+  vouched?: false;
   serverName: string;
   version: string;
   /**
@@ -262,6 +261,23 @@ export interface BridgesView {
 }
 
 export type PopupState =
+  | {
+      mode: 'account-mcp-card';
+      card: { key: string; kind: 'confirm' | 'scope-update'; registrationSlug: string; accountSlug: string; origin: string; scope: import('../lib/scope.js').AccountScope };
+      onApprove: () => void;
+      onNotNow: () => void;
+    }
+  | {
+      mode: 'account-card';
+      card: {
+        key: string;
+        origin: string;
+        keyChanged: boolean;
+        account: { slug: string; displayName: string; confirmedBy: string; bridgedRegistrations: number; kid: string };
+      };
+      onApprove: () => void;
+      onNotNow: () => void;
+    }
   | {
       mode: 'empty';
       bridges?: BridgesView;
@@ -927,6 +943,59 @@ function appendVersionMismatches(root: HTMLElement, list: readonly VersionMismat
 export function renderPopup(root: HTMLElement, state: PopupState): void {
   root.innerHTML = '';
 
+  if (state.mode === 'account-mcp-card') {
+    const c = state.card;
+    root.appendChild(elem('h3', {}, c.kind === 'scope-update'
+      ? `${c.registrationSlug} wants wider access through ${c.accountSlug}`
+      : `${c.registrationSlug} wants to act as ${c.accountSlug}`));
+    root.appendChild(elem('p', {}, `On ${c.scope.domains.map((d) => `${d} and its subdomains`).join(', ')} via ${c.origin}.`));
+    const requested = [
+      ...c.scope.capabilities,
+      ...c.scope.cookieKeys.map((key) => `cookie ${key}`),
+      ...c.scope.localStorageKeys.map((key) => `localStorage ${key}`),
+      ...c.scope.sessionStorageKeys.map((key) => `sessionStorage ${key}`),
+      ...c.scope.captureHeaders.map((h) => `header ${h.headerName} on ${h.host}`),
+      ...c.scope.indexedDbScopes.map((d) => `IndexedDB ${d.database}/${d.store} on ${d.origin}`),
+      ...c.scope.domSelectors.map((d) => `DOM ${d.name}`),
+      ...c.scope.domListSelectors.map((d) => `DOM list ${d.name}`),
+      ...c.scope.graphqlOps.map((d) => `GraphQL ${d.name}`),
+      ...c.scope.localStoragePointers.map((d) => `localStorage pointer ${d.key}${d.jsonPointer}`),
+      ...c.scope.sessionStoragePointers.map((d) => `sessionStorage pointer ${d.key}${d.jsonPointer}`),
+    ];
+    root.appendChild(elem('p', { class: 'hint' }, `Requested access: ${requested.join(', ') || 'none'}.`));
+    const actions = elem('div', { class: 'account-card-actions' });
+    const approve = elem('button', { 'data-action': 'allow-account-mcp' }, c.kind === 'scope-update' ? 'Grant' : 'Allow');
+    approve.addEventListener('click', state.onApprove);
+    const notNow = elem('button', { 'data-action': 'deny-account-mcp' }, 'Not now');
+    notNow.addEventListener('click', state.onNotNow);
+    actions.append(approve, notNow);
+    root.appendChild(actions);
+    return;
+  }
+
+  if (state.mode === 'account-card') {
+    const name = state.card.account.displayName;
+    root.appendChild(elem('h3', {}, state.card.keyChanged ? `The account key for ${name} changed. Approve again?` : 'Use this account in your browser?'));
+    root.appendChild(elem('p', { class: 'hint' }, `Use your browser for every MCP in ${state.card.account.slug}, including ones you add later, on the sites you approve for each.`));
+    const details = elem('dl', { class: 'account-card-details' });
+    const row = (label: string, value: string): void => { details.appendChild(elem('dt', {}, label)); details.appendChild(elem('dd', {}, value)); };
+    row('Account', `${name} (${state.card.account.slug})`);
+    row('Confirmed by', state.card.account.confirmedBy);
+    row('Gateway', state.card.origin);
+    row('Bridged registrations', String(state.card.account.bridgedRegistrations));
+    row('Key fingerprint', state.card.account.kid);
+    root.appendChild(details);
+    root.appendChild(elem('p', { class: 'hint' }, 'The bridge only reads a tab when an MCP asks, and only on sites approved for that MCP.'));
+    const actions = elem('div', { class: 'account-card-actions' });
+    const approve = elem('button', { 'data-action': 'approve-account' }, 'Approve');
+    approve.addEventListener('click', state.onApprove);
+    const notNow = elem('button', { 'data-action': 'dismiss-account' }, 'Not now');
+    notNow.addEventListener('click', state.onNotNow);
+    actions.append(approve, notNow);
+    root.appendChild(actions);
+    return;
+  }
+
   if (state.mode === 'empty') {
     appendVersionMismatches(root, state.mismatches ?? []);
     root.appendChild(
@@ -1126,6 +1195,10 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
     );
   }
 
+  if (pending.vouched === false) {
+    root.appendChild(elem('p', { class: 'warn' }, 'Not vouched for by your account. The code is printed by the MCP, which you may not be able to see.'));
+  }
+
   root.appendChild(elem('div', { class: 'pair-code' }, pending.pairCode));
 
   root.appendChild(
@@ -1161,6 +1234,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
 interface PendingPairRecord {
   key: string;
   kind: 'pair';
+  vouched?: false;
   identityHash: string;
   mcpIds: string[];
   sessionNonces: Record<string, string>;
@@ -1314,7 +1388,37 @@ async function bootstrap(): Promise<void> {
   // re-reading from storage (storage gets the write but we want immediate
   // visual feedback, before the next popup open).
   const renderNext = async (): Promise<void> => {
-    const got = await queue.get(['pendingPair']);
+    const got = await queue.get(['pendingPair', 'pendingAccountCards', 'pendingAccountMcpCards']);
+    const mcpCards = got['pendingAccountMcpCards'] && typeof got['pendingAccountMcpCards'] === 'object'
+      ? got['pendingAccountMcpCards'] as Record<string, { key: string; kind: 'confirm' | 'scope-update'; registrationSlug: string; accountSlug: string; origin: string; scope: import('../lib/scope.js').AccountScope }>
+      : {};
+    const mcpCard = Object.values(mcpCards).sort((a, b) => a.key.localeCompare(b.key))[0];
+    if (mcpCard) {
+      const decide = async (allow: boolean): Promise<void> => {
+        try { await chrome.runtime?.sendMessage?.({ type: 'account-mcp-card-decision', key: mcpCard.key, allow }); }
+        finally { await renderNext(); }
+      };
+      renderPopup(root, { mode: 'account-mcp-card', card: {
+        key: mcpCard.key, kind: mcpCard.kind, registrationSlug: mcpCard.registrationSlug, accountSlug: mcpCard.accountSlug,
+        origin: mcpCard.origin, scope: mcpCard.scope,
+      }, onApprove: () => { void decide(true); }, onNotNow: () => { void decide(false); } });
+      return;
+    }
+    const cards = got['pendingAccountCards'] && typeof got['pendingAccountCards'] === 'object'
+      ? got['pendingAccountCards'] as Record<string, { key: string; origin: string; keyChanged: boolean; account: { slug: string; displayName: string; confirmedBy: string; bridgedRegistrations: number; kid: string } }>
+      : {};
+    const accountCard = Object.values(cards).sort((a, b) => a.key.localeCompare(b.key))[0];
+    if (accountCard) {
+      const decide = async (approve: boolean): Promise<void> => {
+        try { await chrome.runtime?.sendMessage?.({ type: 'account-card-decision', key: accountCard.key, approve }); }
+        finally { await renderNext(); }
+      };
+      renderPopup(root, {
+        mode: 'account-card', card: accountCard,
+        onApprove: () => { void decide(true); }, onNotNow: () => { void decide(false); },
+      });
+      return;
+    }
     const dict = readPendingDict(got['pendingPair']);
     const entries = Object.values(dict);
     if (entries.length === 0) {
@@ -1401,6 +1505,7 @@ async function bootstrap(): Promise<void> {
     renderPopup(root, {
       mode: 'pending-pair',
       pending: {
+        ...(pending.vouched === false ? { vouched: false as const } : {}),
         serverName: pending.serverName,
         version: pending.version,
         domains: [...pending.domains],
@@ -1570,7 +1675,7 @@ async function bootstrap(): Promise<void> {
           .remove(identityHash)
           // Audit #1003: stop loading the page bridge on hosts no approved
           // MCP reaches any more.
-          .then(() => syncMainWorldBridgeFromTrust(trust2))
+          .then(() => chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' }))
           .then(() => renderTrustedStatus());
       };
       renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, bridges, mismatches });
@@ -1579,13 +1684,7 @@ async function bootstrap(): Promise<void> {
 
   // Branch: pending pairs take precedence over the status list. If no
   // pending pairs, render the trusted-MCPs status view.
-  const got0 = await queue.get(['pendingPair']);
-  const dict0 = readPendingDict(got0['pendingPair']);
-  if (Object.keys(dict0).length > 0) {
-    await renderNext();
-  } else {
-    await renderTrustedStatus();
-  }
+  await renderNext();
 
   // Part 3: listen for connection-change notifications from the background
   // service worker. When a session comes up or tears down, re-render the
@@ -1598,7 +1697,7 @@ async function bootstrap(): Promise<void> {
         typeof msg === 'object' &&
         (msg as { type?: unknown }).type === 'connections-changed'
       ) {
-        void renderTrustedStatus();
+        void renderNext();
       }
     });
   }

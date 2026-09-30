@@ -21,6 +21,10 @@ import {
   toHex,
   HKDF_SESSION_INFO,
   UNSUPPORTED_CAPABILITY_REASON_PREFIX,
+  accountAttestPayload,
+  accountKeyId,
+  scopeDigest,
+  type AccountAttestFrame,
   type Capability,
   type GraphqlOpDeclaration,
   type IndexedDbScopeDecl,
@@ -30,7 +34,9 @@ import {
   type HelloFrameFromServer,
 } from '@fetchproxy/protocol';
 import type { TrustStore } from '../trust-store.js';
-import { intersectScope, isScopeSubset } from '../lib/scope.js';
+import type { TrustedAccount } from '../account-trust-store.js';
+import type { AccountDerivedMcp } from '../account-trust-store.js';
+import { HIGH_RISK_KEYWORDS, intersectDomains, intersectScope, isDomainSubset, isScopeSubset, type AccountScope } from '../lib/scope.js';
 import { enc } from '../lib/text.js';
 
 // -------------------------------------------------------------------
@@ -67,12 +73,31 @@ export interface HandleHelloDeps {
    * MCP of which nothing is servable is refused.
    */
   unavailableCapabilities?: ReadonlySet<Capability>;
+  /** Account trust is link-scoped by the caller; absent on local links. */
+  account?: { record: TrustedAccount; origin: string; tokenId: string };
+  remoteAccountLink?: boolean;
+  accountDerived?: AccountDerivedMcp | null;
+  /** A previously granted confirm-each scope held in storage.session. */
+  sessionApprovedScope?: AccountScope;
+  /** A single approved hello replayed after its one-tap card. */
+  approvedOnceScope?: AccountScope;
+  /** The one-use attestation consumed from this link for this mcpId. */
+  attestation?: AccountAttestFrame;
+  /** Clock supplied by the caller to keep this decision deterministic. */
+  nowSeconds?: number;
+}
+
+export interface PendingAccountScopeUpdate {
+  identityHash: string; origin: string; accountId: string; registrationId: string; slug: string;
+  declared: AccountScope; approved: AccountScope;
 }
 
 export type HandleHelloResult =
   | { kind: 'reject'; reason: string }
   | {
       kind: 'needs-pair';
+      /** False when account evidence was absent or failed verification. */
+      vouched?: false;
       pairCode: string;
       identityHash: string;
       mcpId: string;
@@ -129,8 +154,11 @@ export type HandleHelloResult =
       };
     }
   | {
-      kind: 'auto-trust';
+      kind: 'auto-trust' | 'account-silent';
       mcpId: string;
+      attestedBy?: { accountId: string; slug: string; origin: string };
+      accountDerivedUpdate?: { identityHash: string; record: AccountDerivedMcp; firstSeen: boolean };
+      pendingAccountScopeUpdate?: PendingAccountScopeUpdate;
       domains: string[];
       /**
        * The GRANTED (intersection of approved and declared) capabilities.
@@ -201,7 +229,26 @@ export type HandleHelloResult =
          */
         unavailableCapabilities?: string[];
       };
+    }
+  | {
+      kind: 'account-confirm';
+      identityHash: string;
+      mcpId: string;
+      serverName: string;
+      accountId: string;
+      accountSlug: string;
+      origin: string;
+      registrationId: string;
+      registrationSlug: string;
+      consent: 'silent' | 'confirm' | 'confirm-each';
+      scope: AccountScope;
+      identityX25519Pub: string;
+      identityEd25519Pub: string;
+      sessionNonce: Uint8Array;
+      sessionPub: string;
+      unavailableCapabilities?: string[];
     };
+
 
 /**
  * Order-insensitive equality for two domain lists. The trust record's
@@ -350,7 +397,118 @@ export async function handleServerHello(
   const hash = toHex(await sha256(identityX25519Pub));
   const record = await deps.trust.get(hash);
 
+  // An account attestation is meaningful only when every signed value agrees
+  // with this stored credential, this link, and this exact hello. The nonces
+  // are supplied from trusted context, never copied from the frame.
+  let attestedBy: { accountId: string; slug: string; origin: string } | undefined;
+  let verifiedAttestation: AccountAttestFrame | undefined;
+  const att = deps.attestation;
+  const account = deps.account;
+  const nowSeconds = deps.nowSeconds;
+  if (att && account && nowSeconds !== undefined && account.record.origin === account.origin && account.record.tokenId === account.tokenId) {
+    try {
+      const key = fromB64(account.record.publicKey);
+      const valid = att.mcpId === hello.mcpId &&
+        att.accountId === account.record.accountId && att.generation === account.record.generation &&
+        att.tokenId === account.tokenId && att.kid === account.record.kid &&
+        att.identityHash === hash && att.identityEd25519Pub === hello.identityEd25519Pub &&
+        att.notAfter >= nowSeconds &&
+        att.notAfter <= nowSeconds + 24 * 60 * 60 &&
+        (await accountKeyId(key)) === account.record.kid &&
+        await ed25519Verify(key, accountAttestPayload({
+          gatewayOrigin: account.origin, accountId: att.accountId, generation: att.generation,
+          tokenId: att.tokenId, registrationId: att.registrationId, slug: att.slug,
+          identityHash: att.identityHash, identityEd25519Pub: identityEd25519Pub,
+          scopeDigest: att.scopeDigest, consent: att.consent, mcpId: hello.mcpId,
+          mcpHelloNonce: sessionNonce, answersExtNonce: deps.extensionSessionNonce,
+          notAfter: att.notAfter,
+        }), fromB64(att.sig));
+      if (valid) {
+        verifiedAttestation = att;
+        attestedBy = { accountId: att.accountId, slug: account.record.slug, origin: account.origin };
+      }
+    } catch {
+      // Invalid or malformed account evidence falls back to ordinary pairing.
+    }
+  }
+
   const scope = declaredScope(hello);
+
+  // Existing trustedMcps always wins above. Otherwise, account authority is
+  // available only when a valid one-use attestation accompanies this hello.
+  if (!record && verifiedAttestation && account && attestedBy) {
+    const declaredAccountScope: AccountScope = { domains: [...hello.domains], capabilities, ...scope };
+    const digestMatches = verifiedAttestation.scopeDigest === await scopeDigest(hello);
+    const highRisk = hello.domains.some((domain) => HIGH_RISK_KEYWORDS.some((word) => domain.toLowerCase().includes(word)));
+    // Derived approval is identity-keyed for lookup efficiency, but consent is
+    // account-scoped. Treat stale records for another account/origin as absent.
+    const candidateDerived = deps.accountDerived;
+    const derived = candidateDerived?.origin === account.origin &&
+      candidateDerived.accountId === verifiedAttestation.accountId ? candidateDerived : undefined;
+    const remembered = verifiedAttestation.consent !== 'confirm-each' && !derived?.alwaysAsk
+      ? derived?.approvedScope
+      : undefined;
+    const sessionApproved = deps.approvedOnceScope ?? (verifiedAttestation.consent === 'confirm-each'
+      ? deps.sessionApprovedScope
+      : undefined);
+    const approved = remembered ?? sessionApproved;
+    const canAttachWithinApproval = approved &&
+      isDomainSubset(declaredAccountScope.domains, approved.domains) &&
+      isScopeSubset(declaredAccountScope, approved);
+    const silent = verifiedAttestation.consent === 'silent' && digestMatches && !highRisk && !derived?.alwaysAsk;
+    const rememberedApproval = !!remembered && verifiedAttestation.consent !== 'confirm-each' && !derived?.alwaysAsk;
+    if (silent || canAttachWithinApproval || rememberedApproval) {
+      const grantScope = approved ? intersectScope(approved, declaredAccountScope) : declaredAccountScope;
+      const domains = approved ? intersectDomains(approved.domains, declaredAccountScope.domains) : [...hello.domains];
+      const grew = !!remembered && (!isDomainSubset(declaredAccountScope.domains, remembered.domains) || !isScopeSubset(declaredAccountScope, remembered));
+      const ephemeral = await generateX25519();
+      const shared = await ecdhX25519(ephemeral.privateKey, mcpSessionPub);
+      const sessionKey = await hkdfSha256(
+        shared,
+        await transcriptHash(sessionNonce, deps.extensionSessionNonce, mcpSessionPub, ephemeral.publicKey),
+        enc.encode(HKDF_SESSION_INFO), 32,
+      );
+      return {
+        kind: 'account-silent', mcpId: hello.mcpId, attestedBy, domains,
+        accountDerivedUpdate: {
+          identityHash: hash,
+          record: {
+            origin: account.origin, accountId: verifiedAttestation.accountId,
+            registrationId: verifiedAttestation.registrationId, slug: verifiedAttestation.slug,
+            scope: declaredAccountScope,
+            // confirm-each ignores remembered authority for this decision, but
+            // must not erase an earlier persistent approval as a side effect
+            // of recording the newly observed scope.
+            ...(derived?.approvedScope ? { approvedScope: derived.approvedScope } : {}),
+            firstSeenAt: derived?.firstSeenAt ?? nowSeconds! * 1000,
+            lastSeenAt: nowSeconds! * 1000, ...(derived?.alwaysAsk ? { alwaysAsk: true } : {}),
+          },
+          firstSeen: !derived,
+        },
+        ...(grew && remembered ? { pendingAccountScopeUpdate: {
+          identityHash: hash, origin: account.origin, accountId: verifiedAttestation.accountId,
+          registrationId: verifiedAttestation.registrationId, slug: verifiedAttestation.slug,
+          declared: declaredAccountScope, approved: remembered,
+        } } : {}),
+        capabilities: [...grantScope.capabilities], cookieKeys: [...grantScope.cookieKeys],
+        localStorageKeys: [...grantScope.localStorageKeys], sessionStorageKeys: [...grantScope.sessionStorageKeys],
+        captureHeaders: [...grantScope.captureHeaders], indexedDbScopes: [...grantScope.indexedDbScopes],
+        domSelectors: [...grantScope.domSelectors], domListSelectors: [...grantScope.domListSelectors],
+        graphqlOps: [...grantScope.graphqlOps], localStoragePointers: [...grantScope.localStoragePointers],
+        sessionStoragePointers: [...grantScope.sessionStoragePointers], sessionKey,
+        extensionSessionPub: ephemeral.publicKey, mcpSessionNonce: sessionNonce, mcpSessionPub,
+      };
+    }
+    return {
+      kind: 'account-confirm', identityHash: hash, mcpId: hello.mcpId, serverName: hello.serverName,
+      accountId: verifiedAttestation.accountId, accountSlug: account.record.slug, origin: account.origin,
+      registrationId: verifiedAttestation.registrationId, registrationSlug: verifiedAttestation.slug,
+      consent: verifiedAttestation.consent, scope: declaredAccountScope,
+      identityX25519Pub: hello.identityX25519Pub, identityEd25519Pub: hello.identityEd25519Pub,
+      sessionNonce, sessionPub: hello.sessionPub,
+      ...(unavailableDeclared.length ? { unavailableCapabilities: unavailableDeclared } : {}),
+    };
+  }
 
   if (record) {
     // A changed serverName or domain set must not auto-trust — the record
@@ -464,6 +622,7 @@ export async function handleServerHello(
       return {
         kind: 'auto-trust',
         mcpId: hello.mcpId,
+        ...(attestedBy ? { attestedBy } : {}),
         domains: [...hello.domains],
         // GRANTED scope (intersection): never exceeds approved scope.
         capabilities: [...granted.capabilities],
@@ -550,6 +709,7 @@ export async function handleServerHello(
   );
   return {
     kind: 'needs-pair',
+    ...((deps.remoteAccountLink || deps.attestation) ? { vouched: false as const } : {}),
     pairCode,
     identityHash: hash,
     mcpId: hello.mcpId,

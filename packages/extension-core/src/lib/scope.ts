@@ -33,6 +33,24 @@ export interface Scope {
   sessionStoragePointers: StoragePointerDecl[];
 }
 
+/** Domain declarations are an outer allowlist alongside the request scope. */
+export interface AccountScope extends Scope { domains: string[] }
+export const HIGH_RISK_KEYWORDS = ['bank', 'gov', 'mil'] as const;
+
+/** An approved domain covers itself and its subdomains, never a parent. */
+export function isDomainSubset(declared: readonly string[], approved: readonly string[]): boolean {
+  return declared.every((domain) => approved.some((base) => {
+    const d = domain.toLowerCase();
+    const b = base.toLowerCase();
+    return d === b || d.endsWith(`.${b}`);
+  }));
+}
+
+/** Preserve only declared domains covered by an approved exact-or-parent host. */
+export function intersectDomains(approved: readonly string[], declared: readonly string[]): string[] {
+  return declared.filter((domain) => isDomainSubset([domain], approved));
+}
+
 // ---------------------------------------------------------------------------
 // Equality helpers (moved from background.ts, exported for reuse)
 // ---------------------------------------------------------------------------
@@ -204,6 +222,14 @@ export async function scopeHash(s: Scope): Promise<string> {
   const bytes = new TextEncoder().encode(json);
   const hash = await sha256(bytes);
   return toHex(hash);
+}
+
+/** Canonical hash for an account approval, including its domain allowlist. */
+export async function accountScopeHash(s: AccountScope): Promise<string> {
+  const { domains, ...scope } = s;
+  const canonical = { domains: [...domains].map((d) => d.toLowerCase()).sort(), scope: await scopeHash(scope) };
+  const bytes = new TextEncoder().encode(JSON.stringify(canonical));
+  return toHex(await sha256(bytes));
 }
 
 // ---------------------------------------------------------------------------

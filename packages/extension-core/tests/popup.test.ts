@@ -23,6 +23,43 @@ describe('renderPopup', () => {
     container = document.getElementById('root')!;
   });
 
+  it('renders the account trust card with its identity fields and actions', () => {
+    const onApprove = vi.fn();
+    const onNotNow = vi.fn();
+    renderPopup(container, {
+      mode: 'account-card',
+      card: {
+        key: 'remote:one:acc_123', origin: 'https://gateway.example', keyChanged: true,
+        account: { slug: 'chris', displayName: 'Chris Hall', confirmedBy: 'c•••@gmail.com', bridgedRegistrations: 19, kid: '0123456789abcdef' },
+      },
+      onApprove, onNotNow,
+    });
+    expect(container.textContent).toContain('The account key for Chris Hall changed. Approve again?');
+    expect(container.textContent).toContain('c•••@gmail.com');
+    expect(container.textContent).toContain('https://gateway.example');
+    expect(container.textContent).toContain('19');
+    expect(container.textContent).toContain('0123456789abcdef');
+    container.querySelector<HTMLButtonElement>('[data-action="approve-account"]')!.click();
+    container.querySelector<HTMLButtonElement>('[data-action="dismiss-account"]')!.click();
+    expect(onApprove).toHaveBeenCalledOnce();
+    expect(onNotNow).toHaveBeenCalledOnce();
+  });
+
+  it('renders account MCP confirmation without a pair code and names the granted sites', () => {
+    renderPopup(container, { mode: 'account-mcp-card', card: {
+      key: 'remote:mcp', kind: 'confirm', registrationSlug: 'zillow', accountSlug: 'chris',
+      origin: 'https://gateway.example', scope: {
+        domains: ['zillow.com'], capabilities: ['fetch', 'read_cookies'], cookieKeys: ['session_id'],
+        localStorageKeys: [], sessionStorageKeys: [], captureHeaders: [], indexedDbScopes: [],
+        domSelectors: [], domListSelectors: [], graphqlOps: [], localStoragePointers: [], sessionStoragePointers: [],
+      },
+    }, onApprove: vi.fn(), onNotNow: vi.fn() });
+    expect(container.textContent).toContain('zillow wants to act as chris');
+    expect(container.textContent).toContain('zillow.com and its subdomains');
+    expect(container.textContent).toContain('cookie session_id');
+    expect(container.textContent).not.toContain('pair code');
+  });
+
   it('renders empty state when no pending and no trusted', () => {
     renderPopup(container, { mode: 'empty' });
     expect(container.textContent).toContain('No MCP servers connected');

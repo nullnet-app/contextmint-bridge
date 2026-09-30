@@ -35,6 +35,8 @@ import {
   readySignaturePayload,
   type HelloFrameFromServer,
   type ReadyFrame,
+  type AccountAttestFrame,
+  type Capability,
 } from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../chrome-api.js';
@@ -42,12 +44,177 @@ import { unavailableCapabilities } from '../capabilities.js';
 import { ensureDomainTab } from '../ensure-domain-tab.js';
 import { signWithExtensionIdentity } from '../extension-identity.js';
 import { loadDismissedScopeHashes } from '../vault-records.js';
-import { scopeHash } from '../lib/scope.js';
+import { scopeHash, type AccountScope } from '../lib/scope.js';
+import { gatewayOriginFor } from '../bridge-gateway.js';
+import { AccountTrustStore } from '../account-trust-store.js';
+import type { AccountDerivedMcp } from '../account-trust-store.js';
+import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
 
 import { state } from './state.js';
-import { bindMcpToLink, sendOnLink, unbindMcp, type Link } from './links.js';
-import { handleServerHello } from './hello.js';
+import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
+import { handleServerHello, type PendingAccountScopeUpdate } from './hello.js';
 import { setPairPendingBadge } from './badge.js';
+
+const ACCOUNT_MCP_CARDS_KEY = 'pendingAccountMcpCards';
+const ACCOUNT_MCP_SESSION_APPROVALS_KEY = 'accountMcpSessionApprovals';
+interface PendingAccountMcpCard {
+  kind: 'confirm' | 'scope-update';
+  key: string; linkId: string; tokenId: string; origin: string; identityHash: string;
+  hello: HelloFrameFromServer; attestation: AccountAttestFrame; scope: AccountScope;
+  accountId: string; accountSlug: string; registrationSlug: string; serverName: string;
+  consent: 'silent' | 'confirm' | 'confirm-each';
+}
+interface AccountSessionApproval {
+  scope: AccountScope; origin: string; accountId: string; tokenId: string; generation: number;
+}
+
+async function queueAccountMcpCard(link: Link, hello: HelloFrameFromServer, result: Extract<Awaited<ReturnType<typeof handleServerHello>>, { kind: 'account-confirm' }>, attestation: AccountAttestFrame): Promise<void> {
+  const area = chrome.storage?.session;
+  if (!area || !link.tokenId) return;
+  const key = `${link.id}:${result.mcpId}:${result.identityHash}`;
+  const stored = await area.get(ACCOUNT_MCP_CARDS_KEY);
+  const cards = stored[ACCOUNT_MCP_CARDS_KEY] && typeof stored[ACCOUNT_MCP_CARDS_KEY] === 'object'
+    ? { ...(stored[ACCOUNT_MCP_CARDS_KEY] as Record<string, PendingAccountMcpCard>) } : {};
+  cards[key] = {
+    kind: 'confirm',
+    key, linkId: link.id, tokenId: link.tokenId, origin: result.origin,
+    identityHash: result.identityHash, hello, attestation, scope: result.scope,
+    accountId: result.accountId, accountSlug: result.accountSlug,
+    registrationSlug: result.registrationSlug, serverName: result.serverName,
+    consent: result.consent,
+  };
+  await area.set({ [ACCOUNT_MCP_CARDS_KEY]: cards });
+  setPairPendingBadge();
+}
+
+async function queueAccountScopeUpdate(link: Link, hello: HelloFrameFromServer, update: PendingAccountScopeUpdate, attestation: AccountAttestFrame): Promise<void> {
+  const area = chrome.storage?.session;
+  if (!area || !link.tokenId) return;
+  const account = await new AccountTrustStore().get(update.origin, update.accountId);
+  if (!account || account.tokenId !== link.tokenId) return;
+  const key = `${link.id}:${hello.mcpId}:${update.identityHash}:scope`;
+  const stored = await area.get(ACCOUNT_MCP_CARDS_KEY);
+  const cards = stored[ACCOUNT_MCP_CARDS_KEY] && typeof stored[ACCOUNT_MCP_CARDS_KEY] === 'object'
+    ? { ...(stored[ACCOUNT_MCP_CARDS_KEY] as Record<string, PendingAccountMcpCard>) } : {};
+  cards[key] = {
+    kind: 'scope-update', key, linkId: link.id, tokenId: link.tokenId, origin: update.origin,
+    identityHash: update.identityHash, hello, attestation, scope: update.declared,
+    accountId: update.accountId, accountSlug: account.slug, registrationSlug: update.slug,
+    serverName: hello.serverName, consent: attestation.consent,
+  };
+  await area.set({ [ACCOUNT_MCP_CARDS_KEY]: cards });
+  setPairPendingBadge();
+}
+
+export async function decideAccountMcpCard(key: unknown, allow: boolean): Promise<boolean> {
+  if (typeof key !== 'string' || key.length > 512) return false;
+  const area = chrome.storage?.session;
+  if (!area) return false;
+  const stored = await area.get(ACCOUNT_MCP_CARDS_KEY);
+  const cards = stored[ACCOUNT_MCP_CARDS_KEY] && typeof stored[ACCOUNT_MCP_CARDS_KEY] === 'object'
+    ? { ...(stored[ACCOUNT_MCP_CARDS_KEY] as Record<string, PendingAccountMcpCard>) } : {};
+  const card = cards[key];
+  if (!card) return false;
+  delete cards[key];
+  if (Object.keys(cards).length) await area.set({ [ACCOUNT_MCP_CARDS_KEY]: cards });
+  else await area.remove(ACCOUNT_MCP_CARDS_KEY);
+  if (!allow) return true;
+  const link = links.get(card.linkId);
+  if (!link || link.closed || link.kind !== 'remote' || link.ws?.readyState !== WebSocket.OPEN ||
+      linkForMcp(card.hello.mcpId) !== link ||
+      link.tokenId !== card.tokenId || gatewayOriginFor(link.url) !== card.origin || !link.sessionNonce ||
+      card.hello.answersExtNonce !== toB64(link.sessionNonce) ||
+      card.attestation.notAfter < Math.floor(Date.now() / 1000) ||
+      card.attestation.notAfter > Math.floor(Date.now() / 1000) + 24 * 60 * 60) return false;
+  const account = await new AccountTrustStore().get(card.origin, card.accountId);
+  if (!account || account.tokenId !== card.tokenId || account.generation !== card.attestation.generation) return false;
+  if (card.kind === 'scope-update') {
+    // This offer targets the already attached identity on this link. Check
+    // both parts before persisting the wider approval: an old card must not
+    // bless a replacement identity after its mcpId was rebound elsewhere.
+    const isCurrentScopeUpdate = (): boolean => {
+      const current = links.get(card.linkId);
+      return current === link && !current.closed && current.kind === 'remote' &&
+        current.ws?.readyState === WebSocket.OPEN && linkForMcp(card.hello.mcpId) === current &&
+        current.tokenId === card.tokenId && gatewayOriginFor(current.url) === card.origin &&
+        current.sessionNonce !== null && card.hello.answersExtNonce === toB64(current.sessionNonce) &&
+        card.attestation.notAfter >= Math.floor(Date.now() / 1000) &&
+        card.attestation.notAfter <= Math.floor(Date.now() / 1000) + 24 * 60 * 60 &&
+        Boolean(state.sessions?.get(card.hello.mcpId)) &&
+        mcpIdentityHash.get(card.hello.mcpId) === card.identityHash;
+    };
+    if (!isCurrentScopeUpdate()) return false;
+    const store = new AccountTrustStore();
+    const derived = await store.getDerived(card.identityHash);
+    if (!derived || derived.origin !== card.origin || derived.accountId !== card.accountId) return false;
+    // Account and derived reads yield. The same mcpId can have been rebound
+    // while either read was pending, so revalidate at the last point before
+    // persisting the expanded approval.
+    if (!isCurrentScopeUpdate()) return false;
+    await store.putDerived(card.identityHash, { ...derived, scope: card.scope, approvedScope: card.scope, lastSeenAt: Date.now() });
+    // Persistence also yields. A replacement session must not inherit the
+    // old link's newly approved live request scope.
+    if (!isCurrentScopeUpdate()) return false;
+    // A scope-update is offered only for an already attached identity. Apply
+    // the newly approved declared scope to its live request gates immediately;
+    // card.scope is the exact, signed hello declaration, so it cannot grant
+    // undeclared capabilities or data selectors. Still subtract browser
+    // capabilities that this extension build cannot serve.
+    const unavailable = unavailableCapabilities(chrome);
+    const capabilities = card.scope.capabilities.filter((capability): capability is Capability =>
+      !unavailable.has(capability as Capability),
+    );
+    const { domains, ...declared } = card.scope;
+    mcpDomains.set(card.hello.mcpId, [...domains]);
+    applyGrantedScopeToSession(card.hello.mcpId, { ...declared, capabilities });
+    mcpAccountDerivedDomains.set(card.hello.mcpId, [...domains]);
+    broadcastConnectionsChanged();
+    if (state.trust) {
+      await syncMainWorldBridgeForActiveTrust(state.trust, { injectIntoOpenTabs: true });
+    }
+    return true;
+  }
+  // The card is the explicit approval for both `confirm` and a silent
+  // attestation that needed review (for example, a scope digest mismatch).
+  // Only `confirm-each` deliberately limits that approval to this session.
+  if (card.consent !== 'confirm-each') {
+    const prior = await new AccountTrustStore().getDerived(card.identityHash);
+    const next: AccountDerivedMcp = {
+      origin: card.origin, accountId: card.accountId, registrationId: card.attestation.registrationId,
+      slug: card.registrationSlug, scope: card.scope, approvedScope: card.scope,
+      firstSeenAt: prior?.firstSeenAt ?? Date.now(), lastSeenAt: Date.now(),
+      ...(prior?.alwaysAsk ? { alwaysAsk: true } : {}),
+    };
+    await new AccountTrustStore().putDerived(card.identityHash, next);
+  } else {
+    const approvals = await area.get(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
+    const dict = approvals[ACCOUNT_MCP_SESSION_APPROVALS_KEY] && typeof approvals[ACCOUNT_MCP_SESSION_APPROVALS_KEY] === 'object'
+      ? { ...(approvals[ACCOUNT_MCP_SESSION_APPROVALS_KEY] as Record<string, AccountSessionApproval>) } : {};
+    dict[card.identityHash] = { scope: card.scope, origin: card.origin, accountId: card.accountId,
+      tokenId: card.tokenId, generation: card.attestation.generation };
+    await area.set({ [ACCOUNT_MCP_SESSION_APPROVALS_KEY]: dict });
+  }
+  await onServerHello(link, card.hello, { attestation: card.attestation, approvedScope: card.scope });
+  return true;
+}
+
+export async function clearAccountSessionApprovals(tokenId: string, origin?: string, accountId?: string): Promise<void> {
+  const area = chrome.storage?.session;
+  if (!area) return;
+  const stored = await area.get(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
+  const approvals = stored[ACCOUNT_MCP_SESSION_APPROVALS_KEY] && typeof stored[ACCOUNT_MCP_SESSION_APPROVALS_KEY] === 'object'
+    ? { ...(stored[ACCOUNT_MCP_SESSION_APPROVALS_KEY] as Record<string, AccountSessionApproval>) } : {};
+  let changed = false;
+  for (const [hash, approval] of Object.entries(approvals)) {
+    if (approval.tokenId === tokenId && (!origin || approval.origin === origin) && (!accountId || approval.accountId === accountId)) {
+      delete approvals[hash]; changed = true;
+    }
+  }
+  if (changed) {
+    if (Object.keys(approvals).length) await area.set({ [ACCOUNT_MCP_SESSION_APPROVALS_KEY]: approvals });
+    else await area.remove(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
+  }
+}
 import {
   applyNeedsPairRecord,
   type PendingPairRecord,
@@ -62,6 +229,7 @@ import {
 import {
   mcpDomains,
   mcpIdentityHash,
+  mcpAccountDerivedDomains,
   applyGrantedScopeToSession,
   broadcastConnectionsChanged,
 } from './session-scope.js';
@@ -106,7 +274,11 @@ function tellServerWhy(link: Link, hello: HelloFrameFromServer, reason: string):
   sendHelloRejected(link, hello.mcpId, hello.accepts, reason);
 }
 
-export async function onServerHello(link: Link, hello: HelloFrameFromServer): Promise<void> {
+export async function onServerHello(
+  link: Link,
+  hello: HelloFrameFromServer,
+  replay?: { attestation: AccountAttestFrame; approvedScope: AccountScope },
+): Promise<void> {
   if (!state.trust || !state.sessions || !state.extIdentity || !link.sessionNonce) return;
   // 3.0.0 (protocol 4), §1a Rule C, extension side: refuse a hello that
   // answers a nonce this link did not send.
@@ -142,6 +314,10 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     tellServerWhy(link, hello, 'this hello answers a different extension session');
     return;
   }
+  // Any hello for this mcpId consumes its pending attestation, even if the
+  // later link-binding rule refuses the hello. Otherwise a rejected id could
+  // keep its account evidence live for a future attempt on the same link.
+  const attestation = replay?.attestation ?? takeAccountAttestation(link, hello.mcpId);
   // Bind before deciding anything. An mcpId another live link already holds is
   // not this link's to speak for, and the refusal has to happen before a
   // session key, a scope grant or a pair prompt exists for it.
@@ -152,6 +328,33 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     tellServerWhy(link, hello, 'that mcpId is already bound to another bridge');
     return;
   }
+  const origin = link.kind === 'remote' ? gatewayOriginFor(link.url) : null;
+  const accountRecord = attestation && link.kind === 'remote' && link.tokenId && origin
+    ? await new AccountTrustStore().get(origin, attestation.accountId)
+    : null;
+  const identityHash = toHex(await sha256(fromB64(hello.identityX25519Pub)));
+  const sessionApprovalData = chrome.storage?.session
+    ? await chrome.storage.session.get(ACCOUNT_MCP_SESSION_APPROVALS_KEY)
+    : {};
+  const sessionApprovals = sessionApprovalData[ACCOUNT_MCP_SESSION_APPROVALS_KEY] as Record<string, AccountSessionApproval> | undefined;
+  const sessionApproval = sessionApprovals?.[identityHash];
+  const sessionApprovalMatches = !!sessionApproval && !!accountRecord && sessionApproval.origin === origin &&
+    sessionApproval.accountId === accountRecord.accountId && sessionApproval.tokenId === accountRecord.tokenId &&
+    sessionApproval.generation === accountRecord.generation;
+  if (sessionApproval && !sessionApprovalMatches && chrome.storage?.session) {
+    const approvals = { ...(sessionApprovals ?? {}) };
+    delete approvals[identityHash];
+    if (Object.keys(approvals).length) await chrome.storage.session.set({ [ACCOUNT_MCP_SESSION_APPROVALS_KEY]: approvals });
+    else await chrome.storage.session.remove(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
+  }
+  const accountDerived = accountRecord && origin
+    ? await new AccountTrustStore().getDerived(identityHash)
+    : null;
+  // The store is indexed by MCP identity. Consent is additionally bound to
+  // the currently verified account so stale records can never authorize a
+  // different account's attestation.
+  const matchingAccountDerived = accountDerived?.origin === origin &&
+    accountDerived.accountId === accountRecord?.accountId ? accountDerived : null;
   const result = await handleServerHello(hello, {
     trust: state.trust,
     extensionIdentityX25519Pub: state.extIdentity.x25519Pub,
@@ -165,6 +368,15 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     // reject path — it hears `hello-rejected` with the reason if it `accepts`
     // it, and silence if it does not, exactly as for every other refusal.
     unavailableCapabilities: unavailableCapabilities(chrome),
+    remoteAccountLink: link.kind === 'remote',
+    ...(accountRecord && link.tokenId && origin ? { account: { record: accountRecord, origin, tokenId: link.tokenId } } : {}),
+    ...(attestation ? { attestation } : {}),
+    ...(replay?.approvedScope || sessionApprovalMatches
+      ? { sessionApprovedScope: replay?.approvedScope ?? sessionApproval!.scope }
+      : {}),
+    ...(replay?.approvedScope ? { approvedOnceScope: replay.approvedScope } : {}),
+    ...(accountRecord ? { accountDerived: matchingAccountDerived } : {}),
+    nowSeconds: Math.floor(Date.now() / 1000),
   });
   if (result.kind === 'reject') {
     // Give the binding back. It was taken before the decision — deliberately,
@@ -177,7 +389,7 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     tellServerWhy(link, hello, result.reason);
     return;
   }
-  if (result.kind === 'auto-trust') {
+  if (result.kind === 'auto-trust' || result.kind === 'account-silent') {
     // Store GRANTED (intersection) scope in the mcp* maps. `result` carries the
     // already-intersected scope (granted = approved ∩ declared), so applying it
     // verbatim never escalates beyond approval.
@@ -186,6 +398,7 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     applyGrantedScopeToSession(result.mcpId, result);
     // Part 3: track identity hash per session for connected-status dot.
     mcpIdentityHash.set(result.mcpId, toHex(await sha256(fromB64(hello.identityX25519Pub))));
+    if (result.kind === 'account-silent') mcpAccountDerivedDomains.set(result.mcpId, [...result.domains]);
     broadcastConnectionsChanged();
     for (const d of result.domains) {
       void ensureDomainTab(d).catch(() => {
@@ -218,6 +431,17 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
       mcpSessionPub: toB64(result.mcpSessionPub),
       sessionSig: toB64(sessionSig),
     };
+    if (result.kind === 'account-silent' && result.accountDerivedUpdate) {
+      const store = new AccountTrustStore();
+      await store.putDerived(result.accountDerivedUpdate.identityHash, result.accountDerivedUpdate.record);
+      if (result.accountDerivedUpdate.firstSeen) {
+        try { chrome.runtime?.sendMessage?.({ type: 'new-account-mcp', mcpId: result.mcpId, domains: result.domains }); } catch { /* popup may be closed */ }
+      }
+      await syncMainWorldBridgeForActiveTrust(state.trust!, { injectIntoOpenTabs: true });
+      if (result.pendingAccountScopeUpdate && attestation) {
+        await queueAccountScopeUpdate(link, hello, result.pendingAccountScopeUpdate, attestation);
+      }
+    }
     sendOnLink(link, JSON.stringify(ready));
 
     // Part 2: if the MCP declared more than approved, queue a non-blocking
@@ -330,6 +554,13 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
     }
     return;
   }
+  if (result.kind === 'account-confirm') {
+    // Filled by the distinct MCP consent-card queue below; never route this
+    // result through ordinary pair approval or trustedMcps persistence.
+    if (attestation) await queueAccountMcpCard(link, hello, result, attestation);
+    return;
+  }
+  if (result.kind !== 'needs-pair') return;
   // needs-pair: queue for popup.
   // 0.6.0+: compute the composite key (identityHash + scopeHash) so that
   // concurrent processes sharing the same identity and scope collapse into a
@@ -358,6 +589,7 @@ export async function onServerHello(link: Link, hello: HelloFrameFromServer): Pr
   const newPendingRecord: PendingPairRecord = {
     key: pendingKey,
     kind: 'pair',
+    ...(result.vouched === false ? { vouched: false as const } : {}),
     identityHash: result.identityHash,
     serverName: result.serverName,
     version: result.version,

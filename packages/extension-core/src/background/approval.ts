@@ -63,7 +63,7 @@ import {
   liveScopeApplications,
   broadcastConnectionsChanged,
 } from './session-scope.js';
-import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
+import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
 
 export async function onApproval(record: AnyPendingRecord): Promise<void> {
   if (!state.trust || !state.sessions || !state.extIdentity) return;
@@ -145,7 +145,7 @@ export async function onApproval(record: AnyPendingRecord): Promise<void> {
   // Audit #1003: extend the MAIN-world page bridge to the newly approved
   // hosts — including tabs already open on them — before the MCP is told it
   // is ready, so its first CSRF/GraphQL call finds the bridge in place.
-  await syncMainWorldBridgeFromTrust(state.trust, { injectIntoOpenTabs: true });
+  await syncMainWorldBridgeForActiveTrust(state.trust, { injectIntoOpenTabs: true });
 
   if (approved.kind === 'pair') {
     // 0.6.0+: replay the post-approval session setup for EVERY mcpId in the

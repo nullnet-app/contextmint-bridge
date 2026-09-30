@@ -181,10 +181,10 @@ async function injectNewlyCovered(
  */
 export async function syncMainWorldBridgeFromTrust(
   trust: { approvedDomains(): Promise<string[]> },
-  opts: { injectIntoOpenTabs?: boolean } = {},
+  opts: { injectIntoOpenTabs?: boolean; additionalDomains?: readonly string[] } = {},
 ): Promise<void> {
   try {
-    const domains = await trust.approvedDomains();
+    const domains = [...new Set([...(await trust.approvedDomains()), ...(opts.additionalDomains ?? [])])];
     // The page-load wake (contextmint-bridge#32) runs on exactly these hosts
     // too, so every approval and revoke keeps the two in step.
     await Promise.all([syncMainWorldBridge(domains, opts), syncPageLoadWake(domains)]);

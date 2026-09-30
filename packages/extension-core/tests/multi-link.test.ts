@@ -15,6 +15,7 @@ import {
   toB64,
   fromB64,
   toHex,
+  accountKeyId,
   ANSWERS_NO_EXT_SESSION,
   HKDF_SESSION_INFO,
   PROTOCOL_VERSION,
@@ -101,7 +102,9 @@ class FakeSocket {
 
   /** Frames this socket sent, parsed, of one `type`. */
   frames<T = Record<string, unknown>>(type: string): T[] {
-    return this.sent.map((s) => JSON.parse(s) as T).filter((f) => (f as { type: string }).type === type);
+    return this.sent
+      .map((s) => JSON.parse(s) as T)
+      .filter((f) => (f as { type: string }).type === type);
   }
 }
 
@@ -164,7 +167,11 @@ vi.stubGlobal('chrome', {
     registerContentScripts: async (xs: { id: string; matches?: string[]; world?: string }[]) =>
       void registeredScripts.push(...xs.map((x) => ({ ...x }))),
     updateContentScripts: async (xs: { id: string; matches?: string[] }[]) => {
-      for (const x of xs) Object.assign(registeredScripts.find((r) => r.id === x.id)!, x);
+      for (const x of xs)
+        Object.assign(
+          registeredScripts.find((r) => r.id === x.id)!,
+          x,
+        );
     },
     unregisterContentScripts: async (f?: { ids?: string[] }) => {
       for (let i = registeredScripts.length - 1; i >= 0; i--) {
@@ -177,19 +184,20 @@ vi.stubGlobal('chrome', {
 
 // Imported after the globals exist — `socket.ts` reads `WebSocket` at module
 // scope only through functions, but `badge.ts` and friends read `chrome`.
-const { connect, reconcileRemoteLinks } = await import('../src/background/socket.js');
+const { connect, reconcileRemoteLinks, decideAccountCard, setHandoffTarget } =
+  await import('../src/background/socket.js');
+const { AccountTrustStore } = await import('../src/account-trust-store.js');
+const { saveRemoteTargets, loadRemoteTargets } = await import('../src/vault-records.js');
 const { state } = await import('../src/background/state.js');
 const { links, linkForMcp, unbindAll } = await import('../src/background/links.js');
 const { TrustStore } = await import('../src/trust-store.js');
 const { SessionKeys } = await import('../src/session-keys.js');
 const { mcpDomains, mcpCapabilities } = await import('../src/background/session-scope.js');
 const { onApproval } = await import('../src/background/approval.js');
-const { VERSION_MISMATCH_KEY, normaliseVersionMismatches } = await import(
-  '../src/lib/version-mismatch.js'
-);
+const { VERSION_MISMATCH_KEY, normaliseVersionMismatches } =
+  await import('../src/lib/version-mismatch.js');
 type VersionMismatch = import('../src/lib/version-mismatch.js').VersionMismatch;
-type AnyPendingRecord =
-  import('../src/background/pending-records.js').AnyPendingRecord;
+type AnyPendingRecord = import('../src/background/pending-records.js').AnyPendingRecord;
 
 // ---------------------------------------------------------------------------
 // A scripted MCP: real identity, real signatures, real ECDH.
@@ -286,12 +294,7 @@ async function sessionKeyFor(
 ): Promise<Uint8Array> {
   const extPub = fromB64(ready.extensionSessionPub);
   const shared = await ecdhX25519(mcp.session.privateKey, extPub);
-  const salt = await transcriptHash(
-    mcp.sessionNonce,
-    extNonce,
-    mcp.session.publicKey,
-    extPub,
-  );
+  const salt = await transcriptHash(mcp.sessionNonce, extNonce, mcp.session.publicKey, extPub);
   return hkdfSha256(shared, salt, new TextEncoder().encode(HKDF_SESSION_INFO), 32);
 }
 
@@ -299,6 +302,7 @@ const REMOTE = {
   id: 'host1',
   url: 'wss://mcp.nullnet.app/bridge',
   token: 'mcpb_testtoken',
+  tokenId: 'brt_testtoken',
   enabled: true,
 };
 
@@ -306,9 +310,12 @@ describe('two bridges at once', () => {
   let localWs: FakeSocket;
   let remoteWs: FakeSocket;
 
+  afterEach(() => setHandoffTarget(null));
+
   beforeEach(async () => {
     FakeSocket.opened = [];
     storage.clear();
+    sessionStorage.clear();
     freshVault();
     unbindAll();
     links.clear();
@@ -337,12 +344,218 @@ describe('two bridges at once', () => {
   });
 
   it('says hello on each link with a nonce of its own', () => {
-    const local = localWs.frames<{ sessionNonce: string; role: string }>('hello');
-    const remote = remoteWs.frames<{ sessionNonce: string; role: string }>('hello');
+    const local = localWs.frames<{ sessionNonce: string; role: string; accepts?: string[] }>(
+      'hello',
+    );
+    const remote = remoteWs.frames<{ sessionNonce: string; role: string; accepts?: string[] }>(
+      'hello',
+    );
     expect(local).toHaveLength(1);
     expect(remote).toHaveLength(1);
     expect(local[0]!.role).toBe('extension');
+    expect(local[0]!.accepts).toEqual(['peer-gone']);
+    expect(remote[0]!.accepts).toEqual(['peer-gone', 'hello-rejected', 'account-key', 'account-attest']);
     expect(local[0]!.sessionNonce).not.toBe(remote[0]!.sessionNonce);
+  });
+
+  it('drops account identity frame names from loopback before validation', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    localWs.message({ type: 'account-key' });
+    localWs.message({ type: 'account-attest' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('queues an account card and persists its key only after Approve', async () => {
+    const keyPair = await generateEd25519();
+    const frame = {
+      type: 'account-key',
+      accountId: 'acc_0123456789abcdef01234567',
+      slug: 'chris',
+      displayName: 'Chris Hall',
+      confirmedBy: 'c•••@gmail.com',
+      tokenId: REMOTE.tokenId,
+      kid: await accountKeyId(keyPair.publicKey),
+      publicKey: toB64(keyPair.publicKey),
+      generation: 1,
+      bridgedRegistrations: 4,
+    };
+    const trust = new AccountTrustStore();
+    remoteWs.message({ ...frame, tokenId: 'brt_other' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sessionStorage.has('pendingAccountCards')).toBe(false);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    remoteWs.message({ ...frame, kid: '0000000000000000' });
+    await vi.waitUntil(() => warn.mock.calls.length > 0);
+    expect(sessionStorage.has('pendingAccountCards')).toBe(false);
+    warn.mockRestore();
+    remoteWs.message(frame);
+    await vi.waitUntil(() => sessionStorage.has('pendingAccountCards'));
+    expect(await trust.get('https://mcp.nullnet.app', frame.accountId)).toBeNull();
+    const cards = sessionStorage.get('pendingAccountCards') as Record<
+      string,
+      { key: string; account: typeof frame; origin: string }
+    >;
+    const card = Object.values(cards)[0]!;
+    expect(card.account.slug).toBe('chris');
+    expect(card.origin).toBe('https://mcp.nullnet.app');
+
+    await expect(decideAccountCard(card.key, false)).resolves.toBe(true);
+    expect(await trust.get('https://mcp.nullnet.app', frame.accountId)).toBeNull();
+    remoteWs.message(frame);
+    await vi.waitUntil(() => sessionStorage.has('pendingAccountCards'));
+    const secondCards = sessionStorage.get('pendingAccountCards') as Record<string, { key: string }>;
+    const secondCard = Object.values(secondCards)[0]!;
+
+    await expect(decideAccountCard(secondCard.key, true)).resolves.toBe(true);
+    expect((await trust.get('https://mcp.nullnet.app', frame.accountId))?.tokenId).toBe(
+      REMOTE.tokenId,
+    );
+  });
+
+  it('uses only the matching Connect result as explicit approval for a new account key', async () => {
+    const target = {
+      ...REMOTE,
+      id: 'connect-one',
+      url: 'wss://connect.nullnet.app/bridge',
+      tokenId: 'brt_connectone',
+      connectApproved: true as const,
+      connectAccount: { slug: 'chris', displayName: 'Chris Hall' },
+    };
+    await saveRemoteTargets([REMOTE, target]);
+    reconcileRemoteLinks([REMOTE, target]);
+    const connectWs = FakeSocket.opened.at(-1)!;
+    connectWs.open();
+    const keyPair = await generateEd25519();
+    const frame = {
+      type: 'account-key',
+      accountId: 'acc_0123456789abcdef01234567',
+      slug: 'chris',
+      displayName: 'Chris Hall',
+      confirmedBy: 'c•••@gmail.com',
+      tokenId: target.tokenId,
+      kid: await accountKeyId(keyPair.publicKey),
+      publicKey: toB64(keyPair.publicKey),
+      generation: 1,
+      bridgedRegistrations: 4,
+    };
+    connectWs.message(frame);
+    const trust = new AccountTrustStore();
+    await vi.waitUntil(async () => !!(await trust.get('https://connect.nullnet.app', frame.accountId)));
+    expect(sessionStorage.has('pendingAccountCards')).toBe(false);
+    expect((await loadRemoteTargets()).find((entry) => entry.id === target.id)?.connectApproved).toBeUndefined();
+
+    await trust.deleteByAccount('https://connect.nullnet.app', frame.accountId);
+    connectWs.message(frame);
+    await vi.waitUntil(() => sessionStorage.has('pendingAccountCards'));
+    expect(await trust.get('https://connect.nullnet.app', frame.accountId)).toBeNull();
+
+    const mismatch = {
+      ...frame,
+      accountId: 'acc_abcdef0123456789abcdef01',
+      displayName: 'Other account',
+    };
+    connectWs.message(mismatch);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await trust.get('https://connect.nullnet.app', mismatch.accountId)).toBeNull();
+  });
+
+  it('queues a key-change card and refuses a generation below the high-water mark', async () => {
+    const trust = new AccountTrustStore();
+    const first = await generateEd25519();
+    const base = {
+      origin: 'https://mcp.nullnet.app',
+      accountId: 'acc_0123456789abcdef01234567',
+      slug: 'chris',
+      displayName: 'Chris Hall',
+      tokenId: REMOTE.tokenId,
+      kid: await accountKeyId(first.publicKey),
+      publicKey: toB64(first.publicKey),
+      generation: 3,
+      generationHighWater: 3,
+      approvedAt: Date.now(),
+    };
+    await trust.put(base);
+    const changed = await generateEd25519();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    remoteWs.message({
+      type: 'account-key',
+      accountId: base.accountId,
+      slug: 'chris',
+      displayName: base.displayName,
+      confirmedBy: 'c•••@gmail.com',
+      tokenId: REMOTE.tokenId,
+      kid: await accountKeyId(changed.publicKey),
+      publicKey: toB64(changed.publicKey),
+      generation: 3,
+      bridgedRegistrations: 4,
+    });
+    await vi.waitUntil(() => {
+      const pending = sessionStorage.get('pendingAccountCards') as Record<string, { account?: { accountId?: string } }> | undefined;
+      return Object.values(pending ?? {}).some((card) => card.account?.accountId === base.accountId);
+    });
+    const cards = sessionStorage.get('pendingAccountCards') as Record<
+      string,
+      { keyChanged: boolean; account: { accountId: string } }
+    >;
+    expect(Object.values(cards).find((card) => card.account.accountId === base.accountId)?.keyChanged).toBe(true);
+    sessionStorage.delete('pendingAccountCards');
+    remoteWs.message({
+      type: 'account-key',
+      accountId: base.accountId,
+      slug: 'chris',
+      displayName: base.displayName,
+      confirmedBy: 'c•••@gmail.com',
+      tokenId: REMOTE.tokenId,
+      kid: base.kid,
+      publicKey: base.publicKey,
+      generation: 2,
+      bridgedRegistrations: 4,
+    });
+    await vi.waitUntil(() => warn.mock.calls.length > 0);
+    expect(sessionStorage.has('pendingAccountCards')).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it.each([4003, 4004])('clears only this token’s account trust on close %i and keeps its generation tombstone', async (code) => {
+    const trust = new AccountTrustStore();
+    const pair = await generateEd25519();
+    const base = {
+      origin: 'https://mcp.nullnet.app', accountId: 'acc_0123456789abcdef01234567', slug: 'chris',
+      displayName: 'Chris Hall', tokenId: REMOTE.tokenId, kid: await accountKeyId(pair.publicKey),
+      publicKey: toB64(pair.publicKey), generation: 3, generationHighWater: 3, approvedAt: Date.now(),
+    };
+    await trust.put(base);
+    await trust.put({ ...base, accountId: 'acc_abcdef0123456789abcdef01', tokenId: 'brt_other' });
+    remoteWs.remoteClose(code);
+    await vi.waitUntil(async () => (await trust.get(base.origin, base.accountId)) === null);
+    expect(await trust.getHighWater(base.origin, base.accountId)).toBe(3);
+    expect(await trust.get(base.origin, 'acc_abcdef0123456789abcdef01')).not.toBeNull();
+  });
+
+  it('does not inherit account trust when a handoff credential id changes', async () => {
+    const trust = new AccountTrustStore();
+    const pair = await generateEd25519();
+    const record = {
+      origin: 'https://mcp.nullnet.app', accountId: 'acc_0123456789abcdef01234567', slug: 'chris',
+      displayName: 'Chris Hall', tokenId: 'brt_old', kid: await accountKeyId(pair.publicKey),
+      publicKey: toB64(pair.publicKey), generation: 2, generationHighWater: 2, approvedAt: Date.now(),
+    };
+    await trust.put(record);
+    setHandoffTarget({ id: 'brt_new', url: REMOTE.url, token: REMOTE.token, name: 'Safari' });
+    const handoffWs = FakeSocket.opened.at(-1)!;
+    handoffWs.open();
+    handoffWs.message({
+      type: 'account-key', accountId: record.accountId, slug: record.slug, displayName: record.displayName,
+      confirmedBy: 'c•••@gmail.com', tokenId: 'brt_new', kid: record.kid, publicKey: record.publicKey,
+      generation: record.generation, bridgedRegistrations: 4,
+    });
+    await vi.waitUntil(() => sessionStorage.has('pendingAccountCards'));
+    expect(await trust.get(record.origin, record.accountId)).toMatchObject({ tokenId: 'brt_old' });
+    const cards = sessionStorage.get('pendingAccountCards') as Record<string, { keyChanged: boolean }>;
+    expect(Object.values(cards)[0]?.keyChanged).toBe(false);
   });
 
   it('is idempotent per link — a keepalive tick opens no second socket', () => {
@@ -359,12 +572,26 @@ describe('two bridges at once', () => {
 
     localWs.message(await helloFrom(onLocal, extNonceOf(localWs)));
     remoteWs.message(await helloFrom(onRemote, extNonceOf(remoteWs)));
-    await vi.waitUntil(() => localWs.frames('ready').length > 0 && remoteWs.frames('ready').length > 0);
+    await vi.waitUntil(
+      () => localWs.frames('ready').length > 0 && remoteWs.frames('ready').length > 0,
+    );
 
     const localNonce = fromB64(localWs.frames<{ sessionNonce: string }>('hello')[0]!.sessionNonce);
-    const remoteNonce = fromB64(remoteWs.frames<{ sessionNonce: string }>('hello')[0]!.sessionNonce);
-    const localReady = localWs.frames<{ mcpId: string; extensionSessionPub: string; mcpSessionPub: string; sessionSig: string }>('ready')[0]!;
-    const remoteReady = remoteWs.frames<{ mcpId: string; extensionSessionPub: string; mcpSessionPub: string; sessionSig: string }>('ready')[0]!;
+    const remoteNonce = fromB64(
+      remoteWs.frames<{ sessionNonce: string }>('hello')[0]!.sessionNonce,
+    );
+    const localReady = localWs.frames<{
+      mcpId: string;
+      extensionSessionPub: string;
+      mcpSessionPub: string;
+      sessionSig: string;
+    }>('ready')[0]!;
+    const remoteReady = remoteWs.frames<{
+      mcpId: string;
+      extensionSessionPub: string;
+      mcpSessionPub: string;
+      sessionSig: string;
+    }>('ready')[0]!;
 
     // Each ready goes back on the link that asked, for the id that asked.
     expect(localReady.mcpId).toBe(onLocal.mcpId);
@@ -469,7 +696,9 @@ describe('two bridges at once', () => {
     await trustMcp(onRemote);
     localWs.message(await helloFrom(onLocal, extNonceOf(localWs)));
     remoteWs.message(await helloFrom(onRemote, extNonceOf(remoteWs)));
-    await vi.waitUntil(() => localWs.frames('ready').length > 0 && remoteWs.frames('ready').length > 0);
+    await vi.waitUntil(
+      () => localWs.frames('ready').length > 0 && remoteWs.frames('ready').length > 0,
+    );
 
     remoteWs.remoteClose(1008, 'token revoked');
 
@@ -927,7 +1156,9 @@ describe('a v3 MCP meeting a v4 extension (Task 4.1)', () => {
     localWs.open();
     remoteWs.open();
 
-    remoteWs.message(v3Hello('alltrails-mcp:2.11.3:5555555555555555', { accepts: ['hello-rejected'] }));
+    remoteWs.message(
+      v3Hello('alltrails-mcp:2.11.3:5555555555555555', { accepts: ['hello-rejected'] }),
+    );
     await settleFrames(20);
 
     expect(remoteWs.frames('hello-rejected')).toHaveLength(1);
@@ -1102,9 +1333,7 @@ describe('a v3 MCP meeting a v4 extension (Task 4.1)', () => {
       localWs.message(
         v3Hello('alltrails-mcp:2.11.3:1234123412341234', { accepts: ['hello-rejected'] }),
       );
-      localWs.message(
-        v3Hello('tock-mcp:2.11.3:4321432143214321', { accepts: ['hello-rejected'] }),
-      );
+      localWs.message(v3Hello('tock-mcp:2.11.3:4321432143214321', { accepts: ['hello-rejected'] }));
       await vi.waitUntil(() => Object.keys(stored()).length === 2);
 
       const mcp = await scriptedMcp('alltrails-mcp:3.0.0:8888888888888888');

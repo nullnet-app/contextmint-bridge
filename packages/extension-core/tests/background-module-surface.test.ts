@@ -37,6 +37,7 @@ describe('background module surfaces', () => {
     expect(exportedTypeNames('../src/background/hello.ts')).toEqual([
       'HandleHelloDeps',
       'HandleHelloResult',
+      'PendingAccountScopeUpdate',
     ]);
   });
 
