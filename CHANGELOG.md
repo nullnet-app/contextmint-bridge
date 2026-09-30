@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.4.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.3.0...v1.4.0) (2026-09-30)
+
+
+### Features
+
+* **extension-core:** add account labels and approval notices ([#49](https://github.com/nullnet-app/contextmint-bridge/issues/49)) ([0314bdc](https://github.com/nullnet-app/contextmint-bridge/commit/0314bdc4dfde2abeafcd56b91d0264c37066a43b))
+* **extension-core:** honor account attestations in hello decisions ([#47](https://github.com/nullnet-app/contextmint-bridge/issues/47)) ([6e9f9d2](https://github.com/nullnet-app/contextmint-bridge/commit/6e9f9d260c09f266289e2e1339fd0a430cadcdf7))
+* **extension-core:** store trusted accounts in vault ([#44](https://github.com/nullnet-app/contextmint-bridge/issues/44)) ([4737078](https://github.com/nullnet-app/contextmint-bridge/commit/4737078711cd4184c1c922de541fb32ef7fe2c6c))
+* **extension:** connect browser pairing from the popup ([#39](https://github.com/nullnet-app/contextmint-bridge/issues/39)) ([bb2ef10](https://github.com/nullnet-app/contextmint-bridge/commit/bb2ef10d4d80118aaf9132c14805c44531b5e7ee))
+
+
+### Bug Fixes
+
+* **extension-core:** clean account derived records on token removal ([#46](https://github.com/nullnet-app/contextmint-bridge/issues/46)) ([08de409](https://github.com/nullnet-app/contextmint-bridge/commit/08de409bb728ba5d8490b6fc63e5160b038ed90d))
+* **extension-core:** finish account-forget follow-ups ([#51](https://github.com/nullnet-app/contextmint-bridge/issues/51)) ([8b8a7b7](https://github.com/nullnet-app/contextmint-bridge/commit/8b8a7b78cfbfc388275168983d5d07997eeddbbe))
+
+
+### Documentation
+
+* **extension:** retire obsolete pairing flows ([#42](https://github.com/nullnet-app/contextmint-bridge/issues/42)) ([ff1d54d](https://github.com/nullnet-app/contextmint-bridge/commit/ff1d54d2b96b1e4088af8f0b735f83777e611d39))
+
 ## [1.3.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.2.0...v1.3.0) (2026-09-28)
 
 
