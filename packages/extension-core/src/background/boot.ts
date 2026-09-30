@@ -35,6 +35,7 @@ import {
   loadRemoteLinks,
   onHandoffLinkState,
   setHandoffTarget,
+  decideAccountCard,
 } from './socket.js';
 import {
   nativeMessagingRuntime,
@@ -138,7 +139,8 @@ export function maybeBoot(): void {
   if (typeof chrome.runtime.onMessage?.addListener === 'function') {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (
-        msg !== null && typeof msg === 'object' &&
+        msg !== null &&
+        typeof msg === 'object' &&
         (msg as { type?: unknown }).type === BRIDGE_CONNECT_ORIGINS &&
         (sender as { tab?: unknown } | undefined)?.tab === undefined
       ) {
@@ -146,24 +148,42 @@ export function maybeBoot(): void {
         return true;
       }
       if (
-        msg !== null && typeof msg === 'object' &&
+        msg !== null &&
+        typeof msg === 'object' &&
         (msg as { type?: unknown }).type === BRIDGE_CONNECT_BEGIN &&
         (sender as { tab?: unknown } | undefined)?.tab === undefined
       ) {
         const m = msg as { origin?: unknown; name?: unknown };
         void beginBridgeConnect(m.origin, m.name)
-          .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))
+          .catch((e: unknown) => ({
+            ok: false,
+            reason: e instanceof Error ? e.message : String(e),
+          }))
           .then(sendResponse);
         return true;
       }
       if (
-        msg !== null && typeof msg === 'object' &&
+        msg !== null &&
+        typeof msg === 'object' &&
         (msg as { type?: unknown }).type === BRIDGE_CONNECT_APPROVAL &&
         (sender as { tab?: unknown } | undefined)?.tab !== undefined
       ) {
         void onBridgeConnectApproval(msg, sender as ConnectSender)
-          .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }))
+          .catch((e: unknown) => ({
+            ok: false,
+            reason: e instanceof Error ? e.message : String(e),
+          }))
           .then(sendResponse);
+        return true;
+      }
+      if (
+        msg !== null &&
+        typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === 'account-card-decision' &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        const m = msg as { key?: unknown; approve?: unknown };
+        void decideAccountCard(m.key, m.approve === true).then(sendResponse);
         return true;
       }
       // 2.1.0: the popup changed the configured remote bridge targets — a

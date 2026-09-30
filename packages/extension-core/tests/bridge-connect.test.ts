@@ -137,6 +137,8 @@ describe('Connect approval handler boundary', () => {
     const targets = await loadRemoteTargets();
     expect(targets).toHaveLength(1);
     expect(targets[0]?.token).toBe(`mcpb_${'T'.repeat(43)}`);
+    expect(targets[0]?.connectApproved).toBe(true);
+    expect(targets[0]?.connectAccount).toEqual({ slug: 'owner', displayName: 'Owner account' });
     expect(JSON.stringify(local.data)).not.toContain(`mcpb_${'T'.repeat(43)}`);
     expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(false);
     expect(finishCalls).toBe(1);

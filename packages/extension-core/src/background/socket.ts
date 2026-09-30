@@ -38,6 +38,11 @@ import {
   type InnerFrame,
   type EncryptedFrame,
   unavailableCapabilitiesHelloField,
+  ACCOUNT_KEY_FRAME,
+  ACCOUNT_ATTEST_FRAME,
+  accountKeyId,
+  fromB64,
+  type AccountKeyFrame,
 } from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../chrome-api.js';
@@ -53,8 +58,17 @@ import { unavailableCapabilities } from '../capabilities.js';
 // states the same fact to the browser user, and two copies of a remedy are two
 // things to forget to bump.
 import { MIN_SERVER_VERSION } from '../lib/version-mismatch.js';
-import { EXTENSION_MISMATCH_CLOSE, EXTENSION_MISMATCH_MESSAGE } from '../bridge-gateway.js';
-import { ACCOUNT_CONFIRMED_CLOSE, FACTS_CHANGED_CLOSE } from '../bridge-close-codes.js';
+import {
+  EXTENSION_MISMATCH_CLOSE,
+  EXTENSION_MISMATCH_MESSAGE,
+  gatewayOriginFor,
+} from '../bridge-gateway.js';
+import {
+  ACCOUNT_CONFIRMED_CLOSE,
+  CREDENTIAL_REVOKED_CLOSE,
+  FACTS_CHANGED_CLOSE,
+} from '../bridge-close-codes.js';
+import { AccountTrustStore, type TrustedAccount } from '../account-trust-store.js';
 
 import { state } from './state.js';
 import { setConnectionStatus, flashActivity } from './badge.js';
@@ -138,6 +152,7 @@ export function setHandoffTarget(target: HandoffTarget | null): void {
           id: target.id,
           url: target.url,
           token: target.token,
+          tokenId: target.id,
           label: target.name,
           enabled: true,
         }
@@ -177,7 +192,10 @@ function reconcileLinks(): void {
     if (t.enabled) wanted.set(`remote:${t.id}`, { target: t, handoff: false });
   }
   if (handoffTarget) {
-    wanted.set(`${HANDOFF_LINK_PREFIX}${handoffTarget.id}`, { target: handoffTarget, handoff: true });
+    wanted.set(`${HANDOFF_LINK_PREFIX}${handoffTarget.id}`, {
+      target: handoffTarget,
+      handoff: true,
+    });
   }
   for (const link of [...links.values()]) {
     if (link.kind !== 'remote') continue;
@@ -254,12 +272,16 @@ function connectLink(link: Link): void {
   if (link.refusal !== null) return;
   if (!state.trust || !state.sessions || !state.extIdentity) return;
   if (Date.now() < link.nextAttemptAt) return;
-  if (link.ws && (link.ws.readyState === WebSocket.CONNECTING || link.ws.readyState === WebSocket.OPEN)) {
+  if (
+    link.ws &&
+    (link.ws.readyState === WebSocket.CONNECTING || link.ws.readyState === WebSocket.OPEN)
+  ) {
     return;
   }
   let ws: WebSocket;
   try {
-    ws = link.protocols.length > 0 ? new WebSocket(link.url, link.protocols) : new WebSocket(link.url);
+    ws =
+      link.protocols.length > 0 ? new WebSocket(link.url, link.protocols) : new WebSocket(link.url);
   } catch (e) {
     // A malformed URL or subprotocol throws synchronously. There is no socket
     // to hang a close handler on, so schedule the retry here — the target may
@@ -296,7 +318,12 @@ function connectLink(link: Link): void {
       sessionNonce: toB64(sessionNonce),
       // B-BUG-9: host → extension notices this build understands. A host
       // sends `peer-gone` only to an extension that lists it.
-      accepts: ['peer-gone'],
+      // Account identity frames are meaningful only on configured remote
+      // credentials. Loopback's advertised contract stays unchanged.
+      accepts:
+        link.kind === 'remote'
+          ? ['peer-gone', ACCOUNT_KEY_FRAME, ACCOUNT_ATTEST_FRAME]
+          : ['peer-gone'],
       // #418: what this browser cannot serve, found by runtime API detection,
       // so an MCP can refuse those verbs locally with a hint that blames the
       // browser. Sent on EVERY link, before any MCP hello: every published
@@ -317,6 +344,15 @@ function connectLink(link: Link): void {
   });
   ws.addEventListener('close', (ev: CloseEvent) => {
     teardownLink(link);
+    if (
+      link.kind === 'remote' &&
+      (ev?.code === CREDENTIAL_REVOKED_CLOSE || ev?.code === EXTENSION_MISMATCH_CLOSE) &&
+      link.tokenId
+    ) {
+      void accountTrust.deleteByToken(link.tokenId).catch((e) =>
+        console.warn('[fetchproxy] could not remove revoked account trust:', e),
+      );
+    }
     if (!anyLinkOpen()) setConnectionStatus('disconnected');
     // A link REMOVED on purpose (a new credential, or the target withdrawn)
     // is not a drop to report: the hand-off reports the state after that
@@ -327,7 +363,9 @@ function connectLink(link: Link): void {
     // bridge. Say so once per close rather than letting it read as a network
     // blip in the retry log.
     if (link.kind === 'remote' && ev?.code === 1008) {
-      console.warn(`[fetchproxy] ${link.label} refused this browser: ${ev.reason || 'no reason given'}`);
+      console.warn(
+        `[fetchproxy] ${link.label} refused this browser: ${ev.reason || 'no reason given'}`,
+      );
     }
     // 4004 EXTENSION_MISMATCH: this credential is bound to a DIFFERENT
     // browser's identity (mcp-host spec §4.3). Final for this credential — a
@@ -443,6 +481,12 @@ async function onMessage(link: Link, data: string): Promise<void> {
     console.warn('[fetchproxy] dropped malformed frame:', e);
     return;
   }
+  // The local concentrator has no account identity. Drop these frame names
+  // before validation so loopback never parses or acts on them.
+  if (link.kind === 'local' && raw !== null && typeof raw === 'object') {
+    const type = (raw as { type?: unknown }).type;
+    if (type === ACCOUNT_KEY_FRAME || type === ACCOUNT_ATTEST_FRAME) return;
+  }
   let frame: Frame;
   try {
     frame = validateFrame(raw);
@@ -466,8 +510,181 @@ async function onMessage(link: Link, data: string): Promise<void> {
     await onEncryptedFrame(link, frame);
   } else if (frame.type === 'peer-gone') {
     onPeerGone(link, frame.mcpId);
+  } else if (frame.type === ACCOUNT_KEY_FRAME) {
+    await onAccountKey(link, frame);
   }
   // ready frames from the host shouldn't reach us; ignore.
+}
+
+const accountTrust = new AccountTrustStore();
+const ACCOUNT_CARDS_KEY = 'pendingAccountCards';
+
+export interface PendingAccountCard {
+  key: string;
+  linkId: string;
+  tokenId: string;
+  origin: string;
+  account: AccountKeyFrame;
+  keyChanged: boolean;
+}
+
+async function onAccountKey(link: Link, frame: AccountKeyFrame): Promise<void> {
+  // The frame has passed the published protocol validator. It is still
+  // advisory until its public-key fingerprint, token and live link match.
+  if (link.kind !== 'remote' || !link.tokenId || frame.tokenId !== link.tokenId) return;
+  const origin = gatewayOriginFor(link.url);
+  if (!origin) return;
+  if (
+    link.connectApproved &&
+    (!link.connectAccount ||
+      link.connectAccount.slug !== frame.slug ||
+      link.connectAccount.displayName !== frame.displayName)
+  ) {
+    console.warn(
+      `[fetchproxy] refused account key that did not match the Connect result on ${link.label}`,
+    );
+    return;
+  }
+  const fingerprint = await accountKeyId(fromB64(frame.publicKey));
+  if (fingerprint !== frame.kid) {
+    console.warn(`[fetchproxy] refused account key with an invalid fingerprint on ${link.label}`);
+    return;
+  }
+  const highWater = await accountTrust.getHighWater(origin, frame.accountId);
+  if (frame.generation < highWater) {
+    console.warn(
+      `[fetchproxy] refused account key below its generation high-water mark on ${link.label}`,
+    );
+    return;
+  }
+  const existing = await accountTrust.get(origin, frame.accountId);
+  const keyChanged =
+    !!existing &&
+    (frame.generation > existing.generation ||
+      (frame.generation === existing.generation && frame.kid !== existing.kid));
+  if (
+    existing &&
+    existing.tokenId === link.tokenId &&
+    frame.generation === existing.generation &&
+    frame.kid === existing.kid
+  )
+    return;
+
+  const record: TrustedAccount = {
+    origin,
+    accountId: frame.accountId,
+    slug: frame.slug,
+    displayName: frame.displayName,
+    tokenId: frame.tokenId,
+    kid: frame.kid,
+    publicKey: frame.publicKey,
+    generation: frame.generation,
+    generationHighWater: Math.max(highWater, frame.generation),
+    approvedAt: Date.now(),
+  };
+  // A successful Connect was initiated by the extension click (the explicit
+  // I-6 approval) and this frame names the account returned by that request.
+  // This consent is specific to the newly-created token. Key changes still
+  // require a fresh card approval.
+  if (link.connectApproved && !keyChanged) {
+    const consumed = await accountTrust.putApproved(record, link.targetId ?? '', true);
+    if (consumed) {
+      link.connectApproved = undefined;
+      link.connectAccount = undefined;
+      return;
+    }
+    const raced = await accountTrust.get(origin, frame.accountId);
+    if (
+      raced?.tokenId === link.tokenId &&
+      raced.generation === frame.generation &&
+      raced.kid === frame.kid
+    )
+      return;
+  }
+
+  const area = (
+    globalThis as {
+      chrome?: {
+        storage?: {
+          session?: {
+            get: (k: string) => Promise<Record<string, unknown>>;
+            set: (v: Record<string, unknown>) => Promise<void>;
+          };
+        };
+      };
+    }
+  ).chrome?.storage?.session;
+  if (!area) return;
+  const key = `${link.id}:${frame.accountId}`;
+  const stored = await area.get(ACCOUNT_CARDS_KEY);
+  const cards =
+    stored[ACCOUNT_CARDS_KEY] && typeof stored[ACCOUNT_CARDS_KEY] === 'object'
+      ? { ...(stored[ACCOUNT_CARDS_KEY] as Record<string, PendingAccountCard>) }
+      : {};
+  cards[key] = { key, linkId: link.id, tokenId: link.tokenId, origin, account: frame, keyChanged };
+  await area.set({ [ACCOUNT_CARDS_KEY]: cards });
+  broadcastConnectionsChanged();
+}
+
+export async function decideAccountCard(key: unknown, approve: boolean): Promise<boolean> {
+  if (typeof key !== 'string' || key.length > 256) return false;
+  const area = (
+    globalThis as {
+      chrome?: {
+        storage?: {
+          session?: {
+            get: (k: string) => Promise<Record<string, unknown>>;
+            set: (v: Record<string, unknown>) => Promise<void>;
+            remove: (k: string) => Promise<void>;
+          };
+        };
+      };
+    }
+  ).chrome?.storage?.session;
+  if (!area) return false;
+  const stored = await area.get(ACCOUNT_CARDS_KEY);
+  const cards =
+    stored[ACCOUNT_CARDS_KEY] && typeof stored[ACCOUNT_CARDS_KEY] === 'object'
+      ? { ...(stored[ACCOUNT_CARDS_KEY] as Record<string, PendingAccountCard>) }
+      : {};
+  const card = cards[key];
+  if (!card || typeof card.linkId !== 'string' || typeof card.tokenId !== 'string') return false;
+  delete cards[key];
+  if (Object.keys(cards).length === 0) await area.remove(ACCOUNT_CARDS_KEY);
+  else await area.set({ [ACCOUNT_CARDS_KEY]: cards });
+  if (!approve) return true;
+
+  const link = links.get(card.linkId);
+  if (
+    !link ||
+    link.kind !== 'remote' ||
+    link.ws?.readyState !== WebSocket.OPEN ||
+    link.tokenId !== card.tokenId
+  )
+    return false;
+  if (gatewayOriginFor(link.url) !== card.origin || card.account.tokenId !== card.tokenId)
+    return false;
+  const highWater = await accountTrust.getHighWater(card.origin, card.account.accountId);
+  if (card.account.generation < highWater) return false;
+  if ((await accountKeyId(fromB64(card.account.publicKey))) !== card.account.kid) return false;
+  const saved = await accountTrust.putApproved({
+    origin: card.origin,
+    accountId: card.account.accountId,
+    slug: card.account.slug,
+    displayName: card.account.displayName,
+    tokenId: card.tokenId,
+    kid: card.account.kid,
+    publicKey: card.account.publicKey,
+    generation: card.account.generation,
+    generationHighWater: Math.max(highWater, card.account.generation),
+    approvedAt: Date.now(),
+  }, link.targetId ?? '');
+  if (saved) {
+    link.connectApproved = undefined;
+    link.connectAccount = undefined;
+    broadcastConnectionsChanged();
+  }
+  return saved;
 }
 
 /**

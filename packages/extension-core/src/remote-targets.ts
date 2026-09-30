@@ -71,6 +71,10 @@ export interface RemoteTarget {
    * Used to avoid adding the same credential twice. Not a secret.
    */
   tokenId?: string;
+  /** True only for credentials created by the extension's explicit Connect click. */
+  connectApproved?: true;
+  /** Account named by the Connect finish result; binds click consent to the gateway answer. */
+  connectAccount?: { slug: string; displayName: string };
 }
 
 /**
@@ -78,6 +82,12 @@ export interface RemoteTarget {
  * identifiers cannot enter the vault or duplicate-target check.
  */
 const TOKEN_ID = /^brt_[A-Za-z0-9_-]{1,64}$/;
+
+function isConnectAccount(value: unknown): value is { slug: string; displayName: string } {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.slug === 'string' && typeof candidate.displayName === 'string';
+}
 
 export function isBridgeTokenId(value: unknown): value is string {
   return typeof value === 'string' && TOKEN_ID.test(value);
@@ -153,7 +163,7 @@ export function normaliseRemoteTargets(stored: unknown): RemoteTarget[] {
   for (const row of rows) {
     if (out.length >= MAX_REMOTE_TARGETS) break;
     if (!isRecord(row)) continue;
-    const { id, url, token, label, enabled, tokenId } = row;
+    const { id, url, token, label, enabled, tokenId, connectApproved, connectAccount } = row;
     if (typeof id !== 'string' || id === '') continue;
     if (typeof url !== 'string' || !validateRemoteTargetUrl(url).ok) continue;
     if (typeof token !== 'string' || !validateRemoteTargetToken(token).ok) continue;
@@ -171,6 +181,12 @@ export function normaliseRemoteTargets(stored: unknown): RemoteTarget[] {
       // Kept only when it is a credential id; anything else is dropped rather
       // than signed over.
       ...(isBridgeTokenId(tokenId) ? { tokenId } : {}),
+      ...(connectApproved === true && isBridgeTokenId(tokenId)
+        ? { connectApproved: true as const }
+        : {}),
+      ...(connectApproved === true && isBridgeTokenId(tokenId) && isConnectAccount(connectAccount)
+        ? { connectAccount: { slug: connectAccount.slug, displayName: connectAccount.displayName } }
+        : {}),
     });
   }
   return out;

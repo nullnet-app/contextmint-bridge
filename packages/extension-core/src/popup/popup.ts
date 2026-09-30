@@ -263,6 +263,17 @@ export interface BridgesView {
 
 export type PopupState =
   | {
+      mode: 'account-card';
+      card: {
+        key: string;
+        origin: string;
+        keyChanged: boolean;
+        account: { slug: string; displayName: string; confirmedBy: string; bridgedRegistrations: number; kid: string };
+      };
+      onApprove: () => void;
+      onNotNow: () => void;
+    }
+  | {
       mode: 'empty';
       bridges?: BridgesView;
       /**
@@ -927,6 +938,29 @@ function appendVersionMismatches(root: HTMLElement, list: readonly VersionMismat
 export function renderPopup(root: HTMLElement, state: PopupState): void {
   root.innerHTML = '';
 
+  if (state.mode === 'account-card') {
+    const name = state.card.account.displayName;
+    root.appendChild(elem('h3', {}, state.card.keyChanged ? `The account key for ${name} changed. Approve again?` : 'Use this account in your browser?'));
+    root.appendChild(elem('p', { class: 'hint' }, `Use your browser for every MCP in ${state.card.account.slug}, including ones you add later, on the sites you approve for each.`));
+    const details = elem('dl', { class: 'account-card-details' });
+    const row = (label: string, value: string): void => { details.appendChild(elem('dt', {}, label)); details.appendChild(elem('dd', {}, value)); };
+    row('Account', `${name} (${state.card.account.slug})`);
+    row('Confirmed by', state.card.account.confirmedBy);
+    row('Gateway', state.card.origin);
+    row('Bridged registrations', String(state.card.account.bridgedRegistrations));
+    row('Key fingerprint', state.card.account.kid);
+    root.appendChild(details);
+    root.appendChild(elem('p', { class: 'hint' }, 'The bridge only reads a tab when an MCP asks, and only on sites approved for that MCP.'));
+    const actions = elem('div', { class: 'account-card-actions' });
+    const approve = elem('button', { 'data-action': 'approve-account' }, 'Approve');
+    approve.addEventListener('click', state.onApprove);
+    const notNow = elem('button', { 'data-action': 'dismiss-account' }, 'Not now');
+    notNow.addEventListener('click', state.onNotNow);
+    actions.append(approve, notNow);
+    root.appendChild(actions);
+    return;
+  }
+
   if (state.mode === 'empty') {
     appendVersionMismatches(root, state.mismatches ?? []);
     root.appendChild(
@@ -1314,7 +1348,22 @@ async function bootstrap(): Promise<void> {
   // re-reading from storage (storage gets the write but we want immediate
   // visual feedback, before the next popup open).
   const renderNext = async (): Promise<void> => {
-    const got = await queue.get(['pendingPair']);
+    const got = await queue.get(['pendingPair', 'pendingAccountCards']);
+    const cards = got['pendingAccountCards'] && typeof got['pendingAccountCards'] === 'object'
+      ? got['pendingAccountCards'] as Record<string, { key: string; origin: string; keyChanged: boolean; account: { slug: string; displayName: string; confirmedBy: string; bridgedRegistrations: number; kid: string } }>
+      : {};
+    const accountCard = Object.values(cards).sort((a, b) => a.key.localeCompare(b.key))[0];
+    if (accountCard) {
+      const decide = async (approve: boolean): Promise<void> => {
+        try { await chrome.runtime?.sendMessage?.({ type: 'account-card-decision', key: accountCard.key, approve }); }
+        finally { await renderNext(); }
+      };
+      renderPopup(root, {
+        mode: 'account-card', card: accountCard,
+        onApprove: () => { void decide(true); }, onNotNow: () => { void decide(false); },
+      });
+      return;
+    }
     const dict = readPendingDict(got['pendingPair']);
     const entries = Object.values(dict);
     if (entries.length === 0) {
@@ -1579,13 +1628,7 @@ async function bootstrap(): Promise<void> {
 
   // Branch: pending pairs take precedence over the status list. If no
   // pending pairs, render the trusted-MCPs status view.
-  const got0 = await queue.get(['pendingPair']);
-  const dict0 = readPendingDict(got0['pendingPair']);
-  if (Object.keys(dict0).length > 0) {
-    await renderNext();
-  } else {
-    await renderTrustedStatus();
-  }
+  await renderNext();
 
   // Part 3: listen for connection-change notifications from the background
   // service worker. When a session comes up or tears down, re-render the
@@ -1598,7 +1641,7 @@ async function bootstrap(): Promise<void> {
         typeof msg === 'object' &&
         (msg as { type?: unknown }).type === 'connections-changed'
       ) {
-        void renderTrustedStatus();
+        void renderNext();
       }
     });
   }

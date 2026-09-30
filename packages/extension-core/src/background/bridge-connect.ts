@@ -151,7 +151,7 @@ export async function onBridgeConnectApproval(
       return { ok: false, reason: 'This browser already has that bridge configured.' };
     }
     const id = `c${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
-    const next: RemoteTarget[] = [...targets, { id, url: credential.bridgeUrl, token: credential.token, tokenId: credential.tokenId, label: credential.name, enabled: true }];
+    const next: RemoteTarget[] = [...targets, { id, url: credential.bridgeUrl, token: credential.token, tokenId: credential.tokenId, connectApproved: true, connectAccount: credential.account, label: credential.name, enabled: true }];
     await deps.saveTargets(next);
     try { await (globalThis as { chrome?: { runtime?: { sendMessage?: (m: unknown) => Promise<unknown> } } }).chrome?.runtime?.sendMessage?.({ type: REMOTE_TARGETS_CHANGED }); } catch { /* boot re-reads the vault */ }
     await setConnectStatus(`Connected to ${credential.account.displayName}`);

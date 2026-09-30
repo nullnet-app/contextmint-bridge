@@ -62,6 +62,12 @@ export interface Link {
    * the popup as "from ContextMint" rather than as an editable row.
    */
   readonly handoff: boolean;
+  readonly targetId?: string;
+  /** Credential identity, used to bind account-key frames to this live link. */
+  readonly tokenId?: string;
+  /** Connect-click consent applies only to the new account named by this credential. */
+  connectApproved?: true;
+  connectAccount?: { slug: string; displayName: string };
   /**
    * Why the bridge refused this browser for good — set on a `4004
    * EXTENSION_MISMATCH` close. A refused link is never dialled again; only a
@@ -106,6 +112,8 @@ export function localLink(): Link {
     sessionNonce: null,
     closed: false,
     handoff: false,
+    targetId: undefined,
+    tokenId: undefined,
     refusal: null,
     lastImmediateRedialAt: 0,
   };
@@ -124,6 +132,10 @@ export function remoteLink(target: RemoteTarget, protocols: string[], handoff = 
     sessionNonce: null,
     closed: false,
     handoff,
+    targetId: target.id,
+    ...(target.tokenId ? { tokenId: target.tokenId } : {}),
+    ...(target.connectApproved ? { connectApproved: true as const } : {}),
+    ...(target.connectAccount ? { connectAccount: target.connectAccount } : {}),
     refusal: null,
     lastImmediateRedialAt: 0,
   };
@@ -215,7 +227,9 @@ export function linkStatuses(): LinkStatus[] {
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
     });
   }
-  return out.sort((a, b) => (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1));
+  return out.sort((a, b) =>
+    a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind === 'local' ? -1 : 1,
+  );
 }
 
 /** True while at least one link has an open socket. */

@@ -23,6 +23,28 @@ describe('renderPopup', () => {
     container = document.getElementById('root')!;
   });
 
+  it('renders the account trust card with its identity fields and actions', () => {
+    const onApprove = vi.fn();
+    const onNotNow = vi.fn();
+    renderPopup(container, {
+      mode: 'account-card',
+      card: {
+        key: 'remote:one:acc_123', origin: 'https://gateway.example', keyChanged: true,
+        account: { slug: 'chris', displayName: 'Chris Hall', confirmedBy: 'c•••@gmail.com', bridgedRegistrations: 19, kid: '0123456789abcdef' },
+      },
+      onApprove, onNotNow,
+    });
+    expect(container.textContent).toContain('The account key for Chris Hall changed. Approve again?');
+    expect(container.textContent).toContain('c•••@gmail.com');
+    expect(container.textContent).toContain('https://gateway.example');
+    expect(container.textContent).toContain('19');
+    expect(container.textContent).toContain('0123456789abcdef');
+    container.querySelector<HTMLButtonElement>('[data-action="approve-account"]')!.click();
+    container.querySelector<HTMLButtonElement>('[data-action="dismiss-account"]')!.click();
+    expect(onApprove).toHaveBeenCalledOnce();
+    expect(onNotNow).toHaveBeenCalledOnce();
+  });
+
   it('renders empty state when no pending and no trusted', () => {
     renderPopup(container, { mode: 'empty' });
     expect(container.textContent).toContain('No MCP servers connected');
