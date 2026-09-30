@@ -101,6 +101,7 @@ export async function onApproval(record: AnyPendingRecord): Promise<void> {
   // waiting processes (all share the same identity and scope).
   await state.trust.put(approved.identityHash, {
     serverName: approved.serverName,
+    ...(approved.attestedBy ? { attestedBy: approved.attestedBy } : {}),
     domains: [...approved.domains],
     capabilities: [...approvedCapabilities],
     cookieKeys: [...(approved.cookieKeys ?? [])],

@@ -22,6 +22,8 @@ import { vaultGet, vaultUpdate } from './vault.js';
 import { ensureVault, sanitiseTrustStore } from './vault-migration.js';
 
 export interface TrustRecord {
+  /** Account provenance retained when a person hand-pairs an attested MCP. */
+  attestedBy?: { accountId: string; slug: string; origin: string };
   serverName: string;
   /**
    * Non-empty array of hostnames the user approved this MCP to reach
@@ -92,6 +94,7 @@ export interface TrustRecord {
 
 export interface TrustInput {
   serverName: string;
+  attestedBy?: { accountId: string; slug: string; origin: string };
   domains: string[];
   capabilities: string[];
   /**
@@ -207,6 +210,7 @@ export class TrustStore {
     const sessionStoragePointers = input.sessionStoragePointers ?? [];
     const record: TrustRecord = {
       serverName: input.serverName,
+      ...(input.attestedBy ? { attestedBy: input.attestedBy } : {}),
       domains: input.domains,
       capabilities: input.capabilities,
       cookieKeys,
@@ -235,6 +239,20 @@ export class TrustStore {
     await this.update((stored) => {
       delete stored.records[identityHash];
     });
+  }
+
+  async setAttestedBy(
+    identityHash: string,
+    attestedBy: { accountId: string; slug: string; origin: string },
+  ): Promise<boolean> {
+    let found = false;
+    await this.update((stored) => {
+      const record = stored.records[identityHash];
+      if (!record) return;
+      stored.records[identityHash] = { ...record, attestedBy };
+      found = true;
+    });
+    return found;
   }
 
   /**

@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
   handoffBridgeView,
+  mergeTrustedSummaries,
   renderPopup,
   type BridgesView,
   type PopupState,
@@ -78,6 +79,42 @@ describe('renderPopup', () => {
     expect(container.textContent).toContain('opentable.com');
     expect(container.textContent).toContain('resy-mcp');
     expect(container.textContent).toContain('resy.com');
+  });
+
+  it('labels account MCPs and renders new, always ask, and forget actions', () => {
+    const onAlwaysAsk = vi.fn();
+    const onForget = vi.fn();
+    renderPopup(container, { mode: 'status', trusted: [{
+      serverName: 'zillow', domains: ['zillow.com'], identityHash: 'hash-z',
+      source: { slug: 'chris', origin: 'https://gateway.example' }, isNew: true, alwaysAsk: false,
+    }], onAlwaysAsk, onForget });
+    expect(container.textContent).toContain('via chris on https://gateway.example');
+    expect(container.textContent).toContain('new');
+    expect(container.querySelector('[data-action="always-ask"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="forget-mcp"]')).not.toBeNull();
+    container.querySelector<HTMLButtonElement>('[data-action="always-ask"]')!.click();
+    container.querySelector<HTMLButtonElement>('[data-action="forget-mcp"]')!.click();
+    expect(onAlwaysAsk).toHaveBeenCalledWith('hash-z', true);
+    expect(onForget).toHaveBeenCalledWith('hash-z');
+  });
+
+  it('renders one removal action when revoke and forget callbacks target the same MCP', () => {
+    renderPopup(container, { mode: 'status', trusted: [{ serverName: 'server', domains: ['example.com'], identityHash: 'hash' }],
+      onRevoke: vi.fn(), onForget: vi.fn() });
+    expect(container.querySelector('[data-action="revoke"]')).toBeNull();
+    expect(container.querySelectorAll('[data-action="forget-mcp"]')).toHaveLength(1);
+  });
+
+  it('labels local MCPs and exposes account forgetting controls', () => {
+    const onForgetAccount = vi.fn();
+    renderPopup(container, { mode: 'status', trusted: [{ serverName: 'local-mcp', domains: ['local.test'], identityHash: 'local-hash' }],
+      accounts: [{ origin: 'https://gateway.example', slug: 'chris', accountId: 'acct-1' }], onForgetAccount });
+    expect(container.textContent).toContain('on this computer');
+    expect(container.querySelector('[data-action="forget-account"]')).not.toBeNull();
+    const also = container.querySelector<HTMLInputElement>('[data-action="also-forget-mcps"]')!;
+    also.checked = true;
+    container.querySelector<HTMLButtonElement>('[data-action="forget-account"]')!.click();
+    expect(onForgetAccount).toHaveBeenCalledWith('https://gateway.example', 'acct-1', true);
   });
 
   // Part 3: connection-status dot
@@ -1176,6 +1213,25 @@ describe('renderPopup', () => {
       });
       expect(container.textContent ?? '').toContain('⚠️');
     });
+  });
+});
+
+describe('mergeTrustedSummaries', () => {
+  it('keeps always-ask enabled when merging a derived record into a trusted row', () => {
+    const trusted = mergeTrustedSummaries({
+      identity: { serverName: 'zillow', domains: ['zillow.com'], capabilities: ['fetch'] },
+    }, {
+      identity: { slug: 'chris', origin: 'https://gateway.example', firstSeenAt: 0, alwaysAsk: true },
+    }, new Set());
+    const onAlwaysAsk = vi.fn();
+    const root = document.createElement('div');
+    renderPopup(root, { mode: 'status', trusted, onAlwaysAsk });
+
+    const toggle = root.querySelector<HTMLButtonElement>('[data-action="always-ask"]')!;
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(toggle.textContent).toBe('stop always asking');
+    toggle.click();
+    expect(onAlwaysAsk).toHaveBeenCalledWith('identity', false);
   });
 });
 

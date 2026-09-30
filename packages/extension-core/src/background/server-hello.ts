@@ -49,14 +49,21 @@ import { gatewayOriginFor } from '../bridge-gateway.js';
 import { AccountTrustStore } from '../account-trust-store.js';
 import type { AccountDerivedMcp } from '../account-trust-store.js';
 import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
+import { sendAwaitingApproval } from './awaiting-approval.js';
+import { currentPlatform } from '../platform.js';
 
 import { state } from './state.js';
 import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
 import { handleServerHello, type PendingAccountScopeUpdate } from './hello.js';
 import { setPairPendingBadge } from './badge.js';
+import { accountForgetActivityVersion, accountInvalidationEpoch, isAccountForgetInProgress } from './account-invalidation.js';
 
 const ACCOUNT_MCP_CARDS_KEY = 'pendingAccountMcpCards';
 const ACCOUNT_MCP_SESSION_APPROVALS_KEY = 'accountMcpSessionApprovals';
+function browserLabel(): string {
+  try { const p = currentPlatform(); return p[0]!.toUpperCase() + p.slice(1); }
+  catch { return 'browser'; }
+}
 interface PendingAccountMcpCard {
   kind: 'confirm' | 'scope-update';
   key: string; linkId: string; tokenId: string; origin: string; identityHash: string;
@@ -85,6 +92,7 @@ async function queueAccountMcpCard(link: Link, hello: HelloFrameFromServer, resu
   };
   await area.set({ [ACCOUNT_MCP_CARDS_KEY]: cards });
   setPairPendingBadge();
+  sendAwaitingApproval(link, hello.mcpId, hello.accepts, result.identityHash, result.accountSlug || result.serverName, browserLabel());
 }
 
 async function queueAccountScopeUpdate(link: Link, hello: HelloFrameFromServer, update: PendingAccountScopeUpdate, attestation: AccountAttestFrame): Promise<void> {
@@ -108,6 +116,7 @@ async function queueAccountScopeUpdate(link: Link, hello: HelloFrameFromServer, 
 
 export async function decideAccountMcpCard(key: unknown, allow: boolean): Promise<boolean> {
   if (typeof key !== 'string' || key.length > 512) return false;
+  const forgetActivity = accountForgetActivityVersion();
   const area = chrome.storage?.session;
   if (!area) return false;
   const stored = await area.get(ACCOUNT_MCP_CARDS_KEY);
@@ -115,6 +124,10 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     ? { ...(stored[ACCOUNT_MCP_CARDS_KEY] as Record<string, PendingAccountMcpCard>) } : {};
   const card = cards[key];
   if (!card) return false;
+  if (accountForgetActivityVersion() !== forgetActivity ||
+      isAccountForgetInProgress(card.origin, card.accountId)) return false;
+  const decisionEpoch = accountInvalidationEpoch(card.origin, card.accountId);
+  const decisionStillCurrent = (): boolean => accountInvalidationEpoch(card.origin, card.accountId) === decisionEpoch;
   delete cards[key];
   if (Object.keys(cards).length) await area.set({ [ACCOUNT_MCP_CARDS_KEY]: cards });
   else await area.remove(ACCOUNT_MCP_CARDS_KEY);
@@ -127,7 +140,7 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
       card.attestation.notAfter < Math.floor(Date.now() / 1000) ||
       card.attestation.notAfter > Math.floor(Date.now() / 1000) + 24 * 60 * 60) return false;
   const account = await new AccountTrustStore().get(card.origin, card.accountId);
-  if (!account || account.tokenId !== card.tokenId || account.generation !== card.attestation.generation) return false;
+  if (!decisionStillCurrent() || !account || account.tokenId !== card.tokenId || account.generation !== card.attestation.generation) return false;
   if (card.kind === 'scope-update') {
     // This offer targets the already attached identity on this link. Check
     // both parts before persisting the wider approval: an old card must not
@@ -146,15 +159,19 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     if (!isCurrentScopeUpdate()) return false;
     const store = new AccountTrustStore();
     const derived = await store.getDerived(card.identityHash);
-    if (!derived || derived.origin !== card.origin || derived.accountId !== card.accountId) return false;
+    if (!decisionStillCurrent() || !derived || derived.origin !== card.origin || derived.accountId !== card.accountId) return false;
     // Account and derived reads yield. The same mcpId can have been rebound
     // while either read was pending, so revalidate at the last point before
     // persisting the expanded approval.
-    if (!isCurrentScopeUpdate()) return false;
-    await store.putDerived(card.identityHash, { ...derived, scope: card.scope, approvedScope: card.scope, lastSeenAt: Date.now() });
+    if (!decisionStillCurrent() || !isCurrentScopeUpdate()) return false;
+    await store.putDerived(card.identityHash, { ...derived, generation: account.generation, scope: card.scope, approvedScope: card.scope, lastSeenAt: Date.now() });
+    if (!decisionStillCurrent()) {
+      await store.deleteDerivedIfGeneration(card.identityHash, card.origin, card.accountId, account.generation);
+      return false;
+    }
     // Persistence also yields. A replacement session must not inherit the
     // old link's newly approved live request scope.
-    if (!isCurrentScopeUpdate()) return false;
+    if (!decisionStillCurrent() || !isCurrentScopeUpdate()) return false;
     // A scope-update is offered only for an already attached identity. Apply
     // the newly approved declared scope to its live request gates immediately;
     // card.scope is the exact, signed hello declaration, so it cannot grant
@@ -172,6 +189,10 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     if (state.trust) {
       await syncMainWorldBridgeForActiveTrust(state.trust, { injectIntoOpenTabs: true });
     }
+    if (!decisionStillCurrent()) {
+      await store.deleteDerivedIfGeneration(card.identityHash, card.origin, card.accountId, account.generation);
+      return false;
+    }
     return true;
   }
   // The card is the explicit approval for both `confirm` and a silent
@@ -180,19 +201,37 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
   if (card.consent !== 'confirm-each') {
     const prior = await new AccountTrustStore().getDerived(card.identityHash);
     const next: AccountDerivedMcp = {
-      origin: card.origin, accountId: card.accountId, registrationId: card.attestation.registrationId,
+      origin: card.origin, accountId: card.accountId, generation: account.generation, registrationId: card.attestation.registrationId,
       slug: card.registrationSlug, scope: card.scope, approvedScope: card.scope,
       firstSeenAt: prior?.firstSeenAt ?? Date.now(), lastSeenAt: Date.now(),
       ...(prior?.alwaysAsk ? { alwaysAsk: true } : {}),
     };
-    await new AccountTrustStore().putDerived(card.identityHash, next);
+    if (!decisionStillCurrent()) return false;
+    const store = new AccountTrustStore();
+    await store.putDerived(card.identityHash, next);
+    if (!decisionStillCurrent()) {
+      await store.deleteDerivedIfGeneration(card.identityHash, card.origin, card.accountId, account.generation);
+      return false;
+    }
   } else {
     const approvals = await area.get(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
     const dict = approvals[ACCOUNT_MCP_SESSION_APPROVALS_KEY] && typeof approvals[ACCOUNT_MCP_SESSION_APPROVALS_KEY] === 'object'
       ? { ...(approvals[ACCOUNT_MCP_SESSION_APPROVALS_KEY] as Record<string, AccountSessionApproval>) } : {};
     dict[card.identityHash] = { scope: card.scope, origin: card.origin, accountId: card.accountId,
       tokenId: card.tokenId, generation: card.attestation.generation };
+    if (!decisionStillCurrent()) return false;
     await area.set({ [ACCOUNT_MCP_SESSION_APPROVALS_KEY]: dict });
+    if (!decisionStillCurrent()) {
+      const latest = await area.get(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
+      const latestApprovals = latest[ACCOUNT_MCP_SESSION_APPROVALS_KEY] as Record<string, AccountSessionApproval> | undefined;
+      const current = latestApprovals?.[card.identityHash];
+      if (current?.origin === card.origin && current.accountId === card.accountId && current.generation === account.generation) {
+        const remaining = { ...latestApprovals }; delete remaining[card.identityHash];
+        if (Object.keys(remaining).length) await area.set({ [ACCOUNT_MCP_SESSION_APPROVALS_KEY]: remaining });
+        else await area.remove(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
+      }
+      return false;
+    }
   }
   await onServerHello(link, card.hello, { attestation: card.attestation, approvedScope: card.scope });
   return true;
@@ -232,6 +271,7 @@ import {
   mcpAccountDerivedDomains,
   applyGrantedScopeToSession,
   broadcastConnectionsChanged,
+  clearSessionScopeFor,
 } from './session-scope.js';
 
 declare const chrome: ChromeApi;
@@ -272,6 +312,16 @@ export function sendHelloRejected(
  */
 function tellServerWhy(link: Link, hello: HelloFrameFromServer, reason: string): void {
   sendHelloRejected(link, hello.mcpId, hello.accepts, reason);
+}
+
+function revokeHelloSession(mcpId: string, link: Link): void {
+  unbindMcp(mcpId, link);
+  state.sessions?.remove(mcpId);
+  mcpDomains.delete(mcpId);
+  mcpAccountDerivedDomains.delete(mcpId);
+  mcpIdentityHash.delete(mcpId);
+  clearSessionScopeFor(mcpId);
+  broadcastConnectionsChanged();
 }
 
 export async function onServerHello(
@@ -329,6 +379,12 @@ export async function onServerHello(
     return;
   }
   const origin = link.kind === 'remote' ? gatewayOriginFor(link.url) : null;
+  if (attestation && origin && isAccountForgetInProgress(origin, attestation.accountId)) {
+    unbindMcp(hello.mcpId, link);
+    tellServerWhy(link, hello, 'the account is being forgotten');
+    return;
+  }
+  const accountEpoch = attestation && origin ? accountInvalidationEpoch(origin, attestation.accountId) : null;
   const accountRecord = attestation && link.kind === 'remote' && link.tokenId && origin
     ? await new AccountTrustStore().get(origin, attestation.accountId)
     : null;
@@ -378,6 +434,14 @@ export async function onServerHello(
     ...(accountRecord ? { accountDerived: matchingAccountDerived } : {}),
     nowSeconds: Math.floor(Date.now() / 1000),
   });
+  // A forget may complete while account lookup or the authorization decision
+  // is suspended. The account record snapshot must not outlive its authority.
+  if (accountEpoch !== null && origin && attestation &&
+      accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+    unbindMcp(hello.mcpId, link);
+    tellServerWhy(link, hello, 'the account was forgotten during this handshake');
+    return;
+  }
   if (result.kind === 'reject') {
     // Give the binding back. It was taken before the decision — deliberately,
     // so a second link cannot claim the id mid-decision — but a REFUSED id is
@@ -390,6 +454,26 @@ export async function onServerHello(
     return;
   }
   if (result.kind === 'auto-trust' || result.kind === 'account-silent') {
+    if (result.kind === 'auto-trust' && result.attestedBy && state.trust) {
+      // A hand-paired hosted MCP may gain a valid account attestation later.
+      // Retain provenance on its existing user-approved trust record so
+      // forgetting that account can optionally remove this exact MCP too.
+      try {
+        await state.trust.setAttestedBy(identityHash, result.attestedBy);
+      } catch (error) {
+        console.warn('[fetchproxy] could not save MCP account provenance:', error);
+      }
+      if (accountEpoch !== null && origin && attestation &&
+          accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+        revokeHelloSession(result.mcpId, link);
+        return;
+      }
+    }
+    if (accountEpoch !== null && origin && attestation &&
+        accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+      revokeHelloSession(result.mcpId, link);
+      return;
+    }
     // Store GRANTED (intersection) scope in the mcp* maps. `result` carries the
     // already-intersected scope (granted = approved ∩ declared), so applying it
     // verbatim never escalates beyond approval.
@@ -431,16 +515,62 @@ export async function onServerHello(
       mcpSessionPub: toB64(result.mcpSessionPub),
       sessionSig: toB64(sessionSig),
     };
+    if (accountEpoch !== null && origin && attestation &&
+        accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+      revokeHelloSession(hello.mcpId, link);
+      if (result.kind === 'account-silent' && result.accountDerivedUpdate) {
+        await new AccountTrustStore().deleteDerivedIfGeneration(result.accountDerivedUpdate.identityHash, origin,
+          attestation.accountId, result.accountDerivedUpdate.record.generation ?? attestation.generation);
+        await syncMainWorldBridgeForActiveTrust(state.trust!);
+      }
+      return;
+    }
     if (result.kind === 'account-silent' && result.accountDerivedUpdate) {
       const store = new AccountTrustStore();
+      if (accountEpoch === null || !origin || !attestation ||
+          accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+        unbindMcp(hello.mcpId, link);
+        state.sessions.remove(hello.mcpId);
+        mcpDomains.delete(hello.mcpId);
+        mcpAccountDerivedDomains.delete(hello.mcpId);
+        mcpIdentityHash.delete(hello.mcpId);
+        clearSessionScopeFor(hello.mcpId);
+        return;
+      }
       await store.putDerived(result.accountDerivedUpdate.identityHash, result.accountDerivedUpdate.record);
+      if (accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+        // The write may have committed after forget's durable deletion. Remove
+        // its residue and revoke the session before exposing a ready frame.
+        await store.deleteDerivedIfGeneration(result.accountDerivedUpdate.identityHash, origin, attestation.accountId,
+          result.accountDerivedUpdate.record.generation ?? attestation.generation);
+        revokeHelloSession(hello.mcpId, link);
+        await syncMainWorldBridgeForActiveTrust(state.trust!);
+        return;
+      }
       if (result.accountDerivedUpdate.firstSeen) {
         try { chrome.runtime?.sendMessage?.({ type: 'new-account-mcp', mcpId: result.mcpId, domains: result.domains }); } catch { /* popup may be closed */ }
       }
       await syncMainWorldBridgeForActiveTrust(state.trust!, { injectIntoOpenTabs: true });
+      if (accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+        await store.deleteDerivedIfGeneration(result.accountDerivedUpdate.identityHash, origin, attestation.accountId,
+          result.accountDerivedUpdate.record.generation ?? attestation.generation);
+        revokeHelloSession(hello.mcpId, link);
+        await syncMainWorldBridgeForActiveTrust(state.trust!);
+        return;
+      }
       if (result.pendingAccountScopeUpdate && attestation) {
         await queueAccountScopeUpdate(link, hello, result.pendingAccountScopeUpdate, attestation);
       }
+    }
+    if (accountEpoch !== null && origin && attestation &&
+        accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+      revokeHelloSession(hello.mcpId, link);
+      if (result.kind === 'account-silent' && result.accountDerivedUpdate) {
+        await new AccountTrustStore().deleteDerivedIfGeneration(result.accountDerivedUpdate.identityHash, origin,
+          attestation.accountId, result.accountDerivedUpdate.record.generation ?? attestation.generation);
+        await syncMainWorldBridgeForActiveTrust(state.trust!);
+      }
+      return;
     }
     sendOnLink(link, JSON.stringify(ready));
 
@@ -590,6 +720,7 @@ export async function onServerHello(
     key: pendingKey,
     kind: 'pair',
     ...(result.vouched === false ? { vouched: false as const } : {}),
+    ...(result.attestedBy ? { attestedBy: result.attestedBy } : {}),
     identityHash: result.identityHash,
     serverName: result.serverName,
     version: result.version,
@@ -619,6 +750,7 @@ export async function onServerHello(
     identityX25519Pub: result.identityX25519Pub,
     identityEd25519Pub: result.identityEd25519Pub,
   };
+  let pairQueued = false;
   await withPendingPairLock(async () => {
     // storage.session, never storage.local (S-SEC-3; see `pendingArea()`).
     // Without it, fail closed: nothing is queued, so nothing can be approved.
@@ -631,7 +763,9 @@ export async function onServerHello(
     const existing = mergePending(got[PENDING_PAIR_KEY]);
     applyNeedsPairRecord(existing, pendingKey, newPendingRecord);
     await area.set({ [PENDING_PAIR_KEY]: existing });
+    pairQueued = true;
   });
+  if (pairQueued) sendAwaitingApproval(link, result.mcpId, hello.accepts, result.identityHash, result.attestedBy?.slug ?? result.serverName, browserLabel());
   // 0.4.2: surface the pending pair without making the user discover
   // it manually — paint the action-icon badge and best-effort try to
   // open the popup. Both no-op in environments that don't expose

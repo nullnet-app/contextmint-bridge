@@ -19,6 +19,8 @@ export interface TrustedAccount {
 export interface AccountDerivedMcp {
   origin: string;
   accountId: string;
+  /** Account key generation that vouched for this derived identity. */
+  generation?: number;
   registrationId: string;
   slug: string;
   scope: AccountScope;
@@ -44,6 +46,16 @@ function assertGeneration(value: unknown, name: string): asserts value is number
 
 /** Account credentials never come from, or migrate out of, storage.local. */
 export class AccountTrustStore {
+  async listAccounts(): Promise<Record<string, TrustedAccount>> {
+    await ensureVault();
+    return { ...records<TrustedAccount>(await vaultGet('trustedAccounts')) };
+  }
+
+  async listDerived(): Promise<Record<string, AccountDerivedMcp>> {
+    await ensureVault();
+    return { ...records<AccountDerivedMcp>(await vaultGet('accountDerivedMcps')) };
+  }
+
   async getHighWater(origin: string, accountId: string): Promise<number> {
     await ensureVault();
     const key = accountKey(origin, accountId);
@@ -210,5 +222,45 @@ export class AccountTrustStore {
   async putDerived(identityHash: string, mcp: AccountDerivedMcp): Promise<void> {
     await ensureVault();
     await vaultUpdate('accountDerivedMcps', (value) => ({ ...records<AccountDerivedMcp>(value), [identityHash]: mcp }));
+  }
+
+  async setAlwaysAsk(identityHash: string, alwaysAsk: boolean): Promise<boolean> {
+    await ensureVault();
+    let found = false;
+    await vaultUpdate('accountDerivedMcps', (value) => {
+      const derived = records<AccountDerivedMcp>(value);
+      const current = derived[identityHash];
+      if (!current) return value;
+      found = true;
+      const next = { ...current };
+      if (alwaysAsk) next.alwaysAsk = true;
+      else delete next.alwaysAsk;
+      derived[identityHash] = next;
+      return derived;
+    });
+    return found;
+  }
+
+  async deleteDerived(identityHash: string): Promise<void> {
+    await ensureVault();
+    await vaultUpdate('accountDerivedMcps', (value) => {
+      const derived = records<AccountDerivedMcp>(value);
+      delete derived[identityHash];
+      return derived;
+    });
+  }
+
+  async deleteDerivedIfGeneration(identityHash: string, origin: string, accountId: string, generation: number): Promise<boolean> {
+    await ensureVault();
+    let deleted = false;
+    await vaultUpdate('accountDerivedMcps', (value) => {
+      const derived = records<AccountDerivedMcp>(value);
+      const current = derived[identityHash];
+      if (current?.origin !== origin || current.accountId !== accountId || current.generation !== generation) return value;
+      delete derived[identityHash];
+      deleted = true;
+      return derived;
+    });
+    return deleted;
   }
 }

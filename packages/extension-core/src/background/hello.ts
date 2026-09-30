@@ -98,6 +98,7 @@ export type HandleHelloResult =
       kind: 'needs-pair';
       /** False when account evidence was absent or failed verification. */
       vouched?: false;
+      attestedBy?: { accountId: string; slug: string; origin: string };
       pairCode: string;
       identityHash: string;
       mcpId: string;
@@ -473,7 +474,7 @@ export async function handleServerHello(
         accountDerivedUpdate: {
           identityHash: hash,
           record: {
-            origin: account.origin, accountId: verifiedAttestation.accountId,
+            origin: account.origin, accountId: verifiedAttestation.accountId, generation: verifiedAttestation.generation,
             registrationId: verifiedAttestation.registrationId, slug: verifiedAttestation.slug,
             scope: declaredAccountScope,
             // confirm-each ignores remembered authority for this decision, but
@@ -710,6 +711,7 @@ export async function handleServerHello(
   return {
     kind: 'needs-pair',
     ...((deps.remoteAccountLink || deps.attestation) ? { vouched: false as const } : {}),
+    ...(attestedBy ? { attestedBy } : {}),
     pairCode,
     identityHash: hash,
     mcpId: hello.mcpId,
