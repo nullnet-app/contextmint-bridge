@@ -48,7 +48,7 @@ import { scopeHash, type AccountScope } from '../lib/scope.js';
 import { gatewayOriginFor } from '../bridge-gateway.js';
 import { AccountTrustStore } from '../account-trust-store.js';
 import type { AccountDerivedMcp } from '../account-trust-store.js';
-import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
+import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
 
 import { state } from './state.js';
 import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
@@ -170,10 +170,7 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     mcpAccountDerivedDomains.set(card.hello.mcpId, [...domains]);
     broadcastConnectionsChanged();
     if (state.trust) {
-      await syncMainWorldBridgeFromTrust(state.trust, {
-        injectIntoOpenTabs: true,
-        additionalDomains: [...mcpAccountDerivedDomains.values()].flat(),
-      });
+      await syncMainWorldBridgeForActiveTrust(state.trust, { injectIntoOpenTabs: true });
     }
     return true;
   }
@@ -440,10 +437,7 @@ export async function onServerHello(
       if (result.accountDerivedUpdate.firstSeen) {
         try { chrome.runtime?.sendMessage?.({ type: 'new-account-mcp', mcpId: result.mcpId, domains: result.domains }); } catch { /* popup may be closed */ }
       }
-      await syncMainWorldBridgeFromTrust(state.trust!, {
-        injectIntoOpenTabs: true,
-        additionalDomains: [...mcpAccountDerivedDomains.values()].flat(),
-      });
+      await syncMainWorldBridgeForActiveTrust(state.trust!, { injectIntoOpenTabs: true });
       if (result.pendingAccountScopeUpdate && attestation) {
         await queueAccountScopeUpdate(link, hello, result.pendingAccountScopeUpdate, attestation);
       }

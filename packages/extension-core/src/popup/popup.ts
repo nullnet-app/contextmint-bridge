@@ -27,7 +27,6 @@ import {
   normaliseRemoteTargets,
   type RemoteTarget,
 } from '../remote-targets.js';
-import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 import { currentPlatform } from '../platform.js';
 import { DEFAULT_BRIDGE_ORIGIN } from '../bridge-connect-contract.js';
 import { HIGH_RISK_KEYWORDS } from '../lib/scope.js';
@@ -1676,7 +1675,7 @@ async function bootstrap(): Promise<void> {
           .remove(identityHash)
           // Audit #1003: stop loading the page bridge on hosts no approved
           // MCP reaches any more.
-          .then(() => syncMainWorldBridgeFromTrust(trust2))
+          .then(() => chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' }))
           .then(() => renderTrustedStatus());
       };
       renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, bridges, mismatches });

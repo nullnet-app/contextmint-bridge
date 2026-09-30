@@ -254,4 +254,5 @@ export const SCOPE_TABLES: Map<string, unknown>[] = [
  */
 export function clearSessionScopeFor(mcpId: string): void {
   for (const table of SCOPE_TABLES) table.delete(mcpId);
+  mcpAccountDerivedDomains.delete(mcpId);
 }

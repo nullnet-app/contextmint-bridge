@@ -54,7 +54,12 @@ import { REMOTE_TARGETS_CHANGED } from '../remote-targets.js';
 import { onApproval, onScopeUpdateDismiss } from './approval.js';
 import { decideAccountMcpCard } from './server-hello.js';
 import { maybeReinjectOnInstalled } from '../reinject-content-scripts.js';
-import { mainBridgeScriptFor, syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
+import { mainBridgeScriptFor } from '../main-world-bridge.js';
+import {
+  approvedAndAttachedDomains,
+  SYNC_MAIN_WORLD_BRIDGE,
+  syncMainWorldBridgeForActiveTrust,
+} from './main-world-bridge-sync.js';
 import { armInstallSignal, noteInstalled } from '../vault-migration.js';
 import { createWakeLift, isApprovedPageLoadWake } from './page-load-wake.js';
 import { PAGE_LOAD_WAKE } from '../page-load-wake.js';
@@ -111,7 +116,7 @@ export function maybeBoot(): void {
   // update or a store changed while no worker ran can leave it stale). No
   // injection here: open tabs either already have it or get it from the
   // update re-injection below.
-  void syncMainWorldBridgeFromTrust(state.trust);
+  void syncMainWorldBridgeForActiveTrust(state.trust);
   // An extension UPDATE orphans the content script in every already-open tab
   // (Chrome tears the old ones down and injects no new ones), so every MCP
   // reading from a long-lived tab breaks at once until the person reloads it.
@@ -132,7 +137,7 @@ export function maybeBoot(): void {
       // manifest (audit #1003), so the update tells the re-injection where it
       // belongs: the hosts an approved MCP may reach, and nowhere else.
       void maybeReinjectOnInstalled(details, async () => [
-        mainBridgeScriptFor(await state.trust!.approvedDomains()),
+        mainBridgeScriptFor(await approvedAndAttachedDomains(state.trust!)),
       ]);
     });
   }
@@ -146,6 +151,16 @@ export function maybeBoot(): void {
         (sender as { tab?: unknown } | undefined)?.tab === undefined
       ) {
         void connectPopupOptions().then(sendResponse);
+        return true;
+      }
+      if (
+        msg !== null && typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === SYNC_MAIN_WORLD_BRIDGE &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        void (state.trust
+          ? syncMainWorldBridgeForActiveTrust(state.trust)
+          : Promise.resolve()).then(() => sendResponse({ ok: true }));
         return true;
       }
       if (

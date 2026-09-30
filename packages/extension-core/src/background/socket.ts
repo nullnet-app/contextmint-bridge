@@ -77,8 +77,8 @@ import { sendInner } from './send-inner.js';
 import { clearAccountSessionApprovals, onServerHello, sendHelloRejected } from './server-hello.js';
 import { forgetVersionMismatch, noteVersionMismatch } from './version-mismatch-store.js';
 import { handleRequest } from './handlers/dispatch.js';
-import { broadcastConnectionsChanged, clearSessionScopeFor, mcpAccountDerivedDomains } from './session-scope.js';
-import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
+import { broadcastConnectionsChanged, clearSessionScopeFor } from './session-scope.js';
+import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
 import {
   HANDOFF_LINK_PREFIX,
   IMMEDIATE_REDIAL_SPACING_MS,
@@ -255,7 +255,7 @@ function teardownLink(link: Link): void {
   for (const mcpId of dropped) {
     state.sessions?.remove(mcpId);
     clearSessionScopeFor(mcpId);
-    if (state.trust) void syncMainWorldBridgeFromTrust(state.trust, { additionalDomains: [...mcpAccountDerivedDomains.values()].flat() });
+    if (state.trust) void syncMainWorldBridgeForActiveTrust(state.trust);
   }
   link.sessionNonce = null;
   if (dropped.length > 0) broadcastConnectionsChanged();
@@ -714,7 +714,7 @@ function onPeerGone(link: Link, mcpId: string): void {
   unbindMcp(mcpId, link);
   state.sessions?.remove(mcpId);
   clearSessionScopeFor(mcpId);
-  if (state.trust) void syncMainWorldBridgeFromTrust(state.trust, { additionalDomains: [...mcpAccountDerivedDomains.values()].flat() });
+  if (state.trust) void syncMainWorldBridgeForActiveTrust(state.trust);
   broadcastConnectionsChanged();
 }
 

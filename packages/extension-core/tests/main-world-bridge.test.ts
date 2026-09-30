@@ -5,6 +5,8 @@ import {
   bridgeMatchPatterns,
   syncMainWorldBridge,
 } from '../src/main-world-bridge.js';
+import { syncMainWorldBridgeForActiveTrust } from '../src/background/main-world-bridge-sync.js';
+import { clearSessionScopeFor, mcpAccountDerivedDomains } from '../src/background/session-scope.js';
 
 // Audit #1003: the MAIN-world bridges (CSRF, Apollo, in-page fetch) used to be
 // a manifest content script on <all_urls>. Each answers a same-window
@@ -177,5 +179,33 @@ describe('syncMainWorldBridge', () => {
   it('no-ops without the dynamic scripting API rather than throwing', async () => {
     (globalThis as { chrome?: unknown }).chrome = { scripting: {} };
     await expect(syncMainWorldBridge(['a.com'])).resolves.toBeUndefined();
+  });
+});
+
+describe('background trust sync includes attached account MCP domains', () => {
+  beforeEach(() => mcpAccountDerivedDomains.clear());
+  afterEach(() => mcpAccountDerivedDomains.clear());
+
+  it('keeps an account-silent MCP host registered during an ordinary trust revoke', async () => {
+    const fake = installFakeChrome();
+    mcpAccountDerivedDomains.set('account-mcp', ['account.example']);
+    const trust = { approvedDomains: async () => ['paired.example'] };
+
+    await syncMainWorldBridgeForActiveTrust(trust);
+    expect(fake.registered().find((r) => r.id === MAIN_BRIDGE_SCRIPT_ID)?.matches).toContain(
+      '*://*.account.example/*',
+    );
+
+    // An ordinary revoke removes durable pair trust while the account MCP is
+    // still attached. The main-world registration must retain that live grant.
+    trust.approvedDomains = async () => [];
+    await syncMainWorldBridgeForActiveTrust(trust);
+    expect(fake.registered().find((r) => r.id === MAIN_BRIDGE_SCRIPT_ID)?.matches).toEqual([
+      '*://*.account.example/*',
+    ]);
+
+    clearSessionScopeFor('account-mcp');
+    await syncMainWorldBridgeForActiveTrust(trust);
+    expect(fake.registered().find((r) => r.id === MAIN_BRIDGE_SCRIPT_ID)).toBeUndefined();
   });
 });
