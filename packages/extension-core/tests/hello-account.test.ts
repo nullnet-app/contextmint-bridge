@@ -10,6 +10,7 @@ import { buildHelloForAccountTest } from './helpers/hello-account.js';
 const NOW = 1_800_000_000;
 async function signedAttestation(hello: Awaited<ReturnType<typeof buildHelloForAccountTest>>, changes: Partial<{
   consent: 'silent' | 'confirm' | 'confirm-each'; scopeDigest: string; notAfter: number;
+  mcpHelloNonce: Uint8Array; answersExtNonce: Uint8Array;
 }> = {}) {
   const key = await generateEd25519();
   const kid = await accountKeyId(key.publicKey);
@@ -26,8 +27,8 @@ async function signedAttestation(hello: Awaited<ReturnType<typeof buildHelloForA
     registrationId: attestation.registrationId, slug: attestation.slug,
     identityHash: hash, identityEd25519Pub: fromB64(hello.identityEd25519Pub),
     scopeDigest: attestation.scopeDigest, consent: attestation.consent,
-    mcpId: hello.mcpId, mcpHelloNonce: fromB64(hello.sessionNonce),
-    answersExtNonce: new Uint8Array(32).fill(0xcd), notAfter: attestation.notAfter,
+    mcpId: hello.mcpId, mcpHelloNonce: changes.mcpHelloNonce ?? fromB64(hello.sessionNonce),
+    answersExtNonce: changes.answersExtNonce ?? new Uint8Array(32).fill(0xcd), notAfter: attestation.notAfter,
   })));
   return { attestation, signingKey: key.privateKey, account: {
     origin: 'https://gateway.example', tokenId: 'brt_test', record: {
@@ -63,6 +64,33 @@ describe('account attestation verification in the hello decision', () => {
     });
   });
 
+  it('keeps a narrower trustedMcps grant authoritative despite a valid account attestation', async () => {
+    const base = await buildHelloForAccountTest();
+    const hello = { ...base, capabilities: ['fetch', 'read_cookies'] as never, cookieKeys: ['session_id'] };
+    const { account, attestation } = await signedAttestation(hello);
+    const trustRecord = {
+      serverName: hello.serverName, domains: hello.domains, capabilities: ['fetch'],
+      cookieKeys: [], localStorageKeys: [], sessionStorageKeys: [], captureHeaders: [],
+      indexedDbScopes: [], domSelectors: [], domListSelectors: [], graphqlOps: [],
+      localStoragePointers: [], sessionStoragePointers: [],
+      identityX25519Pub: hello.identityX25519Pub, identityEd25519Pub: hello.identityEd25519Pub,
+      extensionIdentityX25519Pub: toB64(new Uint8Array(32).fill(0xab)),
+    } as never;
+    const result = await handleServerHello(hello, {
+      trust: { get: vi.fn(async () => trustRecord) } as never,
+      extensionIdentityX25519Pub: new Uint8Array(32).fill(0xab),
+      extensionSessionNonce: new Uint8Array(32).fill(0xcd), nowSeconds: NOW,
+      account, attestation,
+    });
+    expect(result.kind).toBe('auto-trust');
+    if (result.kind === 'auto-trust') {
+      expect(result.attestedBy).toEqual({ accountId: 'acc_test', slug: 'chris', origin: 'https://gateway.example' });
+      expect(result.capabilities).toEqual(['fetch']);
+      expect(result.cookieKeys).toEqual([]);
+      expect(result.pendingScopeUpdate?.declaredCapabilities).toEqual(['fetch', 'read_cookies']);
+    }
+  });
+
   it('silently attaches a valid silent attestation with the declared scope', async () => {
     const hello = await buildHelloForAccountTest();
     const { account, attestation } = await signedAttestation(hello);
@@ -80,6 +108,52 @@ describe('account attestation verification in the hello decision', () => {
       expect(result.capabilities).toEqual(['fetch']);
       expect(result.accountDerivedUpdate?.firstSeen).toBe(true);
       expect(result.sessionKey).toBeInstanceOf(Uint8Array);
+    }
+  });
+
+  it('fails the attestation when it was correctly signed for a different MCP hello nonce', async () => {
+    const hello = await buildHelloForAccountTest();
+    const { account, attestation } = await signedAttestation(hello, {
+      mcpHelloNonce: new Uint8Array(32).fill(0x44),
+    });
+    const result = await handleServerHello(hello, {
+      trust: { get: vi.fn(async () => null) } as never,
+      extensionIdentityX25519Pub: new Uint8Array(32).fill(0xab),
+      extensionSessionNonce: new Uint8Array(32).fill(0xcd), nowSeconds: NOW,
+      account, attestation,
+    });
+    expect(result.kind).toBe('needs-pair');
+    if (result.kind === 'needs-pair') expect(result.vouched).toBe(false);
+  });
+
+  it('does not replay a correctly signed attestation from a different live link nonce', async () => {
+    const hello = await buildHelloForAccountTest();
+    const { account, attestation } = await signedAttestation(hello, {
+      answersExtNonce: new Uint8Array(32).fill(0x55),
+    });
+    const result = await handleServerHello(hello, {
+      trust: { get: vi.fn(async () => null) } as never,
+      extensionIdentityX25519Pub: new Uint8Array(32).fill(0xab),
+      // The current live link's nonce differs from the nonce the gateway
+      // signed into this otherwise valid attestation.
+      extensionSessionNonce: new Uint8Array(32).fill(0xcd), nowSeconds: NOW,
+      account, attestation,
+    });
+    expect(result.kind).toBe('needs-pair');
+    if (result.kind === 'needs-pair') expect(result.vouched).toBe(false);
+  });
+
+  it('uses ordinary person pairing when no account attestation accompanies the hello', async () => {
+    const hello = await buildHelloForAccountTest();
+    const result = await handleServerHello(hello, {
+      trust: { get: vi.fn(async () => null) } as never,
+      extensionIdentityX25519Pub: new Uint8Array(32).fill(0xab),
+      extensionSessionNonce: new Uint8Array(32).fill(0xcd), nowSeconds: NOW,
+    });
+    expect(result.kind).toBe('needs-pair');
+    if (result.kind === 'needs-pair') {
+      expect(result.vouched).toBeUndefined();
+      expect(result.pairCode).toMatch(/^\d{4}-\d{4}$/);
     }
   });
 
