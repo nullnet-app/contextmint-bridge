@@ -98,6 +98,13 @@ describe('renderPopup', () => {
     expect(onForget).toHaveBeenCalledWith('hash-z');
   });
 
+  it('renders one removal action when revoke and forget callbacks target the same MCP', () => {
+    renderPopup(container, { mode: 'status', trusted: [{ serverName: 'server', domains: ['example.com'], identityHash: 'hash' }],
+      onRevoke: vi.fn(), onForget: vi.fn() });
+    expect(container.querySelector('[data-action="revoke"]')).toBeNull();
+    expect(container.querySelectorAll('[data-action="forget-mcp"]')).toHaveLength(1);
+  });
+
   it('labels local MCPs and exposes account forgetting controls', () => {
     const onForgetAccount = vi.fn();
     renderPopup(container, { mode: 'status', trusted: [{ serverName: 'local-mcp', domains: ['local.test'], identityHash: 'local-hash' }],

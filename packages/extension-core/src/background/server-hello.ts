@@ -56,7 +56,7 @@ import { state } from './state.js';
 import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
 import { handleServerHello, type PendingAccountScopeUpdate } from './hello.js';
 import { setPairPendingBadge } from './badge.js';
-import { accountInvalidationEpoch } from './account-invalidation.js';
+import { accountForgetActivityVersion, accountInvalidationEpoch, isAccountForgetInProgress } from './account-invalidation.js';
 
 const ACCOUNT_MCP_CARDS_KEY = 'pendingAccountMcpCards';
 const ACCOUNT_MCP_SESSION_APPROVALS_KEY = 'accountMcpSessionApprovals';
@@ -116,6 +116,7 @@ async function queueAccountScopeUpdate(link: Link, hello: HelloFrameFromServer, 
 
 export async function decideAccountMcpCard(key: unknown, allow: boolean): Promise<boolean> {
   if (typeof key !== 'string' || key.length > 512) return false;
+  const forgetActivity = accountForgetActivityVersion();
   const area = chrome.storage?.session;
   if (!area) return false;
   const stored = await area.get(ACCOUNT_MCP_CARDS_KEY);
@@ -123,6 +124,8 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     ? { ...(stored[ACCOUNT_MCP_CARDS_KEY] as Record<string, PendingAccountMcpCard>) } : {};
   const card = cards[key];
   if (!card) return false;
+  if (accountForgetActivityVersion() !== forgetActivity ||
+      isAccountForgetInProgress(card.origin, card.accountId)) return false;
   const decisionEpoch = accountInvalidationEpoch(card.origin, card.accountId);
   const decisionStillCurrent = (): boolean => accountInvalidationEpoch(card.origin, card.accountId) === decisionEpoch;
   delete cards[key];
@@ -376,6 +379,11 @@ export async function onServerHello(
     return;
   }
   const origin = link.kind === 'remote' ? gatewayOriginFor(link.url) : null;
+  if (attestation && origin && isAccountForgetInProgress(origin, attestation.accountId)) {
+    unbindMcp(hello.mcpId, link);
+    tellServerWhy(link, hello, 'the account is being forgotten');
+    return;
+  }
   const accountEpoch = attestation && origin ? accountInvalidationEpoch(origin, attestation.accountId) : null;
   const accountRecord = attestation && link.kind === 'remote' && link.tokenId && origin
     ? await new AccountTrustStore().get(origin, attestation.accountId)

@@ -7,6 +7,7 @@ import { state } from '../src/background/state.js';
 import { bindMcpToLink, links, linkForMcp, unbindLink, type Link } from '../src/background/links.js';
 import { mcpAccountDerivedDomains, mcpDomains, mcpIdentityHash } from '../src/background/session-scope.js';
 import { forgetAccountInBackground, forgetMcpInBackground } from '../src/background/account-forget.js';
+import { isAccountForgetInProgress } from '../src/background/account-invalidation.js';
 
 function area() {
   const data: Record<string, unknown> = {};
@@ -29,9 +30,34 @@ afterEach(() => {
   state.trust = null; state.sessions = null; state.extIdentity = null;
   mcpDomains.clear(); mcpAccountDerivedDomains.clear(); mcpIdentityHash.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('background-owned account revocation', () => {
+  it('holds the account forget barrier through awaited storage cleanup', async () => {
+    freshVault();
+    vi.stubGlobal('chrome', { runtime: { sendMessage: vi.fn() }, storage: { session: area(), local: area() }, tabs: { query: async () => [] } });
+    state.trust = new TrustStore('1.0.0'); state.sessions = new SessionKeys();
+    const accounts = new AccountTrustStore();
+    await accounts.put({ origin: 'https://gateway.example', accountId: 'barrier-acct', slug: 'a', displayName: 'A',
+      tokenId: 'tok', kid: 'k', publicKey: 'p', generation: 1, generationHighWater: 1, approvedAt: 1 });
+    let entered!: () => void; let release!: () => void;
+    const enteredRead = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const originalGet = AccountTrustStore.prototype.get;
+    vi.spyOn(AccountTrustStore.prototype, 'get').mockImplementation(async function (this: AccountTrustStore, origin, accountId) {
+      if (accountId === 'barrier-acct') { entered(); await gate; }
+      return originalGet.call(this, origin, accountId);
+    });
+
+    const forgetting = forgetAccountInBackground('https://gateway.example', 'barrier-acct', false);
+    await enteredRead;
+    expect(isAccountForgetInProgress('https://gateway.example', 'barrier-acct')).toBe(true);
+    release();
+    await forgetting;
+    expect(isAccountForgetInProgress('https://gateway.example', 'barrier-acct')).toBe(false);
+  });
+
   it('clears confirm-each approvals and revokes attached account-derived session domains on account forget', async () => {
     freshVault();
     const session = area();

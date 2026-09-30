@@ -837,7 +837,7 @@ function buildTrustedEntry(
   }
   // Revoke button — only when both an onRevoke callback and an identityHash
   // are available (older tests/callers get the read-only list as before).
-  if (onRevoke && t.identityHash) {
+  if (onRevoke && !onForget && t.identityHash) {
     const btn = elem(
       'button',
       { 'data-action': 'revoke', 'data-identity-hash': t.identityHash, title: 'Revoke trust' },
