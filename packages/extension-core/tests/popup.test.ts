@@ -86,7 +86,7 @@ describe('renderPopup', () => {
     const onForget = vi.fn();
     renderPopup(container, { mode: 'status', trusted: [{
       serverName: 'zillow', domains: ['zillow.com'], identityHash: 'hash-z',
-      source: { slug: 'chris', origin: 'https://gateway.example' }, isNew: true, alwaysAsk: false,
+      source: { slug: 'chris', origin: 'https://gateway.example' }, accountDerived: true, isNew: true, alwaysAsk: false,
     }], onAlwaysAsk, onForget });
     expect(container.textContent).toContain('via chris on https://gateway.example');
     expect(container.textContent).toContain('new');
@@ -96,6 +96,38 @@ describe('renderPopup', () => {
     container.querySelector<HTMLButtonElement>('[data-action="forget-mcp"]')!.click();
     expect(onAlwaysAsk).toHaveBeenCalledWith('hash-z', true);
     expect(onForget).toHaveBeenCalledWith('hash-z');
+  });
+
+  it('does not offer always-ask for hand-paired MCPs', () => {
+    renderPopup(container, { mode: 'status', trusted: [{
+      serverName: 'hand-paired', domains: ['example.com'], identityHash: 'hash-local', alwaysAsk: false,
+    }], onAlwaysAsk: vi.fn() });
+    expect(container.querySelector('[data-action="always-ask"]')).toBeNull();
+  });
+
+  it('does not offer always-ask for attested hand-pairs without a derived record', () => {
+    const trusted = mergeTrustedSummaries({ handPair: {
+      serverName: 'hand-paired', domains: ['example.com'], capabilities: ['fetch'],
+      attestedBy: { slug: 'chris', origin: 'https://gateway.example', accountId: 'acct-1' },
+    } }, {}, new Set());
+    renderPopup(container, { mode: 'status', trusted, onAlwaysAsk: vi.fn() });
+    expect(container.querySelector('[data-action="always-ask"]')).toBeNull();
+  });
+
+  it('shows a failure when forgetting an MCP is rejected', async () => {
+    renderPopup(container, { mode: 'status', trusted: [{ serverName: 'server', domains: ['example.com'], identityHash: 'hash' }],
+      onForget: async () => false });
+    container.querySelector<HTMLButtonElement>('[data-action="forget-mcp"]')!.click();
+    await Promise.resolve();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Could not forget this MCP');
+  });
+
+  it('shows a failure when forgetting an account is rejected', async () => {
+    renderPopup(container, { mode: 'status', trusted: [], accounts: [{ origin: 'https://gateway.example', slug: 'chris', accountId: 'acct-1' }],
+      onForgetAccount: async () => false });
+    container.querySelector<HTMLButtonElement>('[data-action="forget-account"]')!.click();
+    await Promise.resolve();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Could not forget this account');
   });
 
   it('renders one removal action when revoke and forget callbacks target the same MCP', () => {

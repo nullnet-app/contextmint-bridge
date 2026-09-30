@@ -180,7 +180,8 @@ export function maybeBoot(): void {
       ) {
         const m = msg as { origin?: unknown; accountId?: unknown; alsoForgetMcps?: unknown };
         if (typeof m.origin === 'string' && typeof m.accountId === 'string') {
-          void forgetAccountInBackground(m.origin, m.accountId, m.alsoForgetMcps === true).then(() => sendResponse({ ok: true }));
+          void forgetAccountInBackground(m.origin, m.accountId, m.alsoForgetMcps === true)
+            .then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
         } else sendResponse({ ok: false });
         return true;
       }
@@ -191,7 +192,8 @@ export function maybeBoot(): void {
       ) {
         const m = msg as { identityHash?: unknown };
         if (typeof m.identityHash === 'string') {
-          void forgetMcpInBackground(m.identityHash).then(() => sendResponse({ ok: true }));
+          void forgetMcpInBackground(m.identityHash)
+            .then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
         } else sendResponse({ ok: false });
         return true;
       }
