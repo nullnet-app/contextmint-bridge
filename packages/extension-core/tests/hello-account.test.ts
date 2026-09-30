@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  accountAttestPayload, accountKeyId, ed25519Sign, fromB64, generateEd25519,
+  accountAttestPayload, accountKeyId, ed25519Sign, ed25519Verify, fromB64, generateEd25519,
   scopeDigest, toB64, toHex, sha256,
   type HelloFrameFromServer,
 } from '@fetchproxy/protocol';
@@ -29,7 +29,7 @@ async function signedAttestation(hello: Awaited<ReturnType<typeof buildHelloForA
     mcpId: hello.mcpId, mcpHelloNonce: fromB64(hello.sessionNonce),
     answersExtNonce: new Uint8Array(32).fill(0xcd), notAfter: attestation.notAfter,
   })));
-  return { attestation, account: {
+  return { attestation, signingKey: key.privateKey, account: {
     origin: 'https://gateway.example', tokenId: 'brt_test', record: {
       origin: 'https://gateway.example', accountId: 'acc_test', slug: 'chris', displayName: 'Chris',
       tokenId: 'brt_test', kid, publicKey: toB64(key.publicKey), generation: 2, generationHighWater: 2, approvedAt: 0,
@@ -177,32 +177,78 @@ describe('account attestation verification in the hello decision', () => {
   it('fails closed when any signed identity, credential, nonce, origin, generation, or expiry binding changes', async () => {
     const hello = await buildHelloForAccountTest();
     const base = await signedAttestation(hello);
-    const mutations: Array<(att: typeof base.attestation, account: typeof base.account, hello: HelloFrameFromServer) => void> = [
-      (att) => { att.mcpId = 'else:1.0.0:0123456789abcdef'; },
-      (att) => { att.accountId = 'other'; },
-      (att) => { att.generation++; },
-      (att) => { att.tokenId = 'other'; },
-      (att) => { att.kid = '0000000000000000'; },
-      (att) => { att.identityHash = '0'.repeat(64); },
-      (att) => { att.identityEd25519Pub = toB64(new Uint8Array(32)); },
-      (att) => { att.scopeDigest = '0'.repeat(64); },
-      (att) => { att.notAfter = NOW - 1; },
-      (_att, account) => { account.origin = 'https://other.example'; },
-      (att) => { att.sig = toB64(new Uint8Array(64)); },
+    const mutations: Array<{ label: string; mutate: (att: typeof base.attestation, account: typeof base.account, hello: HelloFrameFromServer) => void; resign: boolean }> = [
+      { label: 'mcpId binding', mutate: (att) => { att.mcpId = 'else:1.0.0:0123456789abcdef'; }, resign: true },
+      { label: 'accountId binding', mutate: (att) => { att.accountId = 'other'; }, resign: true },
+      { label: 'generation binding', mutate: (att) => { att.generation++; }, resign: true },
+      { label: 'tokenId binding', mutate: (att) => { att.tokenId = 'other'; }, resign: true },
+      { label: 'key id binding', mutate: (att) => { att.kid = '0000000000000000'; }, resign: true },
+      { label: 'identity hash binding', mutate: (att) => { att.identityHash = '0'.repeat(64); }, resign: true },
+      { label: 'identity Ed25519 key binding', mutate: (att) => { att.identityEd25519Pub = toB64(new Uint8Array(32)); }, resign: true },
+      { label: 'expiry bound', mutate: (att) => { att.notAfter = NOW - 1; }, resign: true },
+      { label: 'trusted account origin binding', mutate: (_att, account) => { account.origin = 'https://other.example'; }, resign: true },
     ];
-    for (const mutate of mutations) {
+    for (const { label, mutate, resign } of mutations) {
       const attestation = structuredClone(base.attestation);
       const account = structuredClone(base.account);
       const helloCopy = structuredClone(hello);
       mutate(attestation, account, helloCopy);
+      if (resign) {
+        attestation.sig = toB64(await ed25519Sign(base.signingKey, accountAttestPayload({
+          gatewayOrigin: account.origin, accountId: attestation.accountId,
+          generation: attestation.generation, tokenId: attestation.tokenId,
+          registrationId: attestation.registrationId, slug: attestation.slug,
+          identityHash: attestation.identityHash,
+          // The signed payload binds the actual hello identity key; a mismatch
+          // in the frame's parallel field must still fail its explicit compare.
+          identityEd25519Pub: fromB64(helloCopy.identityEd25519Pub),
+          scopeDigest: attestation.scopeDigest, consent: attestation.consent,
+          // Likewise the verifier supplies the trusted hello id and nonces.
+          mcpId: helloCopy.mcpId, mcpHelloNonce: fromB64(helloCopy.sessionNonce),
+          answersExtNonce: new Uint8Array(32).fill(0xcd), notAfter: attestation.notAfter,
+        })));
+        expect(await ed25519Verify(fromB64(account.record.publicKey), accountAttestPayload({
+          gatewayOrigin: account.origin, accountId: attestation.accountId,
+          generation: attestation.generation, tokenId: attestation.tokenId,
+          registrationId: attestation.registrationId, slug: attestation.slug,
+          identityHash: attestation.identityHash,
+          identityEd25519Pub: fromB64(helloCopy.identityEd25519Pub),
+          scopeDigest: attestation.scopeDigest, consent: attestation.consent,
+          mcpId: helloCopy.mcpId, mcpHelloNonce: fromB64(helloCopy.sessionNonce),
+          answersExtNonce: new Uint8Array(32).fill(0xcd), notAfter: attestation.notAfter,
+        }), fromB64(attestation.sig)), `${label}: mutated signed payload should verify`).toBe(true);
+      }
       const result = await handleServerHello(helloCopy, {
         trust: { get: vi.fn(async () => null) } as never,
         extensionIdentityX25519Pub: new Uint8Array(32).fill(0xab),
         extensionSessionNonce: new Uint8Array(32).fill(0xcd), nowSeconds: NOW,
         account, attestation,
       });
-      expect(result.kind, JSON.stringify(attestation)).toBe('needs-pair');
+      expect(result.kind, `${label}: ${JSON.stringify(attestation)}`).toBe('needs-pair');
     }
+  });
+
+  it('routes a validly re-signed scope digest mismatch to explicit confirmation', async () => {
+    const hello = await buildHelloForAccountTest();
+    const base = await signedAttestation(hello);
+    const attestation = { ...base.attestation, scopeDigest: '0'.repeat(64) };
+    attestation.sig = toB64(await ed25519Sign(base.signingKey, accountAttestPayload({
+      gatewayOrigin: base.account.origin, accountId: attestation.accountId,
+      generation: attestation.generation, tokenId: attestation.tokenId,
+      registrationId: attestation.registrationId, slug: attestation.slug,
+      identityHash: attestation.identityHash,
+      identityEd25519Pub: fromB64(hello.identityEd25519Pub), scopeDigest: attestation.scopeDigest,
+      consent: attestation.consent, mcpId: hello.mcpId,
+      mcpHelloNonce: fromB64(hello.sessionNonce), answersExtNonce: new Uint8Array(32).fill(0xcd),
+      notAfter: attestation.notAfter,
+    })));
+    const result = await handleServerHello(hello, {
+      trust: { get: vi.fn(async () => null) } as never,
+      extensionIdentityX25519Pub: new Uint8Array(32).fill(0xab),
+      extensionSessionNonce: new Uint8Array(32).fill(0xcd), nowSeconds: NOW,
+      account: base.account, attestation,
+    });
+    expect(result.kind).toBe('account-confirm');
   });
 
   it('does not label when a signed attestation names another mcpId', async () => {

@@ -328,7 +328,7 @@ function connectLink(link: Link): void {
       // credentials. Loopback's advertised contract stays unchanged.
       accepts:
         link.kind === 'remote'
-          ? ['peer-gone', ACCOUNT_KEY_FRAME, ACCOUNT_ATTEST_FRAME]
+          ? ['peer-gone', 'hello-rejected', ACCOUNT_KEY_FRAME, ACCOUNT_ATTEST_FRAME]
           : ['peer-gone'],
       // #418: what this browser cannot serve, found by runtime API detection,
       // so an MCP can refuse those verbs locally with a hint that blames the

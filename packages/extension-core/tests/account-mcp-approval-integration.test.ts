@@ -8,9 +8,10 @@ import { TrustStore } from '../src/trust-store.js';
 import { AccountTrustStore } from '../src/account-trust-store.js';
 import { SessionKeys } from '../src/session-keys.js';
 import { state } from '../src/background/state.js';
-import { links, type Link } from '../src/background/links.js';
+import { links, unbindLink, type Link } from '../src/background/links.js';
 import { onServerHello } from '../src/background/server-hello.js';
 import { decideAccountMcpCard } from '../src/background/server-hello.js';
+import { mcpAccountDerivedDomains, mcpCapabilities, mcpCookieKeys, mcpDomains } from '../src/background/session-scope.js';
 import { buildHelloForAccountTest } from './helpers/hello-account.js';
 
 class OpenSocket {
@@ -33,8 +34,10 @@ function area(): { get: (key: string | string[]) => Promise<Record<string, unkno
 }
 
 afterEach(() => {
+  for (const link of links.values()) unbindLink(link);
   links.clear();
   state.trust = null; state.sessions = null; state.extIdentity = null;
+  mcpDomains.clear(); mcpCapabilities.clear(); mcpCookieKeys.clear(); mcpAccountDerivedDomains.clear();
 });
 
 describe('account MCP one-tap approval', () => {
@@ -99,5 +102,73 @@ describe('account MCP one-tap approval', () => {
       origin: 'https://gateway.example', accountId: 'acc_test', registrationId: 'reg_test',
       slug: 'zillow', scope: { domains: ['zillow.com'] }, approvedScope: { domains: ['zillow.com'] },
     });
+  });
+
+  it('applies an approved account scope expansion to the already attached live session', async () => {
+    freshVault();
+    const local = area(); const session = area();
+    vi.stubGlobal('WebSocket', OpenSocket);
+    vi.stubGlobal('chrome', {
+      runtime: { getManifest: () => ({ version: '1.0.0' }), sendMessage: () => {} },
+      storage: { local, session },
+      tabs: { query: async () => [], create: async ({ url }: { url: string }) => ({ id: 12, url }) },
+      scripting: { executeScript: async () => [] },
+    });
+    const identity = await loadOrCreateExtensionIdentity();
+    state.extIdentity = identity;
+    state.trust = new TrustStore('1.0.0');
+    state.sessions = new SessionKeys();
+    const hello = { ...(await buildHelloForAccountTest()), capabilities: ['fetch', 'read_cookies'] as never,
+      cookieKeys: ['session_id'] };
+    const accountKey = await generateEd25519();
+    const kid = await accountKeyId(accountKey.publicKey);
+    const identityHash = toHex(await sha256(fromB64(hello.identityX25519Pub)));
+    const now = Math.floor(Date.now() / 1000);
+    const attestation = {
+      type: 'account-attest' as const, mcpId: hello.mcpId, accountId: 'acc_test', generation: 2,
+      tokenId: 'token_test', kid, registrationId: 'reg_test', slug: 'zillow', identityHash,
+      identityEd25519Pub: hello.identityEd25519Pub, scopeDigest: await scopeDigest(hello),
+      consent: 'silent' as const, notAfter: now + 300, sig: '',
+    };
+    attestation.sig = toB64(await ed25519Sign(accountKey.privateKey, accountAttestPayload({
+      gatewayOrigin: 'https://gateway.example', accountId: attestation.accountId,
+      generation: attestation.generation, tokenId: attestation.tokenId,
+      registrationId: attestation.registrationId, slug: attestation.slug, identityHash,
+      identityEd25519Pub: fromB64(hello.identityEd25519Pub), scopeDigest: attestation.scopeDigest,
+      consent: attestation.consent, mcpId: hello.mcpId,
+      mcpHelloNonce: fromB64(hello.sessionNonce), answersExtNonce: fromB64(hello.answersExtNonce),
+      notAfter: attestation.notAfter,
+    })));
+    await new AccountTrustStore().put({ origin: 'https://gateway.example', accountId: 'acc_test', slug: 'chris',
+      displayName: 'Chris', tokenId: 'token_test', kid, publicKey: toB64(accountKey.publicKey), generation: 2,
+      generationHighWater: 2, approvedAt: now * 1000 });
+    const narrow = { domains: ['zillow.com'], capabilities: ['fetch'], cookieKeys: [], localStorageKeys: [],
+      sessionStorageKeys: [], captureHeaders: [], indexedDbScopes: [], domSelectors: [], domListSelectors: [],
+      graphqlOps: [], localStoragePointers: [], sessionStoragePointers: [] };
+    await new AccountTrustStore().putDerived(identityHash, { origin: 'https://gateway.example', accountId: 'acc_test',
+      registrationId: 'reg_test', slug: 'zillow', scope: narrow, approvedScope: narrow,
+      firstSeenAt: now * 1000, lastSeenAt: now * 1000 });
+    const ws = new OpenSocket();
+    const link: Link = { id: 'remote:target', kind: 'remote', url: 'wss://gateway.example/bridge',
+      protocols: [], label: 'gateway', ws: ws as never, reconnectAttempt: 0, nextAttemptAt: 0,
+      sessionNonce: fromB64(hello.answersExtNonce), accountAttestations: new Map([[hello.mcpId, attestation]]),
+      closed: false, handoff: false, targetId: 'target', tokenId: 'token_test', refusal: null, lastImmediateRedialAt: 0 };
+    links.set(link.id, link);
+
+    await onServerHello(link, hello);
+    expect(state.sessions.get(hello.mcpId)).not.toBeNull();
+    expect(mcpCapabilities.get(hello.mcpId)).toEqual(['fetch']);
+    expect(mcpCookieKeys.get(hello.mcpId)).toEqual([]);
+    expect(mcpDomains.get(hello.mcpId)).toEqual(['zillow.com']);
+    const queued = await session.get('pendingAccountMcpCards');
+    const cards = queued.pendingAccountMcpCards as Record<string, { key: string; kind: string }>;
+    const card = Object.values(cards).find((candidate) => candidate.kind === 'scope-update')!;
+    expect(card).toBeTruthy();
+
+    expect(await decideAccountMcpCard(card.key, true)).toBe(true);
+    expect(mcpCapabilities.get(hello.mcpId)).toEqual(['fetch', 'read_cookies']);
+    expect(mcpCookieKeys.get(hello.mcpId)).toEqual(['session_id']);
+    expect(mcpDomains.get(hello.mcpId)).toEqual(['zillow.com']);
+    expect(mcpAccountDerivedDomains.get(hello.mcpId)).toEqual(['zillow.com']);
   });
 });

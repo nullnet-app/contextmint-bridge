@@ -36,6 +36,7 @@ import {
   type HelloFrameFromServer,
   type ReadyFrame,
   type AccountAttestFrame,
+  type Capability,
 } from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../chrome-api.js';
@@ -131,6 +132,28 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     const derived = await store.getDerived(card.identityHash);
     if (!derived || derived.origin !== card.origin || derived.accountId !== card.accountId) return false;
     await store.putDerived(card.identityHash, { ...derived, scope: card.scope, approvedScope: card.scope, lastSeenAt: Date.now() });
+    // A scope-update is offered only for an already attached identity. Apply
+    // the newly approved declared scope to its live request gates immediately;
+    // card.scope is the exact, signed hello declaration, so it cannot grant
+    // undeclared capabilities or data selectors. Still subtract browser
+    // capabilities that this extension build cannot serve.
+    if (state.sessions?.get(card.hello.mcpId) && mcpIdentityHash.get(card.hello.mcpId) === card.identityHash) {
+      const unavailable = unavailableCapabilities(chrome);
+      const capabilities = card.scope.capabilities.filter((capability): capability is Capability =>
+        !unavailable.has(capability as Capability),
+      );
+      const { domains, ...declared } = card.scope;
+      mcpDomains.set(card.hello.mcpId, [...domains]);
+      applyGrantedScopeToSession(card.hello.mcpId, { ...declared, capabilities });
+      mcpAccountDerivedDomains.set(card.hello.mcpId, [...domains]);
+      broadcastConnectionsChanged();
+      if (state.trust) {
+        await syncMainWorldBridgeFromTrust(state.trust, {
+          injectIntoOpenTabs: true,
+          additionalDomains: [...mcpAccountDerivedDomains.values()].flat(),
+        });
+      }
+    }
     return true;
   }
   if (card.consent === 'confirm') {
