@@ -1076,11 +1076,11 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
         return ul;
       };
 
-    // Split into Active (currently connected) / Inactive only when the
-    // background supplied connection info (≥1 entry has `connected` set).
-    // Legacy callers / unit tests with no connection info get a single
-    // sorted list, unchanged. A header is rendered only for a non-empty
-    // section, so all-active shows just "Active" and vice versa.
+      // Split into Active (currently connected) / Inactive only when the
+      // background supplied connection info (≥1 entry has `connected` set).
+      // Legacy callers / unit tests with no connection info get a single
+      // sorted list, unchanged. A header is rendered only for a non-empty
+      // section, so all-active shows just "Active" and vice versa.
       const hasConnInfo = sorted.some((t) => t.connected !== undefined);
       if (hasConnInfo) {
         const active = sorted.filter((t) => t.connected === true);
