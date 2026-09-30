@@ -186,6 +186,29 @@ export interface TrustedSummary {
   alwaysAsk?: boolean;
 }
 
+/** Merge account metadata onto the ordinary trusted-MCP rows. */
+export function mergeTrustedSummaries(
+  records: Record<string, Pick<import('../trust-store.js').TrustRecord, 'serverName' | 'domains' | 'capabilities' | 'attestedBy'>>,
+  derivedRecords: Record<string, Pick<import('../account-trust-store.js').AccountDerivedMcp, 'slug' | 'origin' | 'firstSeenAt' | 'alwaysAsk'>>,
+  connectedHashes: Set<string>,
+): TrustedSummary[] {
+  return Object.entries(records).map(([identityHash, record]) => {
+    const derived = derivedRecords[identityHash];
+    return {
+      identityHash,
+      serverName: record.serverName,
+      domains: [...record.domains],
+      capabilities: record.capabilities ? [...record.capabilities] : ['fetch'],
+      connected: connectedHashes.has(identityHash),
+      ...(derived ? {
+        source: { slug: derived.slug, origin: derived.origin },
+        alwaysAsk: !!derived.alwaysAsk,
+      } : record.attestedBy ? { source: { slug: record.attestedBy.slug, origin: record.attestedBy.origin } } : {}),
+      ...(derived && Date.now() - derived.firstSeenAt < 15 * 60_000 ? { isNew: true } : {}),
+    };
+  });
+}
+
 export interface AccountSummary { origin: string; slug: string; accountId: string }
 
 /**
@@ -1688,19 +1711,7 @@ async function bootstrap(): Promise<void> {
         // Background not available — dots will be absent.
       }
     }
-    const trustedList: TrustedSummary[] = Object.entries(records).map(([identityHash, r]) => {
-      const derived = derivedRecords[identityHash];
-      return {
-      identityHash,
-      serverName: r.serverName,
-      domains: [...r.domains],
-      capabilities: r.capabilities ? [...r.capabilities] : ['fetch'],
-      connected: connectedHashes.has(identityHash),
-      ...(derived ? { source: { slug: derived.slug, origin: derived.origin }, alwaysAsk: !!derived.alwaysAsk } :
-        r.attestedBy ? { source: { slug: r.attestedBy.slug, origin: r.attestedBy.origin } } : {}),
-      ...(derived && Date.now() - derived.firstSeenAt < 15 * 60_000 ? { isNew: true } : {}),
-    };
-    });
+    const trustedList = mergeTrustedSummaries(records, derivedRecords, connectedHashes);
     for (const [identityHash, derived] of Object.entries(derivedRecords)) {
       if (records[identityHash]) continue;
       trustedList.push({ identityHash, serverName: derived.slug, domains: [...(derived.approvedScope?.domains ?? derived.scope.domains)],

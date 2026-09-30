@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
   handoffBridgeView,
+  mergeTrustedSummaries,
   renderPopup,
   type BridgesView,
   type PopupState,
@@ -1205,6 +1206,25 @@ describe('renderPopup', () => {
       });
       expect(container.textContent ?? '').toContain('⚠️');
     });
+  });
+});
+
+describe('mergeTrustedSummaries', () => {
+  it('keeps always-ask enabled when merging a derived record into a trusted row', () => {
+    const trusted = mergeTrustedSummaries({
+      identity: { serverName: 'zillow', domains: ['zillow.com'], capabilities: ['fetch'] },
+    }, {
+      identity: { slug: 'chris', origin: 'https://gateway.example', firstSeenAt: 0, alwaysAsk: true },
+    }, new Set());
+    const onAlwaysAsk = vi.fn();
+    const root = document.createElement('div');
+    renderPopup(root, { mode: 'status', trusted, onAlwaysAsk });
+
+    const toggle = root.querySelector<HTMLButtonElement>('[data-action="always-ask"]')!;
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(toggle.textContent).toBe('stop always asking');
+    toggle.click();
+    expect(onAlwaysAsk).toHaveBeenCalledWith('identity', false);
   });
 });
 
