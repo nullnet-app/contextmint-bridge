@@ -53,6 +53,7 @@ import {
 import { REMOTE_TARGETS_CHANGED } from '../remote-targets.js';
 import { onApproval, onScopeUpdateDismiss } from './approval.js';
 import { decideAccountMcpCard } from './server-hello.js';
+import { forgetAccountInBackground, forgetMcpInBackground } from './account-forget.js';
 import { maybeReinjectOnInstalled } from '../reinject-content-scripts.js';
 import { mainBridgeScriptFor } from '../main-world-bridge.js';
 import {
@@ -170,6 +171,28 @@ export function maybeBoot(): void {
       ) {
         const m = msg as { key?: unknown; allow?: unknown };
         void decideAccountMcpCard(m.key, m.allow === true).then(sendResponse);
+        return true;
+      }
+      if (
+        msg !== null && typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === 'forget-account' &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        const m = msg as { origin?: unknown; accountId?: unknown; alsoForgetMcps?: unknown };
+        if (typeof m.origin === 'string' && typeof m.accountId === 'string') {
+          void forgetAccountInBackground(m.origin, m.accountId, m.alsoForgetMcps === true).then(() => sendResponse({ ok: true }));
+        } else sendResponse({ ok: false });
+        return true;
+      }
+      if (
+        msg !== null && typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === 'forget-mcp' &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        const m = msg as { identityHash?: unknown };
+        if (typeof m.identityHash === 'string') {
+          void forgetMcpInBackground(m.identityHash).then(() => sendResponse({ ok: true }));
+        } else sendResponse({ ok: false });
         return true;
       }
       if (

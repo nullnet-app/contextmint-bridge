@@ -14,7 +14,6 @@
 
 import { TrustStore } from '../trust-store.js';
 import { AccountTrustStore } from '../account-trust-store.js';
-import { forgetAccount } from '../account-forget.js';
 import { loadRemoteTargets, saveRemoteTargets } from '../vault-records.js';
 import { normalisePendingPair } from '../lib/pending-pair.js';
 import {
@@ -1741,18 +1740,17 @@ async function bootstrap(): Promise<void> {
         await renderTrustedStatus();
       };
       const onRevoke = (identityHash: string): void => {
-        void Promise.all([trust2.remove(identityHash), accountTrust.deleteDerived(identityHash)]).then(refresh);
+        void (async () => { await chrome.runtime?.sendMessage?.({ type: 'forget-mcp', identityHash }); await refresh(); })();
       };
       const onForget = (identityHash: string): void => {
-        void Promise.all([trust2.remove(identityHash), accountTrust.deleteDerived(identityHash)]).then(refresh);
+        void (async () => { await chrome.runtime?.sendMessage?.({ type: 'forget-mcp', identityHash }); await refresh(); })();
       };
       const onAlwaysAsk = (identityHash: string, enabled: boolean): void => {
         void accountTrust.setAlwaysAsk(identityHash, enabled).then(renderTrustedStatus);
       };
       const onForgetAccount = (origin: string, accountId: string, alsoForgetMcps: boolean): void => {
         void (async () => {
-          await forgetAccount(accountTrust, trust2, origin, accountId, alsoForgetMcps);
-          await chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' });
+          await chrome.runtime?.sendMessage?.({ type: 'forget-account', origin, accountId, alsoForgetMcps });
           await renderTrustedStatus();
         })();
       };
