@@ -11,6 +11,7 @@ import { state } from '../src/background/state.js';
 import { links, unbindLink, type Link } from '../src/background/links.js';
 import { onServerHello } from '../src/background/server-hello.js';
 import { decideAccountMcpCard } from '../src/background/server-hello.js';
+import { forgetAccountInBackground } from '../src/background/account-forget.js';
 import { mcpAccountDerivedDomains, mcpCapabilities, mcpCookieKeys, mcpDomains, mcpIdentityHash } from '../src/background/session-scope.js';
 import { buildHelloForAccountTest } from './helpers/hello-account.js';
 
@@ -41,6 +42,66 @@ afterEach(() => {
 });
 
 describe('account MCP one-tap approval', () => {
+  it('does not let a hello paused after account lookup restore a forgotten account session or derived trust', async () => {
+    freshVault();
+    const local = area(); const session = area();
+    vi.stubGlobal('WebSocket', OpenSocket);
+    vi.stubGlobal('chrome', { runtime: { getManifest: () => ({ version: '1.0.0' }), sendMessage: vi.fn() },
+      storage: { local, session }, tabs: { query: async () => [] } });
+    state.extIdentity = await loadOrCreateExtensionIdentity();
+    state.trust = new TrustStore('1.0.0'); state.sessions = new SessionKeys();
+    const hello = await buildHelloForAccountTest();
+    const key = await generateEd25519(); const kid = await accountKeyId(key.publicKey);
+    const identityHash = toHex(await sha256(fromB64(hello.identityX25519Pub)));
+    const now = Math.floor(Date.now() / 1000);
+    const scope = { domains: hello.domains, capabilities: hello.capabilities ?? [], cookieKeys: hello.cookieKeys ?? [],
+      localStorageKeys: hello.localStorageKeys ?? [], sessionStorageKeys: hello.sessionStorageKeys ?? [], captureHeaders: hello.captureHeaders ?? [],
+      indexedDbScopes: hello.indexedDbScopes ?? [], domSelectors: hello.domSelectors ?? [], domListSelectors: hello.domListSelectors ?? [],
+      graphqlOps: hello.graphqlOps ?? [], localStoragePointers: hello.localStoragePointers ?? [], sessionStoragePointers: hello.sessionStoragePointers ?? [] };
+    const attestation = { type: 'account-attest' as const, mcpId: hello.mcpId, accountId: 'race-account', generation: 1,
+      tokenId: 'race-token', kid, registrationId: 'race-reg', slug: 'acct', identityHash,
+      identityEd25519Pub: hello.identityEd25519Pub, scopeDigest: await scopeDigest(hello), consent: 'silent' as const,
+      notAfter: now + 300, sig: '' };
+    attestation.sig = toB64(await ed25519Sign(key.privateKey, accountAttestPayload({
+      gatewayOrigin: 'https://gateway.example', accountId: attestation.accountId, generation: 1, tokenId: attestation.tokenId,
+      registrationId: attestation.registrationId, slug: attestation.slug, identityHash,
+      identityEd25519Pub: fromB64(hello.identityEd25519Pub), scopeDigest: attestation.scopeDigest, consent: 'silent',
+      mcpId: hello.mcpId, mcpHelloNonce: fromB64(hello.sessionNonce), answersExtNonce: fromB64(hello.answersExtNonce),
+      notAfter: attestation.notAfter,
+    })));
+    const accounts = new AccountTrustStore();
+    await accounts.put({ origin: 'https://gateway.example', accountId: attestation.accountId, slug: 'acct', displayName: 'Acct',
+      tokenId: attestation.tokenId, kid, publicKey: toB64(key.publicKey), generation: 1, generationHighWater: 1, approvedAt: now * 1000 });
+    await accounts.putDerived(identityHash, { origin: 'https://gateway.example', accountId: attestation.accountId,
+      registrationId: attestation.registrationId, slug: attestation.slug, scope, approvedScope: scope,
+      firstSeenAt: now * 1000, lastSeenAt: now * 1000 });
+    const link: Link = { id: 'remote:race', kind: 'remote', url: 'wss://gateway.example/bridge', protocols: [], label: 'race',
+      ws: new OpenSocket() as never, reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: fromB64(hello.answersExtNonce),
+      accountAttestations: new Map([[hello.mcpId, attestation]]), closed: false, handoff: false, targetId: 'race',
+      tokenId: attestation.tokenId, refusal: null, lastImmediateRedialAt: 0 };
+    links.set(link.id, link);
+    const originalGet = AccountTrustStore.prototype.get;
+    let accountRead!: () => void; let resume!: () => void;
+    const readDone = new Promise<void>((resolve) => { accountRead = resolve; });
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    let paused = false;
+    vi.spyOn(AccountTrustStore.prototype, 'get').mockImplementation(async function (this: AccountTrustStore, origin, accountId) {
+      const record = await originalGet.call(this, origin, accountId);
+      if (accountId === attestation.accountId && !paused) { paused = true; accountRead(); await gate; }
+      return record;
+    });
+    const pendingHello = onServerHello(link, hello);
+    await readDone;
+    await forgetAccountInBackground('https://gateway.example', attestation.accountId, false);
+    resume();
+    await pendingHello;
+    expect(state.sessions.get(hello.mcpId)).toBeNull();
+    expect(mcpDomains.has(hello.mcpId)).toBe(false);
+    expect(mcpAccountDerivedDomains.has(hello.mcpId)).toBe(false);
+    expect(await accounts.getDerived(identityHash)).toBeNull();
+    expect((link.ws as unknown as OpenSocket).sent.map((frame) => JSON.parse(frame).type)).not.toContain('ready');
+  });
+
   it('allows a silent digest-mismatch card, remembers its scope, and attaches a later subset', async () => {
     freshVault();
     const local = area(); const session = area();

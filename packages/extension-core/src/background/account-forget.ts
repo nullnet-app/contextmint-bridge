@@ -6,6 +6,7 @@ import {
   broadcastConnectionsChanged, clearSessionScopeFor, mcpIdentityHash,
 } from './session-scope.js';
 import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
+import { invalidateAccountHellos } from './account-invalidation.js';
 
 declare const chrome: { storage?: { session?: { get(k: string): Promise<Record<string, unknown>>; set(v: Record<string, unknown>): Promise<void>; remove(k: string): Promise<void> } } };
 const SESSION_APPROVALS = 'accountMcpSessionApprovals';
@@ -52,6 +53,7 @@ async function syncRevocation(): Promise<void> {
 
 /** Explicitly forget an account and immediately revoke all of its live authority. */
 export async function forgetAccountInBackground(origin: string, accountId: string, alsoForgetMcps: boolean): Promise<void> {
+  invalidateAccountHellos(origin, accountId);
   const accounts = new AccountTrustStore();
   const trust = state.trust ?? new TrustStore('0.0.0');
   const [account, derived, trusted] = await Promise.all([

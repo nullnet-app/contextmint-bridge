@@ -56,6 +56,7 @@ import { state } from './state.js';
 import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
 import { handleServerHello, type PendingAccountScopeUpdate } from './hello.js';
 import { setPairPendingBadge } from './badge.js';
+import { accountInvalidationEpoch } from './account-invalidation.js';
 
 const ACCOUNT_MCP_CARDS_KEY = 'pendingAccountMcpCards';
 const ACCOUNT_MCP_SESSION_APPROVALS_KEY = 'accountMcpSessionApprovals';
@@ -239,6 +240,7 @@ import {
   mcpAccountDerivedDomains,
   applyGrantedScopeToSession,
   broadcastConnectionsChanged,
+  clearSessionScopeFor,
 } from './session-scope.js';
 
 declare const chrome: ChromeApi;
@@ -336,6 +338,7 @@ export async function onServerHello(
     return;
   }
   const origin = link.kind === 'remote' ? gatewayOriginFor(link.url) : null;
+  const accountEpoch = attestation && origin ? accountInvalidationEpoch(origin, attestation.accountId) : null;
   const accountRecord = attestation && link.kind === 'remote' && link.tokenId && origin
     ? await new AccountTrustStore().get(origin, attestation.accountId)
     : null;
@@ -385,6 +388,14 @@ export async function onServerHello(
     ...(accountRecord ? { accountDerived: matchingAccountDerived } : {}),
     nowSeconds: Math.floor(Date.now() / 1000),
   });
+  // A forget may complete while account lookup or the authorization decision
+  // is suspended. The account record snapshot must not outlive its authority.
+  if (accountEpoch !== null && origin && attestation &&
+      accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+    unbindMcp(hello.mcpId, link);
+    tellServerWhy(link, hello, 'the account was forgotten during this handshake');
+    return;
+  }
   if (result.kind === 'reject') {
     // Give the binding back. It was taken before the decision — deliberately,
     // so a second link cannot claim the id mid-decision — but a REFUSED id is
@@ -450,11 +461,47 @@ export async function onServerHello(
     };
     if (result.kind === 'account-silent' && result.accountDerivedUpdate) {
       const store = new AccountTrustStore();
+      if (accountEpoch === null || !origin || !attestation ||
+          accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+        unbindMcp(hello.mcpId, link);
+        state.sessions.remove(hello.mcpId);
+        mcpDomains.delete(hello.mcpId);
+        mcpAccountDerivedDomains.delete(hello.mcpId);
+        mcpIdentityHash.delete(hello.mcpId);
+        clearSessionScopeFor(hello.mcpId);
+        return;
+      }
       await store.putDerived(result.accountDerivedUpdate.identityHash, result.accountDerivedUpdate.record);
+      if (accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+        // The write may have committed after forget's durable deletion. Remove
+        // its residue and revoke the session before exposing a ready frame.
+        await store.deleteDerived(result.accountDerivedUpdate.identityHash);
+        unbindMcp(hello.mcpId, link);
+        state.sessions.remove(hello.mcpId);
+        mcpDomains.delete(hello.mcpId);
+        mcpAccountDerivedDomains.delete(hello.mcpId);
+        mcpIdentityHash.delete(hello.mcpId);
+        clearSessionScopeFor(hello.mcpId);
+        await syncMainWorldBridgeForActiveTrust(state.trust!);
+        broadcastConnectionsChanged();
+        return;
+      }
       if (result.accountDerivedUpdate.firstSeen) {
         try { chrome.runtime?.sendMessage?.({ type: 'new-account-mcp', mcpId: result.mcpId, domains: result.domains }); } catch { /* popup may be closed */ }
       }
       await syncMainWorldBridgeForActiveTrust(state.trust!, { injectIntoOpenTabs: true });
+      if (accountInvalidationEpoch(origin, attestation.accountId) !== accountEpoch) {
+        await store.deleteDerived(result.accountDerivedUpdate.identityHash);
+        unbindMcp(hello.mcpId, link);
+        state.sessions.remove(hello.mcpId);
+        mcpDomains.delete(hello.mcpId);
+        mcpAccountDerivedDomains.delete(hello.mcpId);
+        mcpIdentityHash.delete(hello.mcpId);
+        clearSessionScopeFor(hello.mcpId);
+        await syncMainWorldBridgeForActiveTrust(state.trust!);
+        broadcastConnectionsChanged();
+        return;
+      }
       if (result.pendingAccountScopeUpdate && attestation) {
         await queueAccountScopeUpdate(link, hello, result.pendingAccountScopeUpdate, attestation);
       }
