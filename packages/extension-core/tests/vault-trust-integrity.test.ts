@@ -269,6 +269,15 @@ describe('account trust is vault-only and has generation rollback protection', (
     expect(await store.getDerived('identity-hash')).toBeNull();
   });
 
+  it('deletes stale derived trust only when its account generation still owns the record', async () => {
+    const store = new AccountTrustStore();
+    await store.putDerived('identity-hash', { ...derived, generation: 8 });
+    expect(await store.deleteDerivedIfGeneration('identity-hash', account.origin, account.accountId, 7)).toBe(false);
+    expect(await store.getDerived('identity-hash')).toMatchObject({ generation: 8 });
+    expect(await store.deleteDerivedIfGeneration('identity-hash', account.origin, account.accountId, 8)).toBe(true);
+    expect(await store.getDerived('identity-hash')).toBeNull();
+  });
+
   it('refuses generations below the high-water mark', async () => {
     const store = new AccountTrustStore();
     await store.put(account);

@@ -19,6 +19,8 @@ export interface TrustedAccount {
 export interface AccountDerivedMcp {
   origin: string;
   accountId: string;
+  /** Account key generation that vouched for this derived identity. */
+  generation?: number;
   registrationId: string;
   slug: string;
   scope: AccountScope;
@@ -246,5 +248,19 @@ export class AccountTrustStore {
       delete derived[identityHash];
       return derived;
     });
+  }
+
+  async deleteDerivedIfGeneration(identityHash: string, origin: string, accountId: string, generation: number): Promise<boolean> {
+    await ensureVault();
+    let deleted = false;
+    await vaultUpdate('accountDerivedMcps', (value) => {
+      const derived = records<AccountDerivedMcp>(value);
+      const current = derived[identityHash];
+      if (current?.origin !== origin || current.accountId !== accountId || current.generation !== generation) return value;
+      delete derived[identityHash];
+      deleted = true;
+      return derived;
+    });
+    return deleted;
   }
 }

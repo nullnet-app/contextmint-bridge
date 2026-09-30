@@ -474,7 +474,7 @@ export async function handleServerHello(
         accountDerivedUpdate: {
           identityHash: hash,
           record: {
-            origin: account.origin, accountId: verifiedAttestation.accountId,
+            origin: account.origin, accountId: verifiedAttestation.accountId, generation: verifiedAttestation.generation,
             registrationId: verifiedAttestation.registrationId, slug: verifiedAttestation.slug,
             scope: declaredAccountScope,
             // confirm-each ignores remembered authority for this decision, but
