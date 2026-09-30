@@ -49,6 +49,8 @@ import { gatewayOriginFor } from '../bridge-gateway.js';
 import { AccountTrustStore } from '../account-trust-store.js';
 import type { AccountDerivedMcp } from '../account-trust-store.js';
 import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
+import { sendAwaitingApproval } from './awaiting-approval.js';
+import { currentPlatform } from '../platform.js';
 
 import { state } from './state.js';
 import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
@@ -57,6 +59,10 @@ import { setPairPendingBadge } from './badge.js';
 
 const ACCOUNT_MCP_CARDS_KEY = 'pendingAccountMcpCards';
 const ACCOUNT_MCP_SESSION_APPROVALS_KEY = 'accountMcpSessionApprovals';
+function browserLabel(): string {
+  try { const p = currentPlatform(); return p[0]!.toUpperCase() + p.slice(1); }
+  catch { return 'browser'; }
+}
 interface PendingAccountMcpCard {
   kind: 'confirm' | 'scope-update';
   key: string; linkId: string; tokenId: string; origin: string; identityHash: string;
@@ -85,6 +91,7 @@ async function queueAccountMcpCard(link: Link, hello: HelloFrameFromServer, resu
   };
   await area.set({ [ACCOUNT_MCP_CARDS_KEY]: cards });
   setPairPendingBadge();
+  sendAwaitingApproval(link, hello.mcpId, hello.accepts, result.identityHash, result.accountSlug || result.serverName, browserLabel());
 }
 
 async function queueAccountScopeUpdate(link: Link, hello: HelloFrameFromServer, update: PendingAccountScopeUpdate, attestation: AccountAttestFrame): Promise<void> {
@@ -390,6 +397,16 @@ export async function onServerHello(
     return;
   }
   if (result.kind === 'auto-trust' || result.kind === 'account-silent') {
+    if (result.kind === 'auto-trust' && result.attestedBy && state.trust) {
+      // A hand-paired hosted MCP may gain a valid account attestation later.
+      // Retain provenance on its existing user-approved trust record so
+      // forgetting that account can optionally remove this exact MCP too.
+      try {
+        await state.trust.setAttestedBy(identityHash, result.attestedBy);
+      } catch (error) {
+        console.warn('[fetchproxy] could not save MCP account provenance:', error);
+      }
+    }
     // Store GRANTED (intersection) scope in the mcp* maps. `result` carries the
     // already-intersected scope (granted = approved ∩ declared), so applying it
     // verbatim never escalates beyond approval.
@@ -590,6 +607,7 @@ export async function onServerHello(
     key: pendingKey,
     kind: 'pair',
     ...(result.vouched === false ? { vouched: false as const } : {}),
+    ...(result.attestedBy ? { attestedBy: result.attestedBy } : {}),
     identityHash: result.identityHash,
     serverName: result.serverName,
     version: result.version,
@@ -619,6 +637,7 @@ export async function onServerHello(
     identityX25519Pub: result.identityX25519Pub,
     identityEd25519Pub: result.identityEd25519Pub,
   };
+  let pairQueued = false;
   await withPendingPairLock(async () => {
     // storage.session, never storage.local (S-SEC-3; see `pendingArea()`).
     // Without it, fail closed: nothing is queued, so nothing can be approved.
@@ -631,7 +650,9 @@ export async function onServerHello(
     const existing = mergePending(got[PENDING_PAIR_KEY]);
     applyNeedsPairRecord(existing, pendingKey, newPendingRecord);
     await area.set({ [PENDING_PAIR_KEY]: existing });
+    pairQueued = true;
   });
+  if (pairQueued) sendAwaitingApproval(link, result.mcpId, hello.accepts, result.identityHash, result.attestedBy?.slug ?? result.serverName, browserLabel());
   // 0.4.2: surface the pending pair without making the user discover
   // it manually — paint the action-icon badge and best-effort try to
   // open the popup. Both no-op in environments that don't expose

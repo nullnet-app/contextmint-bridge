@@ -80,6 +80,35 @@ describe('renderPopup', () => {
     expect(container.textContent).toContain('resy.com');
   });
 
+  it('labels account MCPs and renders new, always ask, and forget actions', () => {
+    const onAlwaysAsk = vi.fn();
+    const onForget = vi.fn();
+    renderPopup(container, { mode: 'status', trusted: [{
+      serverName: 'zillow', domains: ['zillow.com'], identityHash: 'hash-z',
+      source: { slug: 'chris', origin: 'https://gateway.example' }, isNew: true, alwaysAsk: false,
+    }], onAlwaysAsk, onForget });
+    expect(container.textContent).toContain('via chris on https://gateway.example');
+    expect(container.textContent).toContain('new');
+    expect(container.querySelector('[data-action="always-ask"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="forget-mcp"]')).not.toBeNull();
+    container.querySelector<HTMLButtonElement>('[data-action="always-ask"]')!.click();
+    container.querySelector<HTMLButtonElement>('[data-action="forget-mcp"]')!.click();
+    expect(onAlwaysAsk).toHaveBeenCalledWith('hash-z', true);
+    expect(onForget).toHaveBeenCalledWith('hash-z');
+  });
+
+  it('labels local MCPs and exposes account forgetting controls', () => {
+    const onForgetAccount = vi.fn();
+    renderPopup(container, { mode: 'status', trusted: [{ serverName: 'local-mcp', domains: ['local.test'], identityHash: 'local-hash' }],
+      accounts: [{ origin: 'https://gateway.example', slug: 'chris', accountId: 'acct-1' }], onForgetAccount });
+    expect(container.textContent).toContain('on this computer');
+    expect(container.querySelector('[data-action="forget-account"]')).not.toBeNull();
+    const also = container.querySelector<HTMLInputElement>('[data-action="also-forget-mcps"]')!;
+    also.checked = true;
+    container.querySelector<HTMLButtonElement>('[data-action="forget-account"]')!.click();
+    expect(onForgetAccount).toHaveBeenCalledWith('https://gateway.example', 'acct-1', true);
+  });
+
   // Part 3: connection-status dot
   describe('connection-status dot', () => {
     it('renders .status-dot.connected with aria-label "connected" when connected: true', () => {

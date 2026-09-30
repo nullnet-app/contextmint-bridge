@@ -13,6 +13,8 @@
  */
 
 import { TrustStore } from '../trust-store.js';
+import { AccountTrustStore } from '../account-trust-store.js';
+import { forgetAccount } from '../account-forget.js';
 import { loadRemoteTargets, saveRemoteTargets } from '../vault-records.js';
 import { normalisePendingPair } from '../lib/pending-pair.js';
 import {
@@ -179,7 +181,12 @@ export interface TrustedSummary {
    * in older callers — no dot rendered when absent.
    */
   connected?: boolean;
+  source?: { slug: string; origin: string };
+  isNew?: boolean;
+  alwaysAsk?: boolean;
 }
+
+export interface AccountSummary { origin: string; slug: string; accountId: string }
 
 /**
  * Part 2: scope info for a `scope-update` state. Mirrors the shape of
@@ -307,6 +314,10 @@ export type PopupState =
        * absent in unit-tests that don't exercise the revoke flow.
        */
       onRevoke?: (identityHash: string) => void;
+      accounts?: AccountSummary[];
+      onAlwaysAsk?: (identityHash: string, enabled: boolean) => void;
+      onForget?: (identityHash: string) => void;
+      onForgetAccount?: (origin: string, accountId: string, alsoForgetMcps: boolean) => void;
     }
   | {
       mode: 'pending-pair';
@@ -772,6 +783,8 @@ function elem<K extends keyof HTMLElementTagNameMap>(
 function buildTrustedEntry(
   t: TrustedSummary,
   onRevoke?: (identityHash: string) => void,
+  onAlwaysAsk?: (identityHash: string, enabled: boolean) => void,
+  onForget?: (identityHash: string) => void,
 ): HTMLLIElement {
   const li = elem('li', { class: 'trusted-entry' });
   // Connection-status dot — only when `connected` is explicitly set, so
@@ -788,6 +801,18 @@ function buildTrustedEntry(
   li.appendChild(
     elem('span', { class: 'trusted-label' }, `${t.serverName} → ${t.domains.join(', ')}`),
   );
+  li.appendChild(elem('span', { class: 'trusted-source' }, t.source ? `via ${t.source.slug} on ${t.source.origin}` : 'on this computer'));
+  if (t.isNew) li.appendChild(elem('span', { class: 'trusted-new' }, 'new'));
+  if (t.identityHash && onAlwaysAsk) {
+    const ask = elem('button', { 'data-action': 'always-ask', 'aria-pressed': String(!!t.alwaysAsk) }, t.alwaysAsk ? 'stop always asking' : 'always ask');
+    ask.addEventListener('click', () => onAlwaysAsk(t.identityHash!, !t.alwaysAsk));
+    li.appendChild(ask);
+  }
+  if (t.identityHash && onForget) {
+    const forget = elem('button', { 'data-action': 'forget-mcp' }, 'forget this MCP');
+    forget.addEventListener('click', () => onForget(t.identityHash!));
+    li.appendChild(forget);
+  }
   // Revoke button — only when both an onRevoke callback and an identityHash
   // are available (older tests/callers get the read-only list as before).
   if (onRevoke && t.identityHash) {
@@ -1021,7 +1046,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
 
     const buildList = (entries: TrustedSummary[]): HTMLElement => {
       const ul = elem('ul', { class: 'trusted-list' });
-      for (const t of entries) ul.appendChild(buildTrustedEntry(t, onRevoke));
+      for (const t of entries) ul.appendChild(buildTrustedEntry(t, onRevoke, state.onAlwaysAsk, state.onForget));
       return ul;
     };
 
@@ -1051,6 +1076,21 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
       }
     } else {
       root.appendChild(buildList(sorted));
+    }
+    if (state.accounts?.length) {
+      root.appendChild(elem('h3', {}, 'Accounts'));
+      for (const account of state.accounts) {
+        const row = elem('section', { class: 'trusted-account' });
+        row.appendChild(elem('span', {}, `${account.slug} on ${account.origin}`));
+        const also = elem('input', { type: 'checkbox', 'data-action': 'also-forget-mcps' });
+        const label = elem('label');
+        label.append(also, document.createTextNode(' also forget MCPs from this account'));
+        row.appendChild(label);
+        const forget = elem('button', { 'data-action': 'forget-account' }, 'forget this account');
+        forget.addEventListener('click', () => state.onForgetAccount?.(account.origin, account.accountId, also.checked));
+        row.appendChild(forget);
+        root.appendChild(row);
+      }
     }
     if (state.bridges) appendBridges(root, state.bridges);
     return;
@@ -1627,6 +1667,8 @@ async function bootstrap(): Promise<void> {
     const ev2 = chrome.runtime?.getManifest().version ?? '0.2.0';
     const trust2 = new TrustStore(ev2);
     const records = await trust2.list();
+    const accountTrust = new AccountTrustStore();
+    const [accountsByKey, derivedRecords] = await Promise.all([accountTrust.listAccounts(), accountTrust.listDerived()]);
     // Part 3: query the background for the currently-connected identity set
     // so we can render the connection-status dot on each entry. Best-effort:
     // if the query fails (no background, old SW), fall back to no dot.
@@ -1646,13 +1688,25 @@ async function bootstrap(): Promise<void> {
         // Background not available — dots will be absent.
       }
     }
-    const trustedList = Object.entries(records).map(([identityHash, r]) => ({
+    const trustedList: TrustedSummary[] = Object.entries(records).map(([identityHash, r]) => {
+      const derived = derivedRecords[identityHash];
+      return {
       identityHash,
       serverName: r.serverName,
       domains: [...r.domains],
       capabilities: r.capabilities ? [...r.capabilities] : ['fetch'],
       connected: connectedHashes.has(identityHash),
-    }));
+      ...(derived ? { source: { slug: derived.slug, origin: derived.origin }, alwaysAsk: !!derived.alwaysAsk } :
+        r.attestedBy ? { source: { slug: r.attestedBy.slug, origin: r.attestedBy.origin } } : {}),
+      ...(derived && Date.now() - derived.firstSeenAt < 15 * 60_000 ? { isNew: true } : {}),
+    };
+    });
+    for (const [identityHash, derived] of Object.entries(derivedRecords)) {
+      if (records[identityHash]) continue;
+      trustedList.push({ identityHash, serverName: derived.slug, domains: [...(derived.approvedScope?.domains ?? derived.scope.domains)],
+        connected: connectedHashes.has(identityHash), source: { slug: derived.slug, origin: derived.origin },
+        alwaysAsk: !!derived.alwaysAsk, ...(Date.now() - derived.firstSeenAt < 15 * 60_000 ? { isNew: true } : {}) });
+    }
     const bridges = await bridgesView(links);
     // Task 4.3: MCPs refused at the hello for speaking protocol 3. Read from
     // storage rather than from the background, because the refusal happens
@@ -1667,18 +1721,31 @@ async function bootstrap(): Promise<void> {
         Date.now(),
       ),
     );
-    if (trustedList.length === 0) {
+    const accounts = Object.entries(accountsByKey).map(([, a]) => ({ origin: a.origin, accountId: a.accountId, slug: a.slug }));
+    if (trustedList.length === 0 && accounts.length === 0) {
       renderPopup(root, { mode: 'empty', bridges, mismatches });
     } else {
-      const onRevoke = (identityHash: string): void => {
-        void trust2
-          .remove(identityHash)
-          // Audit #1003: stop loading the page bridge on hosts no approved
-          // MCP reaches any more.
-          .then(() => chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' }))
-          .then(() => renderTrustedStatus());
+      const refresh = async (): Promise<void> => {
+        try { await chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' }); } catch { /* worker may be asleep */ }
+        await renderTrustedStatus();
       };
-      renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, bridges, mismatches });
+      const onRevoke = (identityHash: string): void => {
+        void Promise.all([trust2.remove(identityHash), accountTrust.deleteDerived(identityHash)]).then(refresh);
+      };
+      const onForget = (identityHash: string): void => {
+        void Promise.all([trust2.remove(identityHash), accountTrust.deleteDerived(identityHash)]).then(refresh);
+      };
+      const onAlwaysAsk = (identityHash: string, enabled: boolean): void => {
+        void accountTrust.setAlwaysAsk(identityHash, enabled).then(renderTrustedStatus);
+      };
+      const onForgetAccount = (origin: string, accountId: string, alsoForgetMcps: boolean): void => {
+        void (async () => {
+          await forgetAccount(accountTrust, trust2, origin, accountId, alsoForgetMcps);
+          await chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' });
+          await renderTrustedStatus();
+        })();
+      };
+      renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, onForget, onAlwaysAsk, accounts, onForgetAccount, bridges, mismatches });
     }
   };
 

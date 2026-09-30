@@ -40,6 +40,7 @@ interface PendingRecordBase {
    * queued before #418).
    */
   unavailableCapabilities?: string[];
+  attestedBy?: { accountId: string; slug: string; origin: string };
 }
 
 /**
