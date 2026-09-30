@@ -135,6 +135,23 @@ describe('account attestation verification in the hello decision', () => {
     if (result.kind === 'account-silent') expect(result.capabilities).toEqual(['fetch']);
   });
 
+  it('does not reuse another account identity’s derived approval', async () => {
+    const hello = await buildHelloForAccountTest();
+    const { account, attestation } = await signedAttestation(hello, { consent: 'confirm' });
+    const scope = { domains: hello.domains, capabilities: ['fetch'], cookieKeys: [], localStorageKeys: [],
+      sessionStorageKeys: [], captureHeaders: [], indexedDbScopes: [], domSelectors: [], domListSelectors: [],
+      graphqlOps: [], localStoragePointers: [], sessionStoragePointers: [] };
+    const accountADerived = { origin: 'https://other-account.example', accountId: 'acc_account_a',
+      registrationId: 'reg_account_a', slug: 'alpha', scope, approvedScope: scope, firstSeenAt: 1, lastSeenAt: 1 };
+    const result = await handleServerHello(hello, {
+      trust: { get: vi.fn(async () => null) } as never,
+      extensionIdentityX25519Pub: new Uint8Array(32).fill(0xab),
+      extensionSessionNonce: new Uint8Array(32).fill(0xcd), nowSeconds: NOW,
+      account, attestation, accountDerived: accountADerived,
+    });
+    expect(result.kind).toBe('account-confirm');
+  });
+
   it('keeps a remembered narrower approval as the grant and offers account scope growth', async () => {
     const base = await buildHelloForAccountTest();
     const hello = { ...base, capabilities: ['fetch', 'read_cookies'] as never, cookieKeys: ['session_id'] };

@@ -440,7 +440,11 @@ export async function handleServerHello(
     const declaredAccountScope: AccountScope = { domains: [...hello.domains], capabilities, ...scope };
     const digestMatches = verifiedAttestation.scopeDigest === await scopeDigest(hello);
     const highRisk = hello.domains.some((domain) => HIGH_RISK_KEYWORDS.some((word) => domain.toLowerCase().includes(word)));
-    const derived = deps.accountDerived;
+    // Derived approval is identity-keyed for lookup efficiency, but consent is
+    // account-scoped. Treat stale records for another account/origin as absent.
+    const candidateDerived = deps.accountDerived;
+    const derived = candidateDerived?.origin === account.origin &&
+      candidateDerived.accountId === verifiedAttestation.accountId ? candidateDerived : undefined;
     const remembered = verifiedAttestation.consent !== 'confirm-each' && !derived?.alwaysAsk
       ? derived?.approvedScope
       : undefined;

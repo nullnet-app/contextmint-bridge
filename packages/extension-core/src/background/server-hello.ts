@@ -303,6 +303,14 @@ export async function onServerHello(
     if (Object.keys(approvals).length) await chrome.storage.session.set({ [ACCOUNT_MCP_SESSION_APPROVALS_KEY]: approvals });
     else await chrome.storage.session.remove(ACCOUNT_MCP_SESSION_APPROVALS_KEY);
   }
+  const accountDerived = accountRecord && origin
+    ? await new AccountTrustStore().getDerived(identityHash)
+    : null;
+  // The store is indexed by MCP identity. Consent is additionally bound to
+  // the currently verified account so stale records can never authorize a
+  // different account's attestation.
+  const matchingAccountDerived = accountDerived?.origin === origin &&
+    accountDerived.accountId === accountRecord?.accountId ? accountDerived : null;
   const result = await handleServerHello(hello, {
     trust: state.trust,
     extensionIdentityX25519Pub: state.extIdentity.x25519Pub,
@@ -323,7 +331,7 @@ export async function onServerHello(
       ? { sessionApprovedScope: replay?.approvedScope ?? sessionApproval!.scope }
       : {}),
     ...(replay?.approvedScope ? { approvedOnceScope: replay.approvedScope } : {}),
-    ...(accountRecord ? { accountDerived: await new AccountTrustStore().getDerived(identityHash) } : {}),
+    ...(accountRecord ? { accountDerived: matchingAccountDerived } : {}),
     nowSeconds: Math.floor(Date.now() / 1000),
   });
   if (result.kind === 'reject') {
