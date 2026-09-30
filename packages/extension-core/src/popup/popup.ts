@@ -30,8 +30,7 @@ import {
 import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 import { currentPlatform } from '../platform.js';
 import { DEFAULT_BRIDGE_ORIGIN } from '../bridge-connect-contract.js';
-
-const HIGH_RISK_KEYWORDS = ['bank', 'gov', 'mil'];
+import { HIGH_RISK_KEYWORDS } from '../lib/scope.js';
 
 /**
  * UI labels for the inner-verb capabilities surfaced in the pair popup.
@@ -95,6 +94,7 @@ export interface PreviousScope {
 }
 
 export interface PendingPair {
+  vouched?: false;
   serverName: string;
   version: string;
   /**
@@ -262,6 +262,12 @@ export interface BridgesView {
 }
 
 export type PopupState =
+  | {
+      mode: 'account-mcp-card';
+      card: { key: string; kind: 'confirm' | 'scope-update'; registrationSlug: string; accountSlug: string; origin: string; scope: import('../lib/scope.js').AccountScope };
+      onApprove: () => void;
+      onNotNow: () => void;
+    }
   | {
       mode: 'account-card';
       card: {
@@ -938,6 +944,36 @@ function appendVersionMismatches(root: HTMLElement, list: readonly VersionMismat
 export function renderPopup(root: HTMLElement, state: PopupState): void {
   root.innerHTML = '';
 
+  if (state.mode === 'account-mcp-card') {
+    const c = state.card;
+    root.appendChild(elem('h3', {}, c.kind === 'scope-update'
+      ? `${c.registrationSlug} wants wider access through ${c.accountSlug}`
+      : `${c.registrationSlug} wants to act as ${c.accountSlug}`));
+    root.appendChild(elem('p', {}, `On ${c.scope.domains.map((d) => `${d} and its subdomains`).join(', ')} via ${c.origin}.`));
+    const requested = [
+      ...c.scope.capabilities,
+      ...c.scope.cookieKeys.map((key) => `cookie ${key}`),
+      ...c.scope.localStorageKeys.map((key) => `localStorage ${key}`),
+      ...c.scope.sessionStorageKeys.map((key) => `sessionStorage ${key}`),
+      ...c.scope.captureHeaders.map((h) => `header ${h.headerName} on ${h.host}`),
+      ...c.scope.indexedDbScopes.map((d) => `IndexedDB ${d.database}/${d.store} on ${d.origin}`),
+      ...c.scope.domSelectors.map((d) => `DOM ${d.name}`),
+      ...c.scope.domListSelectors.map((d) => `DOM list ${d.name}`),
+      ...c.scope.graphqlOps.map((d) => `GraphQL ${d.name}`),
+      ...c.scope.localStoragePointers.map((d) => `localStorage pointer ${d.key}${d.jsonPointer}`),
+      ...c.scope.sessionStoragePointers.map((d) => `sessionStorage pointer ${d.key}${d.jsonPointer}`),
+    ];
+    root.appendChild(elem('p', { class: 'hint' }, `Requested access: ${requested.join(', ') || 'none'}.`));
+    const actions = elem('div', { class: 'account-card-actions' });
+    const approve = elem('button', { 'data-action': 'allow-account-mcp' }, c.kind === 'scope-update' ? 'Grant' : 'Allow');
+    approve.addEventListener('click', state.onApprove);
+    const notNow = elem('button', { 'data-action': 'deny-account-mcp' }, 'Not now');
+    notNow.addEventListener('click', state.onNotNow);
+    actions.append(approve, notNow);
+    root.appendChild(actions);
+    return;
+  }
+
   if (state.mode === 'account-card') {
     const name = state.card.account.displayName;
     root.appendChild(elem('h3', {}, state.card.keyChanged ? `The account key for ${name} changed. Approve again?` : 'Use this account in your browser?'));
@@ -1160,6 +1196,10 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
     );
   }
 
+  if (pending.vouched === false) {
+    root.appendChild(elem('p', { class: 'warn' }, 'Not vouched for by your account. The code is printed by the MCP, which you may not be able to see.'));
+  }
+
   root.appendChild(elem('div', { class: 'pair-code' }, pending.pairCode));
 
   root.appendChild(
@@ -1195,6 +1235,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
 interface PendingPairRecord {
   key: string;
   kind: 'pair';
+  vouched?: false;
   identityHash: string;
   mcpIds: string[];
   sessionNonces: Record<string, string>;
@@ -1348,7 +1389,22 @@ async function bootstrap(): Promise<void> {
   // re-reading from storage (storage gets the write but we want immediate
   // visual feedback, before the next popup open).
   const renderNext = async (): Promise<void> => {
-    const got = await queue.get(['pendingPair', 'pendingAccountCards']);
+    const got = await queue.get(['pendingPair', 'pendingAccountCards', 'pendingAccountMcpCards']);
+    const mcpCards = got['pendingAccountMcpCards'] && typeof got['pendingAccountMcpCards'] === 'object'
+      ? got['pendingAccountMcpCards'] as Record<string, { key: string; kind: 'confirm' | 'scope-update'; registrationSlug: string; accountSlug: string; origin: string; scope: import('../lib/scope.js').AccountScope }>
+      : {};
+    const mcpCard = Object.values(mcpCards).sort((a, b) => a.key.localeCompare(b.key))[0];
+    if (mcpCard) {
+      const decide = async (allow: boolean): Promise<void> => {
+        try { await chrome.runtime?.sendMessage?.({ type: 'account-mcp-card-decision', key: mcpCard.key, allow }); }
+        finally { await renderNext(); }
+      };
+      renderPopup(root, { mode: 'account-mcp-card', card: {
+        key: mcpCard.key, kind: mcpCard.kind, registrationSlug: mcpCard.registrationSlug, accountSlug: mcpCard.accountSlug,
+        origin: mcpCard.origin, scope: mcpCard.scope,
+      }, onApprove: () => { void decide(true); }, onNotNow: () => { void decide(false); } });
+      return;
+    }
     const cards = got['pendingAccountCards'] && typeof got['pendingAccountCards'] === 'object'
       ? got['pendingAccountCards'] as Record<string, { key: string; origin: string; keyChanged: boolean; account: { slug: string; displayName: string; confirmedBy: string; bridgedRegistrations: number; kid: string } }>
       : {};
@@ -1450,6 +1506,7 @@ async function bootstrap(): Promise<void> {
     renderPopup(root, {
       mode: 'pending-pair',
       pending: {
+        ...(pending.vouched === false ? { vouched: false as const } : {}),
         serverName: pending.serverName,
         version: pending.version,
         domains: [...pending.domains],

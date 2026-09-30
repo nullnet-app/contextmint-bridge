@@ -61,6 +61,8 @@ export const mcpSessionStoragePointers = new Map<string, { key: string; jsonPoin
 // (auto-trust or post-approval), cleared on session teardown. Used to
 // expose the set of currently-connected identity hashes to the popup.
 export const mcpIdentityHash = new Map<string, string>();
+/** Account-derived domains are registered in MAIN world only while attached. */
+export const mcpAccountDerivedDomains = new Map<string, string[]>();
 
 export function connectedIdentityHashes(): Set<string> {
   return new Set(
@@ -241,6 +243,7 @@ export const SCOPE_TABLES: Map<string, unknown>[] = [
   mcpSessionStoragePointers,
   // Part 3: the identity hash map tears down with the rest.
   mcpIdentityHash,
+  mcpAccountDerivedDomains,
 ];
 
 /**

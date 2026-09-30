@@ -24,6 +24,7 @@
  */
 
 import type { RemoteTarget } from '../remote-targets.js';
+import type { AccountAttestFrame } from '@fetchproxy/protocol';
 
 export const LOCAL_LINK_ID = 'local';
 
@@ -54,6 +55,8 @@ export interface Link {
    * signature the MCP correctly rejects.
    */
   sessionNonce: Uint8Array | null;
+  /** One-use attestations received since this link's current extension hello. */
+  accountAttestations: Map<string, AccountAttestFrame>;
   /** True once this link has been removed from the registry; stops reconnects. */
   closed: boolean;
   /**
@@ -110,6 +113,7 @@ export function localLink(): Link {
     reconnectAttempt: 0,
     nextAttemptAt: 0,
     sessionNonce: null,
+    accountAttestations: new Map(),
     closed: false,
     handoff: false,
     targetId: undefined,
@@ -130,6 +134,7 @@ export function remoteLink(target: RemoteTarget, protocols: string[], handoff = 
     reconnectAttempt: 0,
     nextAttemptAt: 0,
     sessionNonce: null,
+    accountAttestations: new Map(),
     closed: false,
     handoff,
     targetId: target.id,
@@ -188,6 +193,24 @@ export function unbindLink(link: Link): string[] {
 /** Drop every binding, on every link. */
 export function unbindAll(): void {
   mcpLink.clear();
+}
+
+export function storeAccountAttestation(link: Link, frame: AccountAttestFrame): boolean {
+  if (link.kind !== 'remote' || !link.tokenId || frame.tokenId !== link.tokenId) return false;
+  link.accountAttestations.set(frame.mcpId, frame);
+  return true;
+}
+
+/** Take exactly once; entries cannot cross link boundaries. */
+export function takeAccountAttestation(link: Link, mcpId: string): AccountAttestFrame | undefined {
+  const attestation = link.accountAttestations.get(mcpId);
+  link.accountAttestations.delete(mcpId);
+  return attestation;
+}
+
+/** Called immediately before sending a fresh extension hello. */
+export function clearAccountAttestations(link: Link): void {
+  link.accountAttestations.clear();
 }
 
 /** What the popup shows for one bridge: which it is, and whether it is up. */

@@ -53,6 +53,8 @@ interface PendingRecordBase {
  */
 export interface PendingPairRecord extends PendingRecordBase {
   kind: 'pair';
+  /** Remote account-linked MCPs with no verified attestation show a warning. */
+  vouched?: false;
   /**
    * Per-process hello nonce (b64). Used in session-key derivation after
    * approval. Each process sends its own hello with its own nonce.

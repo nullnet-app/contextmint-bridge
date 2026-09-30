@@ -1,6 +1,7 @@
 /** Vault-only trust records for account credentials and account-derived MCPs. */
 import { vaultGet, vaultUpdate, vaultUpdateMany } from './vault.js';
 import { ensureVault } from './vault-migration.js';
+import type { AccountScope } from './lib/scope.js';
 
 export interface TrustedAccount {
   origin: string;
@@ -20,8 +21,8 @@ export interface AccountDerivedMcp {
   accountId: string;
   registrationId: string;
   slug: string;
-  scope: string[];
-  approvedScope?: string[];
+  scope: AccountScope;
+  approvedScope?: AccountScope;
   firstSeenAt: number;
   lastSeenAt: number;
   alwaysAsk?: boolean;

@@ -52,6 +52,7 @@ import {
 } from './pending-pair-store.js';
 import { REMOTE_TARGETS_CHANGED } from '../remote-targets.js';
 import { onApproval, onScopeUpdateDismiss } from './approval.js';
+import { decideAccountMcpCard } from './server-hello.js';
 import { maybeReinjectOnInstalled } from '../reinject-content-scripts.js';
 import { mainBridgeScriptFor, syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 import { armInstallSignal, noteInstalled } from '../vault-migration.js';
@@ -145,6 +146,15 @@ export function maybeBoot(): void {
         (sender as { tab?: unknown } | undefined)?.tab === undefined
       ) {
         void connectPopupOptions().then(sendResponse);
+        return true;
+      }
+      if (
+        msg !== null && typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === 'account-mcp-card-decision' &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        const m = msg as { key?: unknown; allow?: unknown };
+        void decideAccountMcpCard(m.key, m.allow === true).then(sendResponse);
         return true;
       }
       if (

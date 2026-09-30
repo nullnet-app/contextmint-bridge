@@ -491,12 +491,15 @@ describe('two bridges at once', () => {
       generation: 3,
       bridgedRegistrations: 4,
     });
-    await vi.waitUntil(() => sessionStorage.has('pendingAccountCards'));
+    await vi.waitUntil(() => {
+      const pending = sessionStorage.get('pendingAccountCards') as Record<string, { account?: { accountId?: string } }> | undefined;
+      return Object.values(pending ?? {}).some((card) => card.account?.accountId === base.accountId);
+    });
     const cards = sessionStorage.get('pendingAccountCards') as Record<
       string,
-      { keyChanged: boolean }
+      { keyChanged: boolean; account: { accountId: string } }
     >;
-    expect(Object.values(cards)[0]?.keyChanged).toBe(true);
+    expect(Object.values(cards).find((card) => card.account.accountId === base.accountId)?.keyChanged).toBe(true);
     sessionStorage.delete('pendingAccountCards');
     remoteWs.message({
       type: 'account-key',

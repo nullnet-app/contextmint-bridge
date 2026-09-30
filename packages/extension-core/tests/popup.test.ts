@@ -45,6 +45,21 @@ describe('renderPopup', () => {
     expect(onNotNow).toHaveBeenCalledOnce();
   });
 
+  it('renders account MCP confirmation without a pair code and names the granted sites', () => {
+    renderPopup(container, { mode: 'account-mcp-card', card: {
+      key: 'remote:mcp', kind: 'confirm', registrationSlug: 'zillow', accountSlug: 'chris',
+      origin: 'https://gateway.example', scope: {
+        domains: ['zillow.com'], capabilities: ['fetch', 'read_cookies'], cookieKeys: ['session_id'],
+        localStorageKeys: [], sessionStorageKeys: [], captureHeaders: [], indexedDbScopes: [],
+        domSelectors: [], domListSelectors: [], graphqlOps: [], localStoragePointers: [], sessionStoragePointers: [],
+      },
+    }, onApprove: vi.fn(), onNotNow: vi.fn() });
+    expect(container.textContent).toContain('zillow wants to act as chris');
+    expect(container.textContent).toContain('zillow.com and its subdomains');
+    expect(container.textContent).toContain('cookie session_id');
+    expect(container.textContent).not.toContain('pair code');
+  });
+
   it('renders empty state when no pending and no trusted', () => {
     renderPopup(container, { mode: 'empty' });
     expect(container.textContent).toContain('No MCP servers connected');

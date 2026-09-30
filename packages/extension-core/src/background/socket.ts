@@ -43,6 +43,7 @@ import {
   accountKeyId,
   fromB64,
   type AccountKeyFrame,
+  type AccountAttestFrame,
 } from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../chrome-api.js';
@@ -73,10 +74,11 @@ import { AccountTrustStore, type TrustedAccount } from '../account-trust-store.j
 import { state } from './state.js';
 import { setConnectionStatus, flashActivity } from './badge.js';
 import { sendInner } from './send-inner.js';
-import { onServerHello, sendHelloRejected } from './server-hello.js';
+import { clearAccountSessionApprovals, onServerHello, sendHelloRejected } from './server-hello.js';
 import { forgetVersionMismatch, noteVersionMismatch } from './version-mismatch-store.js';
 import { handleRequest } from './handlers/dispatch.js';
-import { broadcastConnectionsChanged, clearSessionScopeFor } from './session-scope.js';
+import { broadcastConnectionsChanged, clearSessionScopeFor, mcpAccountDerivedDomains } from './session-scope.js';
+import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 import {
   HANDOFF_LINK_PREFIX,
   IMMEDIATE_REDIAL_SPACING_MS,
@@ -88,6 +90,8 @@ import {
   remoteLink,
   unbindLink,
   unbindMcp,
+  storeAccountAttestation,
+  clearAccountAttestations,
   type Link,
 } from './links.js';
 
@@ -251,6 +255,7 @@ function teardownLink(link: Link): void {
   for (const mcpId of dropped) {
     state.sessions?.remove(mcpId);
     clearSessionScopeFor(mcpId);
+    if (state.trust) void syncMainWorldBridgeFromTrust(state.trust, { additionalDomains: [...mcpAccountDerivedDomains.values()].flat() });
   }
   link.sessionNonce = null;
   if (dropped.length > 0) broadcastConnectionsChanged();
@@ -305,6 +310,7 @@ function connectLink(link: Link): void {
     const sessionNonce = new Uint8Array(32);
     (globalThis.crypto as Crypto).getRandomValues(sessionNonce);
     link.sessionNonce = sessionNonce;
+    clearAccountAttestations(link);
     const extHello: HelloFrameFromExtension = {
       type: 'hello',
       protocolVersion: PROTOCOL_VERSION,
@@ -351,6 +357,9 @@ function connectLink(link: Link): void {
     ) {
       void accountTrust.deleteByToken(link.tokenId).catch((e) =>
         console.warn('[fetchproxy] could not remove revoked account trust:', e),
+      );
+      void clearAccountSessionApprovals(link.tokenId).catch((e) =>
+        console.warn('[fetchproxy] could not clear revoked account session approvals:', e),
       );
     }
     if (!anyLinkOpen()) setConnectionStatus('disconnected');
@@ -512,6 +521,8 @@ async function onMessage(link: Link, data: string): Promise<void> {
     onPeerGone(link, frame.mcpId);
   } else if (frame.type === ACCOUNT_KEY_FRAME) {
     await onAccountKey(link, frame);
+  } else if (frame.type === ACCOUNT_ATTEST_FRAME) {
+    storeAccountAttestation(link, frame as AccountAttestFrame);
   }
   // ready frames from the host shouldn't reach us; ignore.
 }
@@ -680,6 +691,7 @@ export async function decideAccountCard(key: unknown, approve: boolean): Promise
     approvedAt: Date.now(),
   }, link.targetId ?? '');
   if (saved) {
+    await clearAccountSessionApprovals(card.tokenId, card.origin, card.account.accountId);
     link.connectApproved = undefined;
     link.connectAccount = undefined;
     broadcastConnectionsChanged();
@@ -702,6 +714,7 @@ function onPeerGone(link: Link, mcpId: string): void {
   unbindMcp(mcpId, link);
   state.sessions?.remove(mcpId);
   clearSessionScopeFor(mcpId);
+  if (state.trust) void syncMainWorldBridgeFromTrust(state.trust, { additionalDomains: [...mcpAccountDerivedDomains.values()].flat() });
   broadcastConnectionsChanged();
 }
 
