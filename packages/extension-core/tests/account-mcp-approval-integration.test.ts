@@ -11,7 +11,7 @@ import { state } from '../src/background/state.js';
 import { links, unbindLink, type Link } from '../src/background/links.js';
 import { onServerHello } from '../src/background/server-hello.js';
 import { decideAccountMcpCard } from '../src/background/server-hello.js';
-import { mcpAccountDerivedDomains, mcpCapabilities, mcpCookieKeys, mcpDomains } from '../src/background/session-scope.js';
+import { mcpAccountDerivedDomains, mcpCapabilities, mcpCookieKeys, mcpDomains, mcpIdentityHash } from '../src/background/session-scope.js';
 import { buildHelloForAccountTest } from './helpers/hello-account.js';
 
 class OpenSocket {
@@ -165,10 +165,49 @@ describe('account MCP one-tap approval', () => {
     const card = Object.values(cards).find((candidate) => candidate.kind === 'scope-update')!;
     expect(card).toBeTruthy();
 
-    expect(await decideAccountMcpCard(card.key, true)).toBe(true);
-    expect(mcpCapabilities.get(hello.mcpId)).toEqual(['fetch', 'read_cookies']);
-    expect(mcpCookieKeys.get(hello.mcpId)).toEqual(['session_id']);
-    expect(mcpDomains.get(hello.mcpId)).toEqual(['zillow.com']);
-    expect(mcpAccountDerivedDomains.get(hello.mcpId)).toEqual(['zillow.com']);
+    // The old link can remain open after its mcpId is unbound and rebound to
+    // another live link. A stale scope-update must not bless or mutate the
+    // replacement session that happens to reuse that mcpId.
+    unbindLink(link);
+    const helloB = await buildHelloForAccountTest();
+    const accountKeyB = await generateEd25519();
+    const kidB = await accountKeyId(accountKeyB.publicKey);
+    const identityHashB = toHex(await sha256(fromB64(helloB.identityX25519Pub)));
+    const attestationB = {
+      type: 'account-attest' as const, mcpId: helloB.mcpId, accountId: 'acc_other', generation: 1,
+      tokenId: 'token_other', kid: kidB, registrationId: 'reg_other', slug: 'zillow', identityHash: identityHashB,
+      identityEd25519Pub: helloB.identityEd25519Pub, scopeDigest: await scopeDigest(helloB),
+      consent: 'silent' as const, notAfter: now + 300, sig: '',
+    };
+    attestationB.sig = toB64(await ed25519Sign(accountKeyB.privateKey, accountAttestPayload({
+      gatewayOrigin: 'https://gateway.example', accountId: attestationB.accountId,
+      generation: attestationB.generation, tokenId: attestationB.tokenId,
+      registrationId: attestationB.registrationId, slug: attestationB.slug, identityHash: identityHashB,
+      identityEd25519Pub: fromB64(helloB.identityEd25519Pub), scopeDigest: attestationB.scopeDigest,
+      consent: attestationB.consent, mcpId: helloB.mcpId,
+      mcpHelloNonce: fromB64(helloB.sessionNonce), answersExtNonce: fromB64(helloB.answersExtNonce),
+      notAfter: attestationB.notAfter,
+    })));
+    await new AccountTrustStore().put({ origin: 'https://gateway.example', accountId: 'acc_other', slug: 'chris',
+      displayName: 'Chris', tokenId: 'token_other', kid: kidB, publicKey: toB64(accountKeyB.publicKey),
+      generation: 1, generationHighWater: 1, approvedAt: now * 1000 });
+    const linkB: Link = { id: 'remote:target-b', kind: 'remote', url: 'wss://gateway.example/bridge',
+      protocols: [], label: 'gateway B', ws: new OpenSocket() as never, reconnectAttempt: 0, nextAttemptAt: 0,
+      sessionNonce: fromB64(helloB.answersExtNonce), accountAttestations: new Map([[helloB.mcpId, attestationB]]),
+      closed: false, handoff: false, targetId: 'target-b', tokenId: 'token_other', refusal: null, lastImmediateRedialAt: 0 };
+    links.set(linkB.id, linkB);
+    await onServerHello(linkB, helloB);
+    expect(state.sessions.get(helloB.mcpId)).not.toBeNull();
+    expect(mcpIdentityHash.get(helloB.mcpId)).toBe(identityHashB);
+    expect(mcpCapabilities.get(helloB.mcpId)).toEqual(['fetch']);
+
+    expect(await decideAccountMcpCard(card.key, true)).toBe(false);
+    expect(await new AccountTrustStore().getDerived(identityHash)).toMatchObject({
+      approvedScope: { domains: ['zillow.com'], capabilities: ['fetch'], cookieKeys: [] },
+    });
+    expect(mcpIdentityHash.get(helloB.mcpId)).toBe(identityHashB);
+    expect(mcpCapabilities.get(helloB.mcpId)).toEqual(['fetch']);
+    expect(mcpCookieKeys.get(helloB.mcpId)).toEqual([]);
+
   });
 });

@@ -51,7 +51,7 @@ import type { AccountDerivedMcp } from '../account-trust-store.js';
 import { syncMainWorldBridgeFromTrust } from '../main-world-bridge.js';
 
 import { state } from './state.js';
-import { bindMcpToLink, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
+import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
 import { handleServerHello, type PendingAccountScopeUpdate } from './hello.js';
 import { setPairPendingBadge } from './badge.js';
 
@@ -121,6 +121,7 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
   if (!allow) return true;
   const link = links.get(card.linkId);
   if (!link || link.closed || link.kind !== 'remote' || link.ws?.readyState !== WebSocket.OPEN ||
+      linkForMcp(card.hello.mcpId) !== link ||
       link.tokenId !== card.tokenId || gatewayOriginFor(link.url) !== card.origin || !link.sessionNonce ||
       card.hello.answersExtNonce !== toB64(link.sessionNonce) ||
       card.attestation.notAfter < Math.floor(Date.now() / 1000) ||
@@ -128,6 +129,10 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
   const account = await new AccountTrustStore().get(card.origin, card.accountId);
   if (!account || account.tokenId !== card.tokenId || account.generation !== card.attestation.generation) return false;
   if (card.kind === 'scope-update') {
+    // This offer targets the already attached identity on this link. Check
+    // both parts before persisting the wider approval: an old card must not
+    // bless a replacement identity after its mcpId was rebound elsewhere.
+    if (!state.sessions?.get(card.hello.mcpId) || mcpIdentityHash.get(card.hello.mcpId) !== card.identityHash) return false;
     const store = new AccountTrustStore();
     const derived = await store.getDerived(card.identityHash);
     if (!derived || derived.origin !== card.origin || derived.accountId !== card.accountId) return false;
@@ -137,22 +142,20 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     // card.scope is the exact, signed hello declaration, so it cannot grant
     // undeclared capabilities or data selectors. Still subtract browser
     // capabilities that this extension build cannot serve.
-    if (state.sessions?.get(card.hello.mcpId) && mcpIdentityHash.get(card.hello.mcpId) === card.identityHash) {
-      const unavailable = unavailableCapabilities(chrome);
-      const capabilities = card.scope.capabilities.filter((capability): capability is Capability =>
-        !unavailable.has(capability as Capability),
-      );
-      const { domains, ...declared } = card.scope;
-      mcpDomains.set(card.hello.mcpId, [...domains]);
-      applyGrantedScopeToSession(card.hello.mcpId, { ...declared, capabilities });
-      mcpAccountDerivedDomains.set(card.hello.mcpId, [...domains]);
-      broadcastConnectionsChanged();
-      if (state.trust) {
-        await syncMainWorldBridgeFromTrust(state.trust, {
-          injectIntoOpenTabs: true,
-          additionalDomains: [...mcpAccountDerivedDomains.values()].flat(),
-        });
-      }
+    const unavailable = unavailableCapabilities(chrome);
+    const capabilities = card.scope.capabilities.filter((capability): capability is Capability =>
+      !unavailable.has(capability as Capability),
+    );
+    const { domains, ...declared } = card.scope;
+    mcpDomains.set(card.hello.mcpId, [...domains]);
+    applyGrantedScopeToSession(card.hello.mcpId, { ...declared, capabilities });
+    mcpAccountDerivedDomains.set(card.hello.mcpId, [...domains]);
+    broadcastConnectionsChanged();
+    if (state.trust) {
+      await syncMainWorldBridgeFromTrust(state.trust, {
+        injectIntoOpenTabs: true,
+        additionalDomains: [...mcpAccountDerivedDomains.values()].flat(),
+      });
     }
     return true;
   }
