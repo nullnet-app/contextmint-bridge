@@ -475,7 +475,11 @@ export async function handleServerHello(
           record: {
             origin: account.origin, accountId: verifiedAttestation.accountId,
             registrationId: verifiedAttestation.registrationId, slug: verifiedAttestation.slug,
-            scope: declaredAccountScope, ...(remembered ? { approvedScope: remembered } : {}),
+            scope: declaredAccountScope,
+            // confirm-each ignores remembered authority for this decision, but
+            // must not erase an earlier persistent approval as a side effect
+            // of recording the newly observed scope.
+            ...(derived?.approvedScope ? { approvedScope: derived.approvedScope } : {}),
             firstSeenAt: derived?.firstSeenAt ?? nowSeconds! * 1000,
             lastSeenAt: nowSeconds! * 1000, ...(derived?.alwaysAsk ? { alwaysAsk: true } : {}),
           },

@@ -177,7 +177,10 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     }
     return true;
   }
-  if (card.consent === 'confirm') {
+  // The card is the explicit approval for both `confirm` and a silent
+  // attestation that needed review (for example, a scope digest mismatch).
+  // Only `confirm-each` deliberately limits that approval to this session.
+  if (card.consent !== 'confirm-each') {
     const prior = await new AccountTrustStore().getDerived(card.identityHash);
     const next: AccountDerivedMcp = {
       origin: card.origin, accountId: card.accountId, registrationId: card.attestation.registrationId,

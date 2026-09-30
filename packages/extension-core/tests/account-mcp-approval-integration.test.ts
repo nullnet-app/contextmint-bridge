@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe('account MCP one-tap approval', () => {
-  it('replays the exact approved hello and sends Ready without writing trustedMcps', async () => {
+  it('allows a silent digest-mismatch card, remembers its scope, and attaches a later subset', async () => {
     freshVault();
     const local = area(); const session = area();
     vi.stubGlobal('WebSocket', OpenSocket);
@@ -54,7 +54,7 @@ describe('account MCP one-tap approval', () => {
     state.extIdentity = identity;
     state.trust = new TrustStore('1.0.0');
     state.sessions = new SessionKeys();
-    const hello = await buildHelloForAccountTest();
+    const hello = { ...(await buildHelloForAccountTest()), domains: ['zillow.com', 'shop.zillow.com'] };
     const accountKey = await generateEd25519();
     const kid = await accountKeyId(accountKey.publicKey);
     const identityHash = toHex(await sha256(fromB64(hello.identityX25519Pub)));
@@ -62,8 +62,8 @@ describe('account MCP one-tap approval', () => {
     const attestation = {
       type: 'account-attest' as const, mcpId: hello.mcpId, accountId: 'acc_test', generation: 2,
       tokenId: 'token_test', kid, registrationId: 'reg_test', slug: 'zillow', identityHash,
-      identityEd25519Pub: hello.identityEd25519Pub, scopeDigest: await scopeDigest(hello),
-      consent: 'confirm' as const, notAfter: now + 300, sig: '',
+      identityEd25519Pub: hello.identityEd25519Pub, scopeDigest: '0'.repeat(64),
+      consent: 'silent' as const, notAfter: now + 300, sig: '',
     };
     attestation.sig = toB64(await ed25519Sign(accountKey.privateKey, accountAttestPayload({
       gatewayOrigin: 'https://gateway.example', accountId: attestation.accountId,
@@ -100,8 +100,53 @@ describe('account MCP one-tap approval', () => {
     expect(trustedMcpWrite).not.toHaveBeenCalled();
     expect(await new AccountTrustStore().getDerived(identityHash)).toMatchObject({
       origin: 'https://gateway.example', accountId: 'acc_test', registrationId: 'reg_test',
-      slug: 'zillow', scope: { domains: ['zillow.com'] }, approvedScope: { domains: ['zillow.com'] },
+      slug: 'zillow', scope: { domains: ['zillow.com', 'shop.zillow.com'] },
+      approvedScope: { domains: ['zillow.com', 'shop.zillow.com'] },
     });
+
+    // A fresh hello for the same identity declares a strict subset. Its newly
+    // signed digest is valid, and the explicit card decision should now make
+    // it attach without prompting again.
+    const subsetHello = { ...hello, domains: ['zillow.com'] };
+    const subsetDigest = await scopeDigest(subsetHello);
+    const subsetAttestation = { ...attestation, scopeDigest: subsetDigest, sig: '' };
+    subsetAttestation.sig = toB64(await ed25519Sign(accountKey.privateKey, accountAttestPayload({
+      gatewayOrigin: 'https://gateway.example', accountId: subsetAttestation.accountId,
+      generation: subsetAttestation.generation, tokenId: subsetAttestation.tokenId,
+      registrationId: subsetAttestation.registrationId, slug: subsetAttestation.slug, identityHash,
+      identityEd25519Pub: fromB64(subsetHello.identityEd25519Pub), scopeDigest: subsetDigest,
+      consent: 'silent', mcpId: subsetHello.mcpId, mcpHelloNonce: fromB64(subsetHello.sessionNonce),
+      answersExtNonce: fromB64(subsetHello.answersExtNonce), notAfter: subsetAttestation.notAfter,
+    })));
+    link.accountAttestations = new Map([[subsetHello.mcpId, subsetAttestation]]);
+    ws.sent.length = 0;
+    await onServerHello(link, subsetHello);
+    expect((await session.get('pendingAccountMcpCards')).pendingAccountMcpCards).toBeUndefined();
+    expect(ws.sent.map((frame) => JSON.parse(frame) as { type: string }).some((frame) => frame.type === 'ready')).toBe(true);
+    expect(mcpDomains.get(subsetHello.mcpId)).toEqual(['zillow.com']);
+
+    // confirm-each deliberately ignores the persistent approval. Allowing its
+    // card adds a session approval, but must not change the stored grant.
+    const eachAttestation = { ...subsetAttestation, consent: 'confirm-each' as const, sig: '' };
+    eachAttestation.sig = toB64(await ed25519Sign(accountKey.privateKey, accountAttestPayload({
+      gatewayOrigin: 'https://gateway.example', accountId: eachAttestation.accountId,
+      generation: eachAttestation.generation, tokenId: eachAttestation.tokenId,
+      registrationId: eachAttestation.registrationId, slug: eachAttestation.slug, identityHash,
+      identityEd25519Pub: fromB64(subsetHello.identityEd25519Pub), scopeDigest: eachAttestation.scopeDigest,
+      consent: eachAttestation.consent, mcpId: subsetHello.mcpId,
+      mcpHelloNonce: fromB64(subsetHello.sessionNonce), answersExtNonce: fromB64(subsetHello.answersExtNonce),
+      notAfter: eachAttestation.notAfter,
+    })));
+    link.accountAttestations = new Map([[subsetHello.mcpId, eachAttestation]]);
+    await onServerHello(link, subsetHello);
+    const eachCards = (await session.get('pendingAccountMcpCards')).pendingAccountMcpCards as Record<string, { key: string }>;
+    expect(Object.keys(eachCards)).toHaveLength(1);
+    expect(await decideAccountMcpCard(Object.values(eachCards)[0]!.key, true)).toBe(true);
+    expect(await new AccountTrustStore().getDerived(identityHash)).toMatchObject({
+      approvedScope: { domains: ['zillow.com', 'shop.zillow.com'], capabilities: ['fetch'] },
+    });
+    expect((await session.get('accountMcpSessionApprovals')).accountMcpSessionApprovals)
+      .toHaveProperty(identityHash);
   });
 
   it('applies an allowed account scope expansion to the live session and remembers the expanded grant', async () => {
