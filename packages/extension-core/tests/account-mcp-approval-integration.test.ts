@@ -237,6 +237,20 @@ describe('account MCP one-tap approval', () => {
     // The old link can remain open after its mcpId is unbound and rebound to
     // another live link. A stale scope-update must not bless or mutate the
     // replacement session that happens to reuse that mcpId.
+    const originalPutDerived = AccountTrustStore.prototype.putDerived;
+    let markWriteStarted!: () => void;
+    let releaseWrite!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    vi.spyOn(AccountTrustStore.prototype, 'putDerived').mockImplementation(async function (this: AccountTrustStore, hash, derived) {
+      await originalPutDerived.call(this, hash, derived);
+      if (hash === identityHash) {
+        markWriteStarted();
+        await writeGate;
+      }
+    });
+    const decision = decideAccountMcpCard(card.key, true);
+    await writeStarted;
     unbindLink(link);
     const helloB = await buildHelloForAccountTest();
     const accountKeyB = await generateEd25519();
@@ -270,9 +284,10 @@ describe('account MCP one-tap approval', () => {
     expect(mcpIdentityHash.get(helloB.mcpId)).toBe(identityHashB);
     expect(mcpCapabilities.get(helloB.mcpId)).toEqual(['fetch']);
 
-    expect(await decideAccountMcpCard(card.key, true)).toBe(false);
+    releaseWrite();
+    expect(await decision).toBe(false);
     expect(await new AccountTrustStore().getDerived(identityHash)).toMatchObject({
-      approvedScope: { domains: ['zillow.com'], capabilities: ['fetch'], cookieKeys: [] },
+      approvedScope: { domains: ['zillow.com'], capabilities: ['fetch', 'read_cookies'], cookieKeys: ['session_id'] },
     });
     expect(mcpIdentityHash.get(helloB.mcpId)).toBe(identityHashB);
     expect(mcpCapabilities.get(helloB.mcpId)).toEqual(['fetch']);

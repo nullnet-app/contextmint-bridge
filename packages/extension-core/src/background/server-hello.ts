@@ -132,11 +132,29 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
     // This offer targets the already attached identity on this link. Check
     // both parts before persisting the wider approval: an old card must not
     // bless a replacement identity after its mcpId was rebound elsewhere.
-    if (!state.sessions?.get(card.hello.mcpId) || mcpIdentityHash.get(card.hello.mcpId) !== card.identityHash) return false;
+    const isCurrentScopeUpdate = (): boolean => {
+      const current = links.get(card.linkId);
+      return current === link && !current.closed && current.kind === 'remote' &&
+        current.ws?.readyState === WebSocket.OPEN && linkForMcp(card.hello.mcpId) === current &&
+        current.tokenId === card.tokenId && gatewayOriginFor(current.url) === card.origin &&
+        current.sessionNonce !== null && card.hello.answersExtNonce === toB64(current.sessionNonce) &&
+        card.attestation.notAfter >= Math.floor(Date.now() / 1000) &&
+        card.attestation.notAfter <= Math.floor(Date.now() / 1000) + 24 * 60 * 60 &&
+        Boolean(state.sessions?.get(card.hello.mcpId)) &&
+        mcpIdentityHash.get(card.hello.mcpId) === card.identityHash;
+    };
+    if (!isCurrentScopeUpdate()) return false;
     const store = new AccountTrustStore();
     const derived = await store.getDerived(card.identityHash);
     if (!derived || derived.origin !== card.origin || derived.accountId !== card.accountId) return false;
+    // Account and derived reads yield. The same mcpId can have been rebound
+    // while either read was pending, so revalidate at the last point before
+    // persisting the expanded approval.
+    if (!isCurrentScopeUpdate()) return false;
     await store.putDerived(card.identityHash, { ...derived, scope: card.scope, approvedScope: card.scope, lastSeenAt: Date.now() });
+    // Persistence also yields. A replacement session must not inherit the
+    // old link's newly approved live request scope.
+    if (!isCurrentScopeUpdate()) return false;
     // A scope-update is offered only for an already attached identity. Apply
     // the newly approved declared scope to its live request gates immediately;
     // card.scope is the exact, signed hello declaration, so it cannot grant
