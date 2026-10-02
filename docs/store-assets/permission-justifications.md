@@ -107,6 +107,17 @@ permission the relay tab still opens, ungrouped.
 
 ---
 
+### `unlimitedStorage`
+
+Keeps device-pairing keys from being evicted under storage pressure. The
+extension's identity keys and the pairings the user approved live in the
+extension's own IndexedDB, which the browser may otherwise clear to free disk
+space; if it did, every paired MCP server would have to be paired again. This
+permission only exempts that storage from eviction; the extension stores a few
+kilobytes and does not use it to store browsing data.
+
+---
+
 ### `host_permissions: <all_urls>`
 
 The domains ContextMint Bridge needs to reach are declared by each MCP server
