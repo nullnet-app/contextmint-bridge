@@ -39,10 +39,10 @@
  *                            pairing is gone. Shown in the popup until the
  *                            person dismisses it (fleet-audit #1002).
  *
- * The vault is quota-managed storage: without a persistence grant the browser
- * may evict it under storage pressure. The background asks for one
- * (`requestPersistentStorage`) and a lost vault is detected rather than
- * silently replaced (`vault-migration.ts`).
+ * IndexedDB is quota-managed storage the browser may evict under storage
+ * pressure. The manifest's `unlimitedStorage` exempts it in Chrome; the vault
+ * also asks for persistence (`requestPersistentStorage`), and a lost vault is
+ * detected rather than silently replaced (`vault-migration.ts`).
  *
  * Every value is stored by structured clone, which is what lets a
  * non-extractable `CryptoKey` persist without its bytes ever being exposed.

@@ -51,6 +51,13 @@ describe('the built Safari manifest passes mcp-host-app’s appex build check', 
     expect(built.manifest.permissions).toContain('nativeMessaging');
   });
 
+  // Passed through from Chrome's manifest like every permission whose API
+  // Safari has: harmless where WebKit does not honour it for IndexedDB, and
+  // the vault's eviction tripwire (fleet-audit #1002) covers that case.
+  it('asks for unlimitedStorage, passed through from Chrome', () => {
+    expect(built.manifest.permissions).toContain('unlimitedStorage');
+  });
+
   it.each(['downloads', 'tabGroups'])('does not ask for %s', (absent) => {
     expect(built.manifest.permissions).not.toContain(absent);
   });
