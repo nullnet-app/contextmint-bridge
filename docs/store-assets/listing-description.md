@@ -52,9 +52,9 @@ WebSocket. The request leaves your machine from Chrome, with your session.
 ### Connecting ContextMint
 
 ContextMint can host MCP servers for you rather than on your machine. To let
-them use this browser, choose **Connect this browser to your account** in the
-extension popup and select ContextMint. A tab opens to ContextMint's Connect
-page; approve the browser there. The extension saves the resulting credential
+them use this browser, open the extension popup and click **Connect to
+mcp.nullnet.app** under "Connect this browser to your account". A tab opens to
+ContextMint's Connect page; sign in if asked, then confirm the browser there. The extension saves the resulting credential
 in its protected vault, so there is no access token to copy or paste. After
 pairing, ContextMint's servers use this browser with the same per-domain
 approval and revoke controls as local servers. Request and response contents
