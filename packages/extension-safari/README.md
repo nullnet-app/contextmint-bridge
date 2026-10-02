@@ -47,6 +47,10 @@ _Spike results — macOS_):
   `tests/classic-scripts.test.ts` guards it.
 - **No `downloads`, no `tabGroups`.** Neither API exists in Safari, so both
   permissions are dropped.
+- **`unlimitedStorage` is kept** (passed through from Chrome, like every
+  permission whose API Safari has). WebKit reportedly does not honour it for
+  IndexedDB, so it may not stop eviction there; it is harmless, and a lost
+  vault is detected and announced in the popup either way (fleet-audit #1002).
 - **`nativeMessaging`** is added (Safari only): the extension asks ContextMint,
   the app that contains it, for the bridge target the user set up there
   (extension-core `native-handoff.ts`, implementing nullnet-app/mcp-host-app

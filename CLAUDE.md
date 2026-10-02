@@ -198,9 +198,9 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   which IndexedDB eviction does not touch; an empty vault beside it records
   `vaultLoss`, and the popup shows "Pairings were reset" until it is dismissed.
   It is a tripwire, never an authorisation: content scripts can write it.
-  Persistence is requested with `navigator.storage.persist()` (popup, and
-  any background that has it). The manifest does NOT declare
-  `unlimitedStorage`; see PR discussion before adding it.
+  Eviction is prevented by the manifest's `unlimitedStorage` (no permission
+  warning; Safari passes it through but reportedly ignores it for IndexedDB)
+  plus `navigator.storage.persist()` (popup, and any background that has it).
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is

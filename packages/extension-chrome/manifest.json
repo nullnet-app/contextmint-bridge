@@ -44,7 +44,8 @@
     "webRequest",
     "alarms",
     "downloads",
-    "tabGroups"
+    "tabGroups",
+    "unlimitedStorage"
   ],
   "storage": {
     "managed_schema": "managed-schema.json"
