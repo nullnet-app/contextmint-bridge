@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.0...v1.4.1) (2026-10-02)
+
+
+### Documentation
+
+* **store-assets:** name the popup's real Connect button in the listing ([#54](https://github.com/nullnet-app/contextmint-bridge/issues/54)) ([b226279](https://github.com/nullnet-app/contextmint-bridge/commit/b226279c984991e26b15c848debfb166ff5c035e)), closes [#43](https://github.com/nullnet-app/contextmint-bridge/issues/43)
+
 ## [1.4.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.3.0...v1.4.0) (2026-09-30)
 
 
