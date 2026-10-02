@@ -10,6 +10,10 @@ export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, '**/.claude/**', '**/dist/**'],
     // extension-core reads the build's `__FETCHPROXY_PLATFORM__` define; see the file.
-    setupFiles: ['./packages/extension-core/tests/setup/platform.ts'],
+    setupFiles: [
+      './packages/extension-core/tests/setup/platform.ts',
+      // Unit tests stand in for the background, the vault's only initialiser; see the file.
+      './packages/extension-core/tests/setup/vault-owner.ts',
+    ],
   },
 });

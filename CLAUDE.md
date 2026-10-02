@@ -186,6 +186,21 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   ACCOUNT_CONFIRMED or 4006 FACTS_CHANGED close re-dials at once, at most
   once per five seconds, then uses normal backoff. The immediate re-dial does
   not reset the backoff; only an open does.
+- **Only the background initialises the vault** (fleet-audit #1001). Boot
+  calls `claimVaultOwnership()`; every other context (the popup) is a reader:
+  on an empty vault it sends `ensure-vault` to the background and never mints,
+  imports or purges, because only the background sees `onInstalled` and can
+  tell an upgrade from a fresh install. Unit tests run as the owner
+  (`tests/setup/vault-owner.ts`); reader tests switch with
+  `__setVaultRoleForTests`.
+- **A lost vault is announced, not silently replaced** (fleet-audit #1002).
+  The owner leaves `vaultInitialisedAt` (a bare timestamp) in `storage.local`,
+  which IndexedDB eviction does not touch; an empty vault beside it records
+  `vaultLoss`, and the popup shows "Pairings were reset" until it is dismissed.
+  It is a tripwire, never an authorisation: content scripts can write it.
+  Persistence is requested with `navigator.storage.persist()` (popup, and
+  any background that has it). The manifest does NOT declare
+  `unlimitedStorage`; see PR discussion before adding it.
 - **Multi-domain tab opening — every declared domain, one tab each.**
   `background/server-hello.ts` and `background/approval.ts` both loop over
   `result.domains` calling `ensureDomainTab(d)` fire-and-forget. The fan-out is

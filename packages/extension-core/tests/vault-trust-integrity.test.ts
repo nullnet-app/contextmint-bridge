@@ -23,7 +23,7 @@ import { vaultInitIfAbsent } from '../src/vault.js';
 import { generateExtensionIdentity } from '../src/identity-keys.js';
 import { noteInstalled } from '../src/vault-migration.js';
 import { AccountTrustStore, type TrustedAccount, type AccountDerivedMcp } from '../src/account-trust-store.js';
-import { freshVault, installChromeLocal, type LocalArea } from './helpers/vault.js';
+import { freshVault, installChromeLocal, withoutTripwire, type LocalArea } from './helpers/vault.js';
 
 /**
  * FOLLOWUP-1 (fleet-audit #252): trust records (`trustedMcps`), remote bridge
@@ -173,7 +173,7 @@ describe('trust records cannot be forged or revoked through chrome.storage.local
     const { pairedAt: _p, extensionVersionAtPair: _v, ...input } = recordFor(hello, extPubB64);
     await new TrustStore(EXT_VERSION).put(identityHash, input);
     expect(JSON.stringify(local.data)).not.toContain(identityHash);
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 
   it('revocation still works from the popup (TrustStore.remove)', async () => {
@@ -201,7 +201,7 @@ describe('remoteBridges and dismissedScopeHashes cannot be written through stora
 
   it('a bridge the user saved survives storage.local being cleared', async () => {
     await saveRemoteTargets([BRIDGE]);
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
     local.data['remoteBridges'] = [];
     expect(await loadRemoteTargets()).toEqual([BRIDGE]);
   });
@@ -221,7 +221,7 @@ describe('remoteBridges and dismissedScopeHashes cannot be written through stora
     await recordDismissedScopeHash('idhash', 'scopehash');
     await recordDismissedScopeHash('idhash', 'other');
     expect(await loadDismissedScopeHashes()).toEqual({ idhash: ['scopehash', 'other'] });
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 });
 
@@ -251,7 +251,7 @@ describe('account trust is vault-only and has generation rollback protection', (
     await store.putDerived('identity-hash', derived);
     expect(await store.get(account.origin, account.accountId)).toEqual(account);
     expect(await store.getDerived('identity-hash')).toEqual(derived);
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 
   it('lists accounts, toggles always ask, and removes an MCP derived record', async () => {
@@ -415,7 +415,7 @@ describe('migration from storage.local keeps existing pairings (one time only)',
     expect(await trust.list()).toEqual({});
     expect(await loadRemoteTargets()).toEqual([]);
     expect(await loadDismissedScopeHashes()).toEqual({});
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 
   it('an identity already in the vault never pulls trust out of storage.local', async () => {
@@ -458,7 +458,7 @@ describe('migration from storage.local keeps existing pairings (one time only)',
     const trust = new TrustStore(EXT_VERSION);
     expect(await trust.list()).toEqual({});
     expect((await decide(trust, evil.hello, x.publicKey)).kind).not.toBe('auto-trust');
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 
   it('drops malformed legacy rows rather than importing them', async () => {

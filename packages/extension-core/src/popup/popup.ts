@@ -15,6 +15,8 @@
 import { TrustStore } from '../trust-store.js';
 import { AccountTrustStore } from '../account-trust-store.js';
 import { loadRemoteTargets, saveRemoteTargets } from '../vault-records.js';
+import { dismissVaultLoss, loadVaultLoss } from '../vault-migration.js';
+import { requestPersistentStorage } from '../vault.js';
 import { normalisePendingPair } from '../lib/pending-pair.js';
 import {
   VERSION_MISMATCH_KEY,
@@ -319,12 +321,16 @@ export type PopupState =
        * "no trusted MCPs" is exactly the state it leaves behind.
        */
       mismatches?: VersionMismatch[];
+      /** fleet-audit #1002: the browser lost the vault; see `VaultLossView`. */
+      vaultLoss?: VaultLossView;
     }
   | {
       mode: 'status';
       trusted: TrustedSummary[];
       /** 3.0.0+: see the `empty` mode's note. */
       mismatches?: VersionMismatch[];
+      /** fleet-audit #1002: see `VaultLossView`. */
+      vaultLoss?: VaultLossView;
       /**
        * 2.1.0+: the bridges this browser dials. Optional — a popup rendered
        * without it looks exactly as it did before remote targets existed,
@@ -993,6 +999,41 @@ function appendVersionMismatches(root: HTMLElement, list: readonly VersionMismat
   root.appendChild(ul);
 }
 
+/**
+ * fleet-audit #1002: the browser evicted or wiped the vault, so the
+ * background minted a new identity and every MCP paired with the old one now
+ * refuses this browser. Recorded by `vault-migration.ts`; shown until the
+ * person dismisses it.
+ */
+export interface VaultLossView {
+  detectedAt: number;
+  onDismiss: () => void;
+}
+
+/**
+ * Rendered FIRST, like the version-mismatch notice and for the same reason:
+ * "no MCP servers connected" below it is the conclusion this corrects.
+ */
+function appendVaultLoss(root: HTMLElement, loss: VaultLossView | undefined): void {
+  if (!loss) return;
+  const box = elem('div', { class: 'vault-loss', role: 'alert' });
+  box.appendChild(elem('strong', {}, 'Pairings were reset'));
+  box.appendChild(
+    elem(
+      'p',
+      {},
+      `On ${new Date(loss.detectedAt).toLocaleString()} this browser lost the extension's ` +
+        "saved data (the browser cleared it), so the bridge has a new identity. " +
+        'Every MCP and account paired before then must pair again; remove the old ' +
+        "extension pin from each MCP if it asks.",
+    ),
+  );
+  const dismiss = elem('button', { 'data-action': 'dismiss-vault-loss' }, 'Got it');
+  dismiss.addEventListener('click', loss.onDismiss);
+  box.appendChild(dismiss);
+  root.appendChild(box);
+}
+
 export function renderPopup(root: HTMLElement, state: PopupState): void {
   root.innerHTML = '';
 
@@ -1050,6 +1091,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
   }
 
   if (state.mode === 'empty') {
+    appendVaultLoss(root, state.vaultLoss);
     appendVersionMismatches(root, state.mismatches ?? []);
     root.appendChild(
       elem('p', {}, 'No MCP servers connected. Start an MCP server, then refresh.'),
@@ -1059,6 +1101,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
   }
 
   if (state.mode === 'status') {
+    appendVaultLoss(root, state.vaultLoss);
     appendVersionMismatches(root, state.mismatches ?? []);
     root.appendChild(elem('h3', {}, 'Trusted MCPs'));
     if (state.trusted.length === 0) {
@@ -1449,6 +1492,10 @@ async function bootstrap(): Promise<void> {
   // chrome.storage.session — trusted contexts only — never storage.local,
   // which content scripts on every site can write (S-SEC-3). The background
   // listens there alone. No session area (Chrome < 102) means no pairing.
+  // fleet-audit #1002: ask the browser to keep the vault from eviction.
+  // `persist()` exists only in windows — this popup, not Chrome's service
+  // worker — and opening the popup is the user gesture Chrome weighs.
+  void requestPersistentStorage();
   const queue = chrome.storage.session;
   if (!queue) {
     renderPopup(root, { mode: 'empty' });
@@ -1741,8 +1788,17 @@ async function bootstrap(): Promise<void> {
       ),
     );
     const accounts = Object.entries(accountsByKey).map(([, a]) => ({ origin: a.origin, accountId: a.accountId, slug: a.slug }));
+    // fleet-audit #1002: the background recorded that it minted over a lost
+    // vault. Say so until the person dismisses it.
+    const loss = await loadVaultLoss();
+    const vaultLoss = loss
+      ? {
+          detectedAt: loss.detectedAt,
+          onDismiss: () => void dismissVaultLoss().then(renderTrustedStatus),
+        }
+      : undefined;
     if (trustedList.length === 0 && accounts.length === 0) {
-      renderPopup(root, { mode: 'empty', bridges, mismatches });
+      renderPopup(root, { mode: 'empty', bridges, mismatches, vaultLoss });
     } else {
       const refresh = async (): Promise<void> => {
         try { await chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' }); } catch { /* worker may be asleep */ }
@@ -1770,7 +1826,7 @@ async function bootstrap(): Promise<void> {
           return true;
         } catch { return false; }
       };
-      renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, onForget, onAlwaysAsk, accounts, onForgetAccount, bridges, mismatches });
+      renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, onForget, onAlwaysAsk, accounts, onForgetAccount, bridges, mismatches, vaultLoss });
     }
   };
 

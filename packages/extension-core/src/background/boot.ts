@@ -61,7 +61,13 @@ import {
   SYNC_MAIN_WORLD_BRIDGE,
   syncMainWorldBridgeForActiveTrust,
 } from './main-world-bridge-sync.js';
-import { armInstallSignal, noteInstalled } from '../vault-migration.js';
+import {
+  armInstallSignal,
+  claimVaultOwnership,
+  ensureVaultAsOwner,
+  ENSURE_VAULT_MESSAGE,
+  noteInstalled,
+} from '../vault-migration.js';
 import { createWakeLift, isApprovedPageLoadWake } from './page-load-wake.js';
 import { PAGE_LOAD_WAKE } from '../page-load-wake.js';
 import {
@@ -90,6 +96,10 @@ export function maybeBoot(): void {
   ) {
     return;
   }
+  // fleet-audit #1001: this context — and no other — creates or migrates the
+  // vault. Claimed before anything below can touch it; the popup asks here
+  // (`ensure-vault`) instead of initialising on its own.
+  claimVaultOwnership();
   state.trust = new TrustStore(chrome.runtime.getManifest().version);
   state.sessions = new SessionKeys();
   // What every wake runs, once (`page-load-wake.ts`): boot's own run below,
@@ -145,6 +155,23 @@ export function maybeBoot(): void {
   // Part 3: respond to popup queries for the connected identity hash set.
   if (typeof chrome.runtime.onMessage?.addListener === 'function') {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      // fleet-audit #1001: the popup found the vault empty and asks this
+      // context — the only one that sees onInstalled — to initialise it,
+      // rather than minting its own identity over an upgrade in progress.
+      // Extension pages only; a content script asking gets no answer.
+      if (
+        msg !== null &&
+        typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === ENSURE_VAULT_MESSAGE &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        void ensureVaultAsOwner().then(
+          () => sendResponse({ ok: true }),
+          (e: unknown) =>
+            sendResponse({ ok: false, reason: e instanceof Error ? e.message : String(e) }),
+        );
+        return true;
+      }
       if (
         msg !== null &&
         typeof msg === 'object' &&
