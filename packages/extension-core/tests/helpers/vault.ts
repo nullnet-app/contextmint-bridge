@@ -127,3 +127,17 @@ export const VAULTS = [
   { name: 'WebKit-like (Safari)', make: () => webkitLikeVault() },
   { name: 'WebKit-like, AES nulled too', make: () => webkitLikeVault({ nullAes: true }) },
 ] as const;
+
+/**
+ * `storage.local` minus the vault tripwire (`VAULT_TRIPWIRE_KEY`, a bare
+ * timestamp the background leaves so a lost vault is detected — fleet-audit
+ * #1002). Tests asserting "nothing secret or trusted is in storage.local"
+ * compare this, and check the tripwire separately.
+ */
+export function withoutTripwire(data: Record<string, unknown>): Record<string, unknown> {
+  const { vaultInitialisedAt, ...rest } = data;
+  if (vaultInitialisedAt !== undefined && typeof vaultInitialisedAt !== 'number') {
+    throw new Error('the vault tripwire must be a bare timestamp');
+  }
+  return rest;
+}

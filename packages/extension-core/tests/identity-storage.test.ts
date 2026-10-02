@@ -13,6 +13,7 @@ import {
   freshVault,
   installChromeLocal,
   webkitLikeVault,
+  withoutTripwire,
   type LocalArea,
 } from './helpers/vault.js';
 
@@ -175,7 +176,7 @@ describe.each(VAULTS)('a fresh identity in a $name vault', (vault) => {
 
   it('writes nothing to chrome.storage.local', async () => {
     await loadOrCreateExtensionIdentity();
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 
   it('a legacy storage.local import keeps both pubs and drops the X25519 private bytes', async () => {
@@ -190,7 +191,7 @@ describe.each(VAULTS)('a fresh identity in a $name vault', (vault) => {
     const stored = await vaultGet('identity');
     expect(Object.keys(stored as object).sort()).toEqual(ID_FIELDS);
     expect(containsBytes(stored, legacy.xPriv)).toBe(false);
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 });
 
@@ -347,6 +348,6 @@ describe('a null identity (a Safari build before #11)', () => {
     await signs(id);
     expect(Object.keys((await vaultGet('identity')) as object).sort()).toEqual(ID_FIELDS);
     expect(await loadRemoteTargets()).toEqual([bridge]);
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 });

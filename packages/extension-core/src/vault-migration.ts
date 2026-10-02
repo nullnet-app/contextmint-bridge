@@ -34,9 +34,22 @@
  *   waits (bounded) for onInstalled to say what happened before it decides.
  *   A normal wake never gets here — the vault already has an identity — so
  *   the wait costs only a worker that woke up to a lost vault.
+ * - **only the background initialises** (fleet-audit #1001). Boot calls
+ *   `claimVaultOwnership`; every other context — the popup — is a reader
+ *   that asks the background (`ensure-vault`) and never mints, imports or
+ *   purges. Only the background sees onInstalled, so a popup deciding on its
+ *   own, in the gap between Chrome starting the updated worker and
+ *   dispatching onInstalled, would mint over an upgrade and purge the legacy
+ *   identity — every pairing lost.
  * - **the identity and everything imported with it land in ONE transaction**
- *   that first checks the identity is still absent (`vaultInitIfAbsent`),
- *   so the popup and the service worker cannot both initialise.
+ *   that first checks the identity is still absent (`vaultInitIfAbsent`), so
+ *   two background runs (a worker restarted mid-import) cannot both
+ *   initialise. The write is read back before the legacy keys are purged or
+ *   the upgrade authorisation consumed, so a failed write loses nothing.
+ * - **a lost vault is detected, not passed off as a fresh install**
+ *   (fleet-audit #1002): `VAULT_TRIPWIRE_KEY` in storage.local survives an
+ *   IndexedDB eviction, and a vault minted beside it records `vaultLoss` for
+ *   the popup to show.
  * - **the stores are imported only alongside a legacy identity.** A trust
  *   record is meaningless without the identity it was pinned to.
  * - **everything imported is validated the way the live stores validate it**
@@ -58,11 +71,18 @@
  * is overwritten rather than mistaken for one.
  *
  * Memoised per IndexedDB factory (= per profile) so the many callers that
- * need the vault ready — identity load, trust store, remote targets, popup —
- * share one run. A failed run is not memoised; the next caller retries.
+ * need the vault ready — identity load, trust store, remote targets —
+ * share one run per context. A failed run is not memoised; the next caller retries.
  */
 
-import { vaultFactory, vaultGet, vaultInitIfAbsent, vaultUpdate } from './vault.js';
+import {
+  requestPersistentStorage,
+  vaultFactory,
+  vaultGet,
+  vaultInitIfAbsent,
+  vaultUpdate,
+  type VaultKey,
+} from './vault.js';
 import {
   generateExtensionIdentity,
   importLegacyIdentity,
@@ -261,7 +281,62 @@ async function discardX25519Private(existing: unknown): Promise<void> {
   }
 }
 
-async function run(): Promise<void> {
+/**
+ * `chrome.storage.local` key: a vault was initialised in this profile (the
+ * time it first was). It lives OUTSIDE IndexedDB on purpose — `storage.local`
+ * is not quota-evicted with the vault — so an empty vault beside it means the
+ * vault was LOST, not that this is a fresh install (fleet-audit #1002).
+ *
+ * A tripwire only, never an authorisation: content scripts can write
+ * `storage.local`, so a forged one at most shows a false "pairings were
+ * reset" notice, and a deleted one at most lets a loss go unannounced (as
+ * every loss did before it). It holds a timestamp, not the identity, so it is
+ * no fingerprint for a renderer to read.
+ */
+export const VAULT_TRIPWIRE_KEY = 'vaultInitialisedAt';
+
+/**
+ * The runtime message the popup (or any non-background context) sends to ask
+ * the background to initialise the vault. Answered `{ ok: true }` or
+ * `{ ok: false, reason }` (`background/boot.ts`).
+ */
+export const ENSURE_VAULT_MESSAGE = 'ensure-vault';
+
+/**
+ * How long a reader waits for the background to answer `ensure-vault`. Longer
+ * than `INSTALL_SIGNAL_TIMEOUT_MS`, because the background may itself be
+ * waiting for onInstalled before it decides.
+ */
+export const READER_TIMEOUT_MS = 15_000;
+
+async function tripwireSet(area: Area | null): Promise<boolean> {
+  if (!area) return false;
+  try {
+    return (await area.get(VAULT_TRIPWIRE_KEY))[VAULT_TRIPWIRE_KEY] !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+async function setTripwire(area: Area | null): Promise<void> {
+  if (!area?.set || (await tripwireSet(area))) return;
+  try {
+    await area.set({ [VAULT_TRIPWIRE_KEY]: Date.now() });
+  } catch (e) {
+    console.error('[fetchproxy] could not record the vault tripwire:', e);
+  }
+}
+
+/**
+ * The background's run: the ONLY code that creates or migrates the vault.
+ *
+ * Order matters for the legacy store: the new vault is written in one
+ * transaction, read back and checked, and only then is the session
+ * authorisation consumed and `storage.local` purged. A failed write throws
+ * before either, so the legacy identity (and the flag that lets a retry import
+ * it) survive for the next attempt.
+ */
+async function ownerRun(): Promise<void> {
   const area = storageArea('local');
   const existing = await vaultGet('identity');
   if (isExtensionIdentity(existing)) {
@@ -272,9 +347,16 @@ async function run(): Promise<void> {
     await vaultInitIfAbsent('legacyStoresMigrated', { legacyStoresMigrated: true });
     await clearSessionFlag();
     await purgeLegacy(area);
+    await setTripwire(area);
+    void requestPersistentStorage();
     return;
   }
-  if (await upgradeAuthorised()) {
+  // Read BEFORE anything is written: was there a vault here before this one?
+  const hadVault = await tripwireSet(area);
+  const authorised = await upgradeAuthorised();
+  let entries: Partial<Record<VaultKey, unknown>>;
+  let imported: Awaited<ReturnType<typeof importLegacyIdentity>> = null;
+  if (authorised) {
     let legacy: Record<string, unknown> = {};
     if (area) {
       try {
@@ -283,52 +365,129 @@ async function run(): Promise<void> {
         console.error('[fetchproxy] could not read legacy storage.local keys:', e);
       }
     }
-    const imported = await importLegacyIdentity(legacy[LEGACY_IDENTITY_KEY]);
-    // An upgrade brings its stores with it, pinned to the identity it had. If
-    // another context (popup vs service worker) won the race, nothing is
-    // written here and its initialisation stands.
-    await vaultInitIfAbsent(
-      'identity',
-      imported
-        ? {
-            identity: imported,
-            trustedMcps: sanitiseTrustStore(legacy[LEGACY_TRUST_KEY]),
-            remoteBridges: normaliseRemoteTargets(legacy[LEGACY_REMOTE_TARGETS_KEY]),
-            dismissedScopeHashes: sanitiseDismissed(legacy[LEGACY_DISMISSED_KEY]),
-            legacyStoresMigrated: true,
-          }
-        : { identity: await generateExtensionIdentity(), legacyStoresMigrated: true },
-      isExtensionIdentity,
-    );
-    // Consumed: a vault lost later in this browser session mints fresh.
-    await clearSessionFlag();
+    imported = await importLegacyIdentity(legacy[LEGACY_IDENTITY_KEY]);
+    // An upgrade brings its stores with it, pinned to the identity it had.
+    entries = imported
+      ? {
+          identity: imported,
+          trustedMcps: sanitiseTrustStore(legacy[LEGACY_TRUST_KEY]),
+          remoteBridges: normaliseRemoteTargets(legacy[LEGACY_REMOTE_TARGETS_KEY]),
+          dismissedScopeHashes: sanitiseDismissed(legacy[LEGACY_DISMISSED_KEY]),
+          legacyStoresMigrated: true,
+        }
+      : { identity: await generateExtensionIdentity(), legacyStoresMigrated: true };
   } else {
     // A fresh install, or a lost vault — or a WebKit vault whose identity
     // was nulled before #11: `isExtensionIdentity(null)`
     // is false, so that `null` is overwritten, and whatever sits beside it
     // (remote bridge targets the user typed in) is left as it is. Nothing in
     // storage.local is ours.
-    await vaultInitIfAbsent(
-      'identity',
-      { identity: await generateExtensionIdentity(), legacyStoresMigrated: true },
-      isExtensionIdentity,
+    entries = { identity: await generateExtensionIdentity(), legacyStoresMigrated: true };
+  }
+  // fleet-audit #1002: a vault existed here and is gone. A new identity is
+  // still minted — the bridge cannot work without one — but the loss is
+  // recorded for the popup to show, never passed off as a fresh install.
+  if (hadVault && !imported) {
+    entries.vaultLoss = { detectedAt: Date.now() };
+    console.error(
+      '[fetchproxy] the extension vault was lost (evicted or wiped); a new identity was minted and every MCP must pair again',
     );
   }
+  // If another owner run won the race, nothing is written here and its
+  // initialisation stands.
+  await vaultInitIfAbsent('identity', entries, isExtensionIdentity);
+  if (!isExtensionIdentity(await vaultGet('identity'))) {
+    throw new Error('vault identity did not persist; legacy storage left in place for a retry');
+  }
+  // Consumed: a vault lost later in this browser session mints fresh.
+  if (authorised) await clearSessionFlag();
   await purgeLegacy(area);
+  await setTripwire(area);
+  void requestPersistentStorage();
 }
 
-let runs = new WeakMap<IDBFactory, Promise<void>>();
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e: unknown) => {
+        clearTimeout(timer);
+        reject(e instanceof Error ? e : new Error(String(e)));
+      },
+    );
+  });
+}
+
+/**
+ * Every context but the background (the popup): read the vault, and if it is
+ * not initialised yet, ask the background to initialise it — never mint,
+ * import or purge here (fleet-audit #1001). Only the background sees
+ * onInstalled, so only it can tell an upgrade (import the legacy identity)
+ * from a fresh install or a lost vault (mint); a popup that decided on its own
+ * would mint over an upgrade it could not see and purge the old identity.
+ * Throws when the vault is still empty afterwards; the next call retries.
+ */
+async function readerRun(): Promise<void> {
+  if (isExtensionIdentity(await vaultGet('identity'))) return;
+  const send = (
+    globalThis as unknown as {
+      chrome?: { runtime?: { sendMessage?: (m: unknown) => Promise<unknown> } };
+    }
+  ).chrome?.runtime?.sendMessage;
+  if (typeof send !== 'function') {
+    throw new Error('vault not initialised, and the background cannot be reached to initialise it');
+  }
+  let reason = '';
+  try {
+    const answer = (await withTimeout(
+      Promise.resolve(send({ type: ENSURE_VAULT_MESSAGE })),
+      READER_TIMEOUT_MS,
+    )) as { ok?: unknown; reason?: unknown } | undefined;
+    if (answer?.ok !== true && typeof answer?.reason === 'string') reason = `: ${answer.reason}`;
+  } catch (e) {
+    reason = `: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  if (!isExtensionIdentity(await vaultGet('identity'))) {
+    throw new Error(`vault not initialised by the background${reason}`);
+  }
+}
+
+type VaultRole = 'owner' | 'reader';
+
+/**
+ * Which kind of context this is. Every context starts as a READER: the safe
+ * default, since a context that forgot to say would otherwise be able to mint.
+ * The background claims ownership at boot (`claimVaultOwnership`).
+ */
+let role: VaultRole = 'reader';
+
+/** Background boot, before the first vault access: this context initialises the vault. */
+export function claimVaultOwnership(): void {
+  role = 'owner';
+}
+
+/** Test-only: act as the background (`owner`) or another context (`reader`). */
+export function __setVaultRoleForTests(r: VaultRole): void {
+  role = r;
+}
+
+let ownerRuns = new WeakMap<IDBFactory, Promise<void>>();
+let readerRuns = new WeakMap<IDBFactory, Promise<void>>();
 
 /**
  * Test-only: forget every memoised run, as a new service-worker wake (or the
  * popup, a separate context) would start without one.
  */
 export function __forgetVaultRunsForTests(): void {
-  runs = new WeakMap();
+  ownerRuns = new WeakMap();
+  readerRuns = new WeakMap();
 }
 
-/** Resolve once the vault is initialised (migrating or minting as needed). */
-export function ensureVault(): Promise<void> {
+function memo(runs: WeakMap<IDBFactory, Promise<void>>, run: () => Promise<void>): Promise<void> {
   const f = vaultFactory();
   let p = runs.get(f);
   if (!p) {
@@ -337,4 +496,34 @@ export function ensureVault(): Promise<void> {
     p.catch(() => runs.delete(f));
   }
   return p;
+}
+
+/**
+ * The background's initialisation (migrating or minting as needed). Called by
+ * `ensureVault` in the background, and by boot's `ensure-vault` handler on
+ * behalf of the popup. Never call it from any other context.
+ */
+export function ensureVaultAsOwner(): Promise<void> {
+  return memo(ownerRuns, ownerRun);
+}
+
+/**
+ * Resolve once the vault is initialised. In the background this initialises
+ * it; anywhere else it waits for the background to (`readerRun`).
+ */
+export function ensureVault(): Promise<void> {
+  return role === 'owner' ? ensureVaultAsOwner() : memo(readerRuns, readerRun);
+}
+
+/** A lost vault this one replaced (fleet-audit #1002), or null. */
+export async function loadVaultLoss(): Promise<{ detectedAt: number } | null> {
+  const v = await vaultGet('vaultLoss');
+  if (typeof v !== 'object' || v === null) return null;
+  const at = (v as { detectedAt?: unknown }).detectedAt;
+  return typeof at === 'number' && Number.isFinite(at) ? { detectedAt: at } : null;
+}
+
+/** The person has seen the vault-loss notice: stop showing it. */
+export async function dismissVaultLoss(): Promise<void> {
+  await vaultUpdate('vaultLoss', () => undefined);
 }

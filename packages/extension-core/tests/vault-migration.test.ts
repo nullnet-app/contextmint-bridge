@@ -11,7 +11,13 @@ import {
 import { vaultInitIfAbsent, vaultGet } from '../src/vault.js';
 import { generateExtensionIdentity } from '../src/identity-keys.js';
 import { loadRemoteTargets } from '../src/vault-records.js';
-import { chromeSession, freshVault, installChromeLocal, type LocalArea } from './helpers/vault.js';
+import {
+  chromeSession,
+  freshVault,
+  installChromeLocal,
+  withoutTripwire,
+  type LocalArea,
+} from './helpers/vault.js';
 
 /**
  * The legacy import out of `chrome.storage.local` is gated on an UNFORGEABLE
@@ -79,7 +85,7 @@ describe('vault loss never re-opens the storage.local import', () => {
     expect(toB64(after.ed25519Pub)).not.toBe(toB64(first.ed25519Pub));
     expect(await loadRemoteTargets()).toEqual([]);
     // The planted rows are discarded, not left to be imported later.
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 
   it('an authorised upgrade imports once; a LATER eviction does not import again', async () => {
@@ -149,7 +155,7 @@ describe('vault loss never re-opens the storage.local import', () => {
     chromeSession().data[LEGACY_MIGRATION_FLAG] = true;
     expect(await loadRemoteTargets()).toEqual([]);
     expect(await vaultGet('legacyStoresMigrated')).toBe(true);
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
     expect(LEGACY_MIGRATION_FLAG in chromeSession().data).toBe(false);
   });
 });
@@ -187,6 +193,6 @@ describe('the service worker waits for onInstalled before initialising an empty 
     armInstallSignal(30);
     const id = await loadOrCreateExtensionIdentity();
     expect(toB64(id.ed25519Pub)).not.toBe(planted.edPub);
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 });

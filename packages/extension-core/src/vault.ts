@@ -33,7 +33,16 @@
  *                            #252 — a content script could forge or revoke
  *                            them while they lived in `storage.local`);
  * - `legacyStoresMigrated` — marker: the one-time import of those three out of
- *                            `storage.local` has happened (`vault-migration.ts`).
+ *                            `storage.local` has happened (`vault-migration.ts`);
+ * - `vaultLoss`            — `{ detectedAt }`: this vault was minted over one the
+ *                            browser lost (evicted / wiped), so every earlier
+ *                            pairing is gone. Shown in the popup until the
+ *                            person dismisses it (fleet-audit #1002).
+ *
+ * The vault is quota-managed storage: without a persistence grant the browser
+ * may evict it under storage pressure. The background asks for one
+ * (`requestPersistentStorage`) and a lost vault is detected rather than
+ * silently replaced (`vault-migration.ts`).
  *
  * Every value is stored by structured clone, which is what lets a
  * non-extractable `CryptoKey` persist without its bytes ever being exposed.
@@ -55,7 +64,8 @@ export type VaultKey =
   | 'accountGenerationHighWater'
   | 'remoteBridges'
   | 'dismissedScopeHashes'
-  | 'legacyStoresMigrated';
+  | 'legacyStoresMigrated'
+  | 'vaultLoss';
 
 function factory(): IDBFactory {
   const f = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
@@ -209,4 +219,30 @@ export function vaultInitIfAbsent(
       done(true);
     };
   });
+}
+
+interface StorageManagerLike {
+  persisted?: () => Promise<boolean>;
+  persist?: () => Promise<boolean>;
+}
+
+/**
+ * Ask the browser not to evict this origin's storage (the vault) under
+ * storage pressure (fleet-audit #1002). Resolves `true` when the storage is
+ * persistent (already, or granted now), `false` when the browser declined,
+ * and `null` when this context cannot ask — `StorageManager.persist()` is
+ * exposed to windows only, so a Chrome service worker has none; the popup and
+ * Safari's event page do. Never throws: persistence is a best-effort guard,
+ * and a lost vault is still detected (`vault-migration.ts`).
+ */
+export async function requestPersistentStorage(): Promise<boolean | null> {
+  const storage = (globalThis as { navigator?: { storage?: StorageManagerLike } }).navigator
+    ?.storage;
+  try {
+    if (typeof storage?.persisted === 'function' && (await storage.persisted())) return true;
+    if (typeof storage?.persist !== 'function') return null;
+    return await storage.persist();
+  } catch {
+    return null;
+  }
 }

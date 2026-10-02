@@ -11,7 +11,7 @@ import {
   ed25519Verify,
 } from '@fetchproxy/protocol';
 import { noteInstalled } from '../src/vault-migration.js';
-import { VAULTS, installChromeLocal, type LocalArea } from './helpers/vault.js';
+import { VAULTS, installChromeLocal, withoutTripwire, type LocalArea } from './helpers/vault.js';
 
 /**
  * FOLLOWUP-2 (fleet-audit #253): the extension's long-term private keys used
@@ -81,7 +81,7 @@ describe.each(VAULTS)('loadOrCreateExtensionIdentity — fresh install, $name va
 
   it('writes NOTHING to chrome.storage.local (a content script finds no key material)', async () => {
     await loadOrCreateExtensionIdentity();
-    expect(local.data).toEqual({});
+    expect(withoutTripwire(local.data)).toEqual({});
   });
 
   it('returns the same identity on later calls (and after a service-worker restart)', async () => {
