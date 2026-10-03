@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.3](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.2...v1.4.3) (2026-10-03)
+
+
+### Refactor
+
+* **popup:** put the S-SEC-3 pairing-queue comment back above the queue ([#61](https://github.com/nullnet-app/contextmint-bridge/issues/61)) ([907fe2c](https://github.com/nullnet-app/contextmint-bridge/commit/907fe2c0c10b42cd23abe528b11753a7108f56de))
+
 ## [1.4.2](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.1...v1.4.2) (2026-10-02)
 
 
