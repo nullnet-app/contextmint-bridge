@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.2](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.1...v1.4.2) (2026-10-02)
+
+
+### Bug Fixes
+
+* **vault:** never let the popup reset pairings, and announce a lost vault ([#56](https://github.com/nullnet-app/contextmint-bridge/issues/56)) ([8228f93](https://github.com/nullnet-app/contextmint-bridge/commit/8228f933c0dafd2784d393952e67b62fb24d602a))
+* **vault:** request unlimitedStorage so pairing keys are not evicted ([#59](https://github.com/nullnet-app/contextmint-bridge/issues/59)) ([3dbd5d0](https://github.com/nullnet-app/contextmint-bridge/commit/3dbd5d03aef48776df0ac1c110b892c5612f4346))
+
 ## [1.4.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.0...v1.4.1) (2026-10-02)
 
 
