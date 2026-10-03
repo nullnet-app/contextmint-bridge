@@ -1488,14 +1488,14 @@ async function bootstrap(): Promise<void> {
     renderPopup(root, { mode: 'empty' });
     return;
   }
-  // The pairing queue and every decision on it go through
-  // chrome.storage.session — trusted contexts only — never storage.local,
-  // which content scripts on every site can write (S-SEC-3). The background
-  // listens there alone. No session area (Chrome < 102) means no pairing.
   // fleet-audit #1002: ask the browser to keep the vault from eviction.
   // `persist()` exists only in windows — this popup, not Chrome's service
   // worker — and opening the popup is the user gesture Chrome weighs.
   void requestPersistentStorage();
+  // The pairing queue and every decision on it go through
+  // chrome.storage.session — trusted contexts only — never storage.local,
+  // which content scripts on every site can write (S-SEC-3). The background
+  // listens there alone. No session area (Chrome < 102) means no pairing.
   const queue = chrome.storage.session;
   if (!queue) {
     renderPopup(root, { mode: 'empty' });
