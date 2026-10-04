@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.3](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.2...v1.4.3) (2026-10-04)
+
+
+### Bug Fixes
+
+* **extension-core:** dial a newly connected bridge without waiting for a restart ([#63](https://github.com/nullnet-app/contextmint-bridge/issues/63)) ([0d99429](https://github.com/nullnet-app/contextmint-bridge/commit/0d99429e90230ce1b6afa76417ad96d3bd8b6dfa))
+* **extension-core:** reconnecting a browser replaces its old bridge instead of keeping a revoked one ([#64](https://github.com/nullnet-app/contextmint-bridge/issues/64)) ([91715c6](https://github.com/nullnet-app/contextmint-bridge/commit/91715c6c94fff04393fc3ce9c5f06a68bc3df33d))
+
+
+### Refactor
+
+* **popup:** put the S-SEC-3 pairing-queue comment back above the queue ([#61](https://github.com/nullnet-app/contextmint-bridge/issues/61)) ([907fe2c](https://github.com/nullnet-app/contextmint-bridge/commit/907fe2c0c10b42cd23abe528b11753a7108f56de))
+
 ## [1.4.2](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.1...v1.4.2) (2026-10-02)
 
 
