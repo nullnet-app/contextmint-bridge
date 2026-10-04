@@ -11,6 +11,7 @@ import { BRIDGE_CONNECT_APPROVAL, isAllowedGatewayOrigin } from '../bridge-conne
 export { BRIDGE_CONNECT_APPROVAL } from '../bridge-connect-contract.js';
 import { state } from './state.js';
 import { loadRemoteLinks } from './socket.js';
+import { AccountTrustStore, type TrustedAccount } from '../account-trust-store.js';
 
 export const BRIDGE_CONNECT_BEGIN = 'bridge-connect-begin';
 export const BRIDGE_CONNECT_ORIGINS = 'bridge-connect-origins';
@@ -40,6 +41,8 @@ export interface ConnectApprovalDeps {
    * bridge was saved but never dialled until a restart or a popup toggle).
    */
   reconcileLinks: () => Promise<void>;
+  /** The vault's account trust records. Defaults to {@link AccountTrustStore}. */
+  listTrustedAccounts?: () => Promise<Record<string, TrustedAccount>>;
 }
 interface ConnectRuntime { tabs?: { create?: (options: { url: string }) => Promise<{ id?: number }> }; storage?: { session?: SessionArea; managed?: { get: (keys: string[]) => Promise<Record<string, unknown>> } } }
 const runtime = (): ConnectRuntime => (globalThis as { chrome?: ConnectRuntime }).chrome ?? {};
@@ -87,6 +90,32 @@ async function readPending(area: SessionArea): Promise<Record<string, PendingCon
   }
   return out;
 }
+
+/**
+ * Which account a configured target speaks for, as far as this browser can
+ * tell — or null when it cannot (a hand-pasted URL + token never names one).
+ *
+ * A Connect-made target names it in `connectAccount` until its first account
+ * key is trusted; `putApproved` then consumes that consent and the vault's
+ * trust record (bound to the target's `tokenId`) is what still names it.
+ */
+function targetAccount(
+  target: RemoteTarget,
+  origin: string,
+  trusted: Record<string, TrustedAccount>,
+): { slug: string; displayName: string } | null {
+  if (target.connectApproved && target.connectAccount) return target.connectAccount;
+  if (!target.tokenId) return null;
+  const record = Object.values(trusted).find((a) => a?.tokenId === target.tokenId && a.origin === origin);
+  return record && typeof record.slug === 'string' && typeof record.displayName === 'string'
+    ? { slug: record.slug, displayName: record.displayName }
+    : null;
+}
+
+const REVOKED_SAME_URL =
+  'Your previous credential for this bridge is now revoked. Remove the old bridge in the popup, then press Connect again.';
+const otherAccountSameUrl = (displayName: string): string =>
+  `This bridge is set up for another account (${displayName.slice(0, 40)}). Remove it in the popup, then press Connect again.`;
 
 function relayPageUrl(origin: string, requestId: string): string {
   return `${origin}/bridge/connect?request=${requestId}`;
@@ -149,6 +178,13 @@ export async function onBridgeConnectApproval(
     delete pending[key];
     await area.set({ [PENDING_BRIDGE_CONNECT_KEY]: pending }); // persist one-shot consumption before network I/O
     const approval = msg.approval as string; // validConnectApproval checked the exact 128-bit encoding.
+    // Snapshot BEFORE finish: finish revokes this browser's previous
+    // credential for the account and the gateway closes it 4003, whereupon
+    // socket.ts's deleteByToken deletes its trust record and strips its
+    // connectApproved — racing the response. What the target was before this
+    // Connect is what decides whether the new credential may replace it.
+    const before = await deps.loadTargets();
+    const trusted = await (deps.listTrustedAccounts ?? (() => new AccountTrustStore().listAccounts()))();
     const result = await deps.finish(identity, request.origin, request.requestId, request.nonce, approval);
     if (!result.ok) {
       await setConnectStatus(`Connect failed: ${result.reason}`);
@@ -156,12 +192,33 @@ export async function onBridgeConnectApproval(
     }
     const targets = await deps.loadTargets();
     const credential = result.credential;
-    if (targets.some((t) => t.tokenId === credential.tokenId || t.url === credential.bridgeUrl)) {
+    if (targets.some((t) => t.tokenId === credential.tokenId)) {
       await setConnectStatus('This browser already has that bridge configured.');
       return { ok: false, reason: 'This browser already has that bridge configured.' };
     }
     const id = `c${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
-    const next: RemoteTarget[] = [...targets, { id, url: credential.bridgeUrl, token: credential.token, tokenId: credential.tokenId, connectApproved: true, connectAccount: credential.account, label: credential.name, enabled: true }];
+    const added: RemoteTarget = { id, url: credential.bridgeUrl, token: credential.token, tokenId: credential.tokenId, connectApproved: true, connectAccount: credential.account, label: credential.name, enabled: true };
+    // One target per URL (normaliseRemoteTargets drops duplicates), so a
+    // same-URL target cannot sit beside the new one. Finish has already
+    // revoked this browser's previous credential for the account, so keeping
+    // the old row leaves the browser dialling a dead token. Replace it only
+    // when it is known to be the SAME account's: a row this browser cannot
+    // attribute (pasted by hand) or another account's is the user's to remove.
+    const clashIndex = targets.findIndex((t) => t.url === credential.bridgeUrl);
+    let next: RemoteTarget[];
+    if (clashIndex >= 0) {
+      const clash = targets[clashIndex]!;
+      const prior = before.find((t) => t.id === clash.id && t.token === clash.token && t.tokenId === clash.tokenId);
+      const account = prior ? targetAccount(prior, request.origin, trusted) : null;
+      if (account?.slug !== credential.account.slug) {
+        const reason = account ? otherAccountSameUrl(account.displayName) : REVOKED_SAME_URL;
+        await setConnectStatus(reason);
+        return { ok: false, reason };
+      }
+      next = targets.map((t, i) => (i === clashIndex ? added : t));
+    } else {
+      next = [...targets, added];
+    }
     await deps.saveTargets(next);
     try { await deps.reconcileLinks(); } catch (e) { console.error('[fetchproxy] remote bridge reconcile after Connect:', e); /* boot re-reads the vault */ }
     await setConnectStatus(`Connected to ${credential.account.displayName}`);
