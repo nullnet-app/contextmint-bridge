@@ -1,5 +1,5 @@
 import { loadRemoteTargets, saveRemoteTargets } from '../vault-records.js';
-import { REMOTE_TARGETS_CHANGED, type RemoteTarget } from '../remote-targets.js';
+import { type RemoteTarget } from '../remote-targets.js';
 import {
   BRIDGE_CONNECT_TTL_MS,
   DEFAULT_BRIDGE_ORIGIN,
@@ -10,6 +10,7 @@ import {
 import { BRIDGE_CONNECT_APPROVAL, isAllowedGatewayOrigin } from '../bridge-connect-contract.js';
 export { BRIDGE_CONNECT_APPROVAL } from '../bridge-connect-contract.js';
 import { state } from './state.js';
+import { loadRemoteLinks } from './socket.js';
 
 export const BRIDGE_CONNECT_BEGIN = 'bridge-connect-begin';
 export const BRIDGE_CONNECT_ORIGINS = 'bridge-connect-origins';
@@ -30,6 +31,15 @@ export interface ConnectApprovalDeps {
   finish: typeof finishBridgeConnect;
   loadTargets: typeof loadRemoteTargets;
   saveTargets: typeof saveRemoteTargets;
+  /**
+   * Re-read the saved targets and reconcile this worker's live links onto
+   * them — dial the new bridge, drop links whose targets went away. Called
+   * directly: this handler runs IN the background worker, and
+   * `runtime.sendMessage` is never delivered to the context that sent it, so
+   * messaging `remote-targets-changed` to ourselves did nothing (the new
+   * bridge was saved but never dialled until a restart or a popup toggle).
+   */
+  reconcileLinks: () => Promise<void>;
 }
 interface ConnectRuntime { tabs?: { create?: (options: { url: string }) => Promise<{ id?: number }> }; storage?: { session?: SessionArea; managed?: { get: (keys: string[]) => Promise<Record<string, unknown>> } } }
 const runtime = (): ConnectRuntime => (globalThis as { chrome?: ConnectRuntime }).chrome ?? {};
@@ -116,7 +126,7 @@ export async function onBridgeConnectApproval(
   message: unknown,
   sender: ConnectSender,
   now = Date.now(),
-  deps: ConnectApprovalDeps = { finish: finishBridgeConnect, loadTargets: loadRemoteTargets, saveTargets: saveRemoteTargets },
+  deps: ConnectApprovalDeps = { finish: finishBridgeConnect, loadTargets: loadRemoteTargets, saveTargets: saveRemoteTargets, reconcileLinks: loadRemoteLinks },
 ): Promise<{ ok: boolean; reason?: string }> {
   const msg = typeof message === 'object' && message !== null ? message as Record<string, unknown> : {};
   if (msg.type !== BRIDGE_CONNECT_APPROVAL || typeof sender.tab?.id !== 'number' || sender.frameId !== 0 || typeof sender.url !== 'string') return { ok: false, reason: 'This approval did not come from the Connect page.' };
@@ -153,7 +163,7 @@ export async function onBridgeConnectApproval(
     const id = `c${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
     const next: RemoteTarget[] = [...targets, { id, url: credential.bridgeUrl, token: credential.token, tokenId: credential.tokenId, connectApproved: true, connectAccount: credential.account, label: credential.name, enabled: true }];
     await deps.saveTargets(next);
-    try { await (globalThis as { chrome?: { runtime?: { sendMessage?: (m: unknown) => Promise<unknown> } } }).chrome?.runtime?.sendMessage?.({ type: REMOTE_TARGETS_CHANGED }); } catch { /* boot re-reads the vault */ }
+    try { await deps.reconcileLinks(); } catch (e) { console.error('[fetchproxy] remote bridge reconcile after Connect:', e); /* boot re-reads the vault */ }
     await setConnectStatus(`Connected to ${credential.account.displayName}`);
     return { ok: true };
   } finally {

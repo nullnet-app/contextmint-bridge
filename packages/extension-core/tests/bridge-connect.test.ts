@@ -75,13 +75,15 @@ describe('Connect approval handler boundary', () => {
   let local: ReturnType<typeof installChromeLocal>;
   let finish: ConnectApprovalDeps['finish'];
   let finishCalls = 0;
-  const deps = (): ConnectApprovalDeps => ({ finish, loadTargets: loadRemoteTargets, saveTargets: saveRemoteTargets });
+  let reconcileLinks: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  const deps = (): ConnectApprovalDeps => ({ finish, loadTargets: loadRemoteTargets, saveTargets: saveRemoteTargets, reconcileLinks });
 
   beforeEach(async () => {
     freshVault();
     local = installChromeLocal();
     pending = { ...pending, expiresAt: Date.now() + 60_000 };
     finishCalls = 0;
+    reconcileLinks = vi.fn(async () => {});
     state.extIdentity = await loadOrCreateExtensionIdentity();
     chromeSession().data[PENDING_BRIDGE_CONNECT_KEY] = { '9': pending };
     finish = async () => {
@@ -142,6 +144,31 @@ describe('Connect approval handler boundary', () => {
     expect(JSON.stringify(local.data)).not.toContain(`mcpb_${'T'.repeat(43)}`);
     expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(false);
     expect(finishCalls).toBe(1);
+  });
+  // Live 2026-10-04: Connect saved the new target and then told the worker to
+  // reconcile with runtime.sendMessage — which is never delivered to the
+  // sending context, i.e. this same worker. The new bridge was never dialled
+  // and the old link kept retrying a credential Connect had just revoked
+  // (endless HTTP 401). The worker must reconcile its own links directly.
+  it('reconciles the live links in the worker itself once the new target is saved', async () => {
+    let targetsAtReconcile: unknown[] | undefined;
+    reconcileLinks = vi.fn(async () => { targetsAtReconcile = await loadRemoteTargets(); });
+    const result = await onBridgeConnectApproval(msg, sender, Date.now(), deps());
+    expect(result.ok).toBe(true);
+    expect(reconcileLinks).toHaveBeenCalledTimes(1);
+    expect(targetsAtReconcile).toHaveLength(1);
+  });
+
+  it('does not reconcile when nothing was saved', async () => {
+    finish = async () => ({ ok: false, reason: 'gateway said no' });
+    expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(false);
+    expect(reconcileLinks).not.toHaveBeenCalled();
+  });
+
+  it('still reports success when the reconcile throws (boot re-reads the vault)', async () => {
+    reconcileLinks = vi.fn(async () => { throw new Error('boom'); });
+    expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(true);
+    expect(await loadRemoteTargets()).toHaveLength(1);
   });
 });
 
