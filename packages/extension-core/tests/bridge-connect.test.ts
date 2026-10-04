@@ -7,12 +7,13 @@ import {
   bridgeConnectStartMessage,
   connectPageUrl,
 } from '../src/bridge-connect.js';
-import { configuredConnectOrigins, onBridgeConnectApproval, PENDING_BRIDGE_CONNECT_KEY, validConnectApproval, type ConnectApprovalDeps } from '../src/background/bridge-connect.js';
+import { BRIDGE_CONNECT_STATUS_KEY, configuredConnectOrigins, onBridgeConnectApproval, PENDING_BRIDGE_CONNECT_KEY, validConnectApproval, type ConnectApprovalDeps } from '../src/background/bridge-connect.js';
 import { bridgeConnectRelayMessage } from '../src/bridge-connect-relay.js';
 import { freshVault, installChromeLocal, chromeSession } from './helpers/vault.js';
 import { loadOrCreateExtensionIdentity } from '../src/extension-identity.js';
 import { loadRemoteTargets, saveRemoteTargets } from '../src/vault-records.js';
 import { state } from '../src/background/state.js';
+import { AccountTrustStore } from '../src/account-trust-store.js';
 
 const ORIGIN = 'https://mcp.nullnet.app';
 const X25519 = 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=';
@@ -123,7 +124,8 @@ describe('Connect approval handler boundary', () => {
     let release!: (value: Awaited<ReturnType<ConnectApprovalDeps['finish']>>) => void;
     finish = async () => new Promise((resolve) => { finishCalls += 1; release = resolve; });
     const first = onBridgeConnectApproval(msg, sender, Date.now(), deps());
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The first delivery is parked inside finish (after the vault reads that precede it).
+    await vi.waitFor(() => expect(finishCalls).toBe(1));
     const second = await onBridgeConnectApproval(msg, sender, Date.now(), deps());
     expect(second.ok).toBe(false);
     expect(finishCalls).toBe(1);
@@ -169,6 +171,101 @@ describe('Connect approval handler boundary', () => {
     reconcileLinks = vi.fn(async () => { throw new Error('boom'); });
     expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(true);
     expect(await loadRemoteTargets()).toHaveLength(1);
+  });
+
+  // Live 2026-10-04: pressing Connect again on a browser that already had the
+  // gateway's bridge. `finish` mints a new credential AND revokes this
+  // browser's previous one for that account (closing it 4003); the handler
+  // then refused to save the new one because the URL was already configured,
+  // leaving the browser on the revoked token, looping on HTTP 401.
+  describe('a bridge with the same URL is already configured', () => {
+    const URL_ = 'wss://mcp.nullnet.app/bridge';
+    const OLD_TOKEN = `mcpb_${'O'.repeat(43)}`;
+    const NEW_TOKEN = `mcpb_${'T'.repeat(43)}`;
+    const trustRecord = (slug: string, tokenId = 'brt_old') => ({
+      origin: ORIGIN, accountId: `acct_${slug}`, slug, displayName: `${slug} account`, tokenId,
+      kid: 'kid', publicKey: 'pk', generation: 1, generationHighWater: 1, approvedAt: 1,
+    });
+
+    it('replaces a Connect-made target for the same account and dials the new credential', async () => {
+      await saveRemoteTargets([{ id: 'cold', url: URL_, token: OLD_TOKEN, tokenId: 'brt_old', connectApproved: true, connectAccount: { slug: 'owner', displayName: 'Owner account' }, label: 'Chrome on laptop', enabled: false }]);
+      let targetsAtReconcile: Awaited<ReturnType<typeof loadRemoteTargets>> | undefined;
+      reconcileLinks = vi.fn(async () => { targetsAtReconcile = await loadRemoteTargets(); });
+      const result = await onBridgeConnectApproval(msg, sender, Date.now(), deps());
+      expect(result).toEqual({ ok: true });
+      const targets = await loadRemoteTargets();
+      expect(targets).toHaveLength(1);
+      expect(targets[0]).toMatchObject({ url: URL_, token: NEW_TOKEN, tokenId: 'brt_attached', connectApproved: true, connectAccount: { slug: 'owner', displayName: 'Owner account' }, enabled: true });
+      // A new credential is a new link: the old link (and its refusal/backoff) goes away.
+      expect(targets[0]?.id).not.toBe('cold');
+      expect(reconcileLinks).toHaveBeenCalledTimes(1);
+      expect(targetsAtReconcile?.[0]?.tokenId).toBe('brt_attached');
+      expect(chromeSession().data[BRIDGE_CONNECT_STATUS_KEY]).toBe('Connected to Owner account');
+    });
+
+    it('replaces a same-account target whose Connect consent was already consumed by account trust', async () => {
+      // After the first account-key frame, putApproved strips connectApproved
+      // and connectAccount from the row; the trust record still names the account.
+      await saveRemoteTargets([{ id: 'cold', url: URL_, token: OLD_TOKEN, tokenId: 'brt_old', label: 'Chrome on laptop', enabled: true }]);
+      await new AccountTrustStore().put(trustRecord('owner'));
+      expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(true);
+      const targets = await loadRemoteTargets();
+      expect(targets).toHaveLength(1);
+      expect(targets[0]).toMatchObject({ token: NEW_TOKEN, tokenId: 'brt_attached', connectApproved: true });
+      expect(reconcileLinks).toHaveBeenCalledTimes(1);
+    });
+
+    it('still replaces it when the revocation close lands while finish is in flight', async () => {
+      // The gateway closes the old credential 4003 in the same batch as
+      // finish; socket.ts then runs deleteByToken, which deletes the trust
+      // record and strips connectApproved before finish's response arrives.
+      await saveRemoteTargets([{ id: 'cold', url: URL_, token: OLD_TOKEN, tokenId: 'brt_old', label: 'Chrome on laptop', enabled: true }]);
+      await new AccountTrustStore().put(trustRecord('owner'));
+      const inner = finish;
+      finish = async (...args) => { await new AccountTrustStore().deleteByToken('brt_old'); return inner(...args); };
+      expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(true);
+      expect((await loadRemoteTargets())[0]?.tokenId).toBe('brt_attached');
+    });
+
+    it('does not replace a hand-pasted target and says how to recover from the revoked credential', async () => {
+      await saveRemoteTargets([{ id: 'pasted', url: URL_, token: OLD_TOKEN, label: 'My bridge', enabled: true }]);
+      const result = await onBridgeConnectApproval(msg, sender, Date.now(), deps());
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/revoked/);
+      expect(result.reason).toMatch(/remove/i);
+      expect(result.reason).toMatch(/Connect again/);
+      expect(chromeSession().data[BRIDGE_CONNECT_STATUS_KEY]).toBe(result.reason);
+      expect((result.reason ?? '').length).toBeLessThanOrEqual(160);
+      expect(await loadRemoteTargets()).toEqual([{ id: 'pasted', url: URL_, token: OLD_TOKEN, label: 'My bridge', enabled: true }]);
+      expect(reconcileLinks).not.toHaveBeenCalled();
+    });
+
+    it('does not replace a pasted target even when its trust record names the same account by another token', async () => {
+      await saveRemoteTargets([{ id: 'pasted', url: URL_, token: OLD_TOKEN, tokenId: 'brt_old', enabled: true }]);
+      await new AccountTrustStore().put(trustRecord('owner', 'brt_someone_else'));
+      expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(false);
+      expect((await loadRemoteTargets())[0]?.id).toBe('pasted');
+    });
+
+    it('does not replace a Connect-made target for a different account', async () => {
+      await saveRemoteTargets([{ id: 'cother', url: URL_, token: OLD_TOKEN, tokenId: 'brt_old', connectApproved: true, connectAccount: { slug: 'other', displayName: 'Other account' }, enabled: true }]);
+      const result = await onBridgeConnectApproval(msg, sender, Date.now(), deps());
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/remove/i);
+      expect(result.reason).toMatch(/Connect again/);
+      expect((result.reason ?? '').length).toBeLessThanOrEqual(160);
+      const targets = await loadRemoteTargets();
+      expect(targets).toHaveLength(1);
+      expect(targets[0]).toMatchObject({ id: 'cother', token: OLD_TOKEN, connectAccount: { slug: 'other' } });
+      expect(reconcileLinks).not.toHaveBeenCalled();
+    });
+
+    it('does not replace a consumed-consent target whose trust record names a different account', async () => {
+      await saveRemoteTargets([{ id: 'cother', url: URL_, token: OLD_TOKEN, tokenId: 'brt_old', enabled: true }]);
+      await new AccountTrustStore().put(trustRecord('other'));
+      expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(false);
+      expect((await loadRemoteTargets())[0]?.id).toBe('cother');
+    });
   });
 });
 
