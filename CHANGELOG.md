@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.6.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.5.0...v1.6.0) (2026-10-05)
+
+
+### Features
+
+* **safari:** add the ContextMint Bridge container app for the App Store ([#71](https://github.com/nullnet-app/contextmint-bridge/issues/71)) ([3f3e966](https://github.com/nullnet-app/contextmint-bridge/commit/3f3e9665916e1bc2cc64e5d26b9bb65502728a9b))
+* **safari:** stop asking the ContextMint app for a bridge ([#70](https://github.com/nullnet-app/contextmint-bridge/issues/70)) ([846b90c](https://github.com/nullnet-app/contextmint-bridge/commit/846b90cc6bb6ac6c01b88f9206fc9cbfc26d09eb))
+
+
+### Bug Fixes
+
+* **popup:** don't offer Connect when this browser is already connected ([#67](https://github.com/nullnet-app/contextmint-bridge/issues/67)) ([e10242f](https://github.com/nullnet-app/contextmint-bridge/commit/e10242f95562ee1ae27d2fb350e9501ee4e21de3))
+
+
+### Documentation
+
+* **plan:** ship the Safari extension as its own App Store app ([#69](https://github.com/nullnet-app/contextmint-bridge/issues/69)) ([d0a01e7](https://github.com/nullnet-app/contextmint-bridge/commit/d0a01e7ccb77e27a07f3e4940e9b0c317007b6e6))
+* **safari:** ContextMint Bridge for Safari is its own App Store app ([#72](https://github.com/nullnet-app/contextmint-bridge/issues/72)) ([3531731](https://github.com/nullnet-app/contextmint-bridge/commit/35317314720ff26d3fe60c9221a9a8466d4da1e9))
+
 ## [1.5.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.3...v1.5.0) (2026-10-05)
 
 
