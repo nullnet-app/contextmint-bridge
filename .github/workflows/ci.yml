@@ -93,3 +93,141 @@ jobs:
       - run: npm run typecheck
 
       - run: npm test
+
+  # Does this PR need the unsigned Apple build below? Decided on a hosted
+  # runner from the PR's file list (.github/scripts/apple-build-paths.sh, tested
+  # by tests/ci-apple-build.test.ts), so a PR that cannot change the container
+  # never queues for the shared Mac. PRs only: main is not rebuilt on merge,
+  # and a label changes no code.
+  apple-changes:
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      apple: ${{ steps.filter.outputs.apple }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' > "$RUNNER_TEMP/files.txt"
+          APPLE=$(sh .github/scripts/apple-build-paths.sh < "$RUNNER_TEMP/files.txt")
+          echo "apple=$APPLE" >> "$GITHUB_OUTPUT"
+          echo "Unsigned Apple build needed: $APPLE"
+
+  # The Safari container app (apple/), built UNSIGNED on PRs that touch it:
+  # plan docs/superpowers/plans/2026-10-05-safari-extension-standalone.md,
+  # Task 4. It proves the project generates, compiles and stages the extension
+  # into both appexes; it cannot prove the extension runs (Safari never runs an
+  # ad-hoc-signed extension).
+  #
+  # NOT a required check, and not part of the `ci-gated` gate: it runs on the
+  # org's ONE self-hosted Mac, shared by every nullnet repo's Apple work, so it
+  # must never hold this repo's merges hostage to that queue. The required
+  # check stays `ci / ci`.
+  #
+  # That Mac is not ephemeral, so: Xcode is selected with DEVELOPER_DIR for
+  # this job only (never `sudo xcode-select`), builds go to a job-local
+  # DerivedData, and the last step removes it whatever happened.
+  apple:
+    needs: apple-changes
+    if: needs.apple-changes.outputs.apple == 'true'
+    runs-on: [self-hosted, macOS]
+    # Caps the run, not the wait for the Mac.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    # A newer push to the same PR supersedes this build; don't spend the
+    # shared Mac finishing a stale one.
+    concurrency:
+      group: apple-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26
+          cache: npm
+
+      # The appex's pre-build phase (apple/tools/stage-extension.sh) runs the
+      # extension-safari build from this tree, so it needs the workspaces'
+      # dependencies, and nothing else.
+      - run: npm ci --ignore-scripts
+
+      - name: Ensure xcodegen
+        run: |
+          set -euo pipefail
+          # The runner's PATH need not include Homebrew's prefix.
+          if [ -d /opt/homebrew/bin ]; then
+            export PATH="/opt/homebrew/bin:$PATH"
+            echo /opt/homebrew/bin >> "$GITHUB_PATH"
+          fi
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+          xcodebuild -version
+
+      - name: Generate the Xcode project
+        working-directory: apple
+        run: xcodegen generate
+
+      - name: Build the macOS app (unsigned)
+        working-directory: apple
+        run: |
+          set -euo pipefail
+          xcodebuild -project ContextMintBridge.xcodeproj -scheme ContextMintBridgeMac \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            build CODE_SIGNING_ALLOWED=NO
+
+      - name: Build the iOS app (unsigned, simulator)
+        working-directory: apple
+        run: |
+          set -euo pipefail
+          xcodebuild -project ContextMintBridge.xcodeproj -scheme ContextMintBridgeIOS \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            build CODE_SIGNING_ALLOWED=NO
+
+      # Task 1's "Done when": each built appex has manifest.json at its
+      # resources root (Contents/Resources on macOS, the flat bundle on iOS),
+      # carrying the release version that apple/project.yml's
+      # MARKETING_VERSION line holds.
+      - name: Both appexes carry the extension at the release version
+        run: |
+          set -euo pipefail
+          MARKETING_VERSION=$(sed -n 's/^ *MARKETING_VERSION: *"\([^"]*\)".*/\1/p' apple/project.yml)
+          if [ -z "$MARKETING_VERSION" ]; then
+            echo "::error::No MARKETING_VERSION line in apple/project.yml" >&2
+            exit 1
+          fi
+          PRODUCTS="$RUNNER_TEMP/DerivedData/Build/Products"
+          for manifest in \
+            "$PRODUCTS/Debug/ContextMint Bridge.app/Contents/PlugIns/ContextMintBridgeExtension.appex/Contents/Resources/manifest.json" \
+            "$PRODUCTS/Debug-iphonesimulator/ContextMint Bridge.app/PlugIns/ContextMintBridgeExtension.appex/manifest.json"; do
+            if [ ! -f "$manifest" ]; then
+              echo "::error::Missing $manifest" >&2
+              exit 1
+            fi
+            VERSION=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).version' "$manifest")
+            if [ "$VERSION" != "$MARKETING_VERSION" ]; then
+              echo "::error::$manifest is version $VERSION, MARKETING_VERSION is $MARKETING_VERSION" >&2
+              exit 1
+            fi
+            echo "ok: $manifest ($VERSION)"
+          done
+
+      - name: Remove this job's DerivedData
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/DerivedData" apple/ContextMintBridge.xcodeproj || true
