@@ -63,20 +63,12 @@ const SAFARI_MIN_VERSION = '27.0';
  * Safari 27 ran the background ONLY as a non-persistent event page; a
  * `service_worker` background — module or classic — never ran, not even a
  * hello-world. `background.js` is built as a classic (IIFE) script to match
- * (`build.ts`). nullnet-app/mcp-host-app's appex build refuses any other shape.
+ * (`build.ts`). `tests/appex-staging-contract.test.ts` pins the shape.
  */
 const EVENT_PAGE = { scripts: ['background.js'], persistent: false } as const;
 
 /** Absent in Safari 27 (spike): `chrome.downloads` and `chrome.tabGroups` do not exist. */
 const ABSENT_IN_SAFARI = new Set(['downloads', 'tabGroups']);
-
-/**
- * `browser.runtime.sendNativeMessage` exists only with `nativeMessaging`: the
- * extension asks ContextMint — the app that contains it — for the bridge
- * target the user set up there. Chrome needs no such permission, so it is
- * Safari-only; mcp-host-app's appex build refuses a manifest without it.
- */
-const SAFARI_ONLY = ['nativeMessaging'];
 
 export function safariManifest(chrome: ChromeManifest): SafariManifest {
   const out: Record<string, unknown> = {};
@@ -88,11 +80,11 @@ export function safariManifest(chrome: ChromeManifest): SafariManifest {
       case 'background':
         out[key] = { ...EVENT_PAGE, scripts: [...EVENT_PAGE.scripts] };
         break;
-      case 'permissions': {
-        const kept = (value as string[]).filter((p) => !ABSENT_IN_SAFARI.has(p));
-        out[key] = [...kept, ...SAFARI_ONLY.filter((p) => !kept.includes(p))];
+      case 'permissions':
+        // Chrome's, minus what Safari lacks — and nothing added: the extension
+        // never talks to the app that contains it, so no `nativeMessaging`.
+        out[key] = (value as string[]).filter((p) => !ABSENT_IN_SAFARI.has(p));
         break;
-      }
       case 'content_scripts':
         out[key] = (value as ContentScript[]).map(withoutWorld);
         break;
@@ -104,7 +96,6 @@ export function safariManifest(chrome: ChromeManifest): SafariManifest {
   }
   if (!('background' in out))
     out['background'] = { ...EVENT_PAGE, scripts: [...EVENT_PAGE.scripts] };
-  if (!('permissions' in out)) out['permissions'] = [...SAFARI_ONLY];
   const settings = (chrome['browser_specific_settings'] ?? {}) as Record<string, unknown>;
   out['browser_specific_settings'] = {
     ...structuredClone(settings),

@@ -7,12 +7,12 @@
  * the browser reports — a tab, its top frame, an http(s) URL on a host some
  * approved MCP may reach — and never by anything in the message.
  *
- * What it runs is the lift boot runs at every wake: dial, and (Safari) ask
- * ContextMint for the bridge target. {@link createWakeLift} makes that
- * idempotent across page loads: a lift in flight is joined, and one that ran
- * is not repeated while its link is up, nor within {@link WAKE_RETRY_MS} of
- * finishing (a redirect chain or a few quick loads is one lift, not several).
- * The 5-minute hand-off heartbeat is separate and unchanged.
+ * What it runs is the lift boot runs at every wake: dial every link.
+ * {@link createWakeLift} makes that idempotent across page loads: a lift in
+ * flight is joined, and one that ran is not repeated while its link is up,
+ * nor within {@link WAKE_RETRY_MS} of finishing (a redirect chain or a few
+ * quick loads is one lift, not several). Most of what a wake buys on Safari is
+ * the wake itself: the event page restarting runs boot.
  */
 
 import { isUrlAllowedForAnyDomain } from '../lib/url-match.js';
@@ -53,7 +53,7 @@ export function isApprovedPageLoadWake(
 }
 
 export interface WakeLiftDeps {
-  /** The lift: dial, and ask ContextMint for the target where it can. */
+  /** The lift: dial every link. */
   lift: () => Promise<void>;
   /** Whether the link the lift yields is open or dialling right now. */
   linkLive: () => boolean;

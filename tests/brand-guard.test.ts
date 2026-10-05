@@ -99,13 +99,23 @@ describe('manifest identity', () => {
 });
 
 describe('Safari-only permissions', () => {
-  it('every permission the Safari manifest adds has a justification marked Safari-only', async () => {
+  const safariAdded = async (): Promise<string[]> => {
     const { safariManifest } = await import('../packages/extension-safari/manifest.js');
     const chrome = JSON.parse(read('packages/extension-chrome/manifest.json'));
-    const added = (safariManifest(chrome).permissions ?? []).filter(
+    return (safariManifest(chrome).permissions ?? []).filter(
       (p: string) => !(chrome.permissions as string[]).includes(p),
     );
-    expect(added.length).toBeGreaterThan(0);
+  };
+
+  // The extension no longer talks to the ContextMint app, so Safari asks for
+  // nothing Chrome does not (no `nativeMessaging`). Adding one is a store
+  // review question: it needs the justification the next test checks.
+  it('the Safari manifest adds no permission over Chrome’s', async () => {
+    expect(await safariAdded()).toEqual([]);
+  });
+
+  it('every permission the Safari manifest adds has a justification marked Safari-only', async () => {
+    const added = await safariAdded();
     const justifications = read('docs/store-assets/permission-justifications.md');
     for (const perm of added) {
       const heading = `### \`${perm}\``;

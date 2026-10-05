@@ -59,12 +59,6 @@ export interface Link {
   accountAttestations: Map<string, AccountAttestFrame>;
   /** True once this link has been removed from the registry; stops reconnects. */
   closed: boolean;
-  /**
-   * True for the link to the target ContextMint handed over
-   * (`native-handoff.ts`): held in memory, never in the vault, and shown in
-   * the popup as "from ContextMint" rather than as an editable row.
-   */
-  readonly handoff: boolean;
   readonly targetId?: string;
   /** Credential identity, used to bind account-key frames to this live link. */
   readonly tokenId?: string;
@@ -89,13 +83,6 @@ export interface Link {
 /** See {@link Link.lastImmediateRedialAt}. */
 export const IMMEDIATE_REDIAL_SPACING_MS = 5000;
 
-/**
- * The id prefix of the ContextMint hand-off link, followed by the credential's
- * `brt_*` id — so a newly minted credential is a different link, and no
- * vault target (`remote:<id>`) can share an id with it.
- */
-export const HANDOFF_LINK_PREFIX = 'contextmint:';
-
 /** Every link this extension currently intends to hold open, by link id. */
 export const links = new Map<string, Link>();
 
@@ -115,7 +102,6 @@ export function localLink(): Link {
     sessionNonce: null,
     accountAttestations: new Map(),
     closed: false,
-    handoff: false,
     targetId: undefined,
     tokenId: undefined,
     refusal: null,
@@ -123,9 +109,9 @@ export function localLink(): Link {
   };
 }
 
-export function remoteLink(target: RemoteTarget, protocols: string[], handoff = false): Link {
+export function remoteLink(target: RemoteTarget, protocols: string[]): Link {
   return {
-    id: handoff ? `${HANDOFF_LINK_PREFIX}${target.id}` : `remote:${target.id}`,
+    id: `remote:${target.id}`,
     kind: 'remote',
     url: target.url,
     protocols,
@@ -136,7 +122,6 @@ export function remoteLink(target: RemoteTarget, protocols: string[], handoff = 
     sessionNonce: null,
     accountAttestations: new Map(),
     closed: false,
-    handoff,
     targetId: target.id,
     ...(target.tokenId ? { tokenId: target.tokenId } : {}),
     ...(target.connectApproved ? { connectApproved: true as const } : {}),
@@ -222,8 +207,6 @@ export interface LinkStatus {
   connected: boolean;
   /** How many MCP sessions are currently bound to this link. */
   sessions: number;
-  /** Present (and true) only on the link ContextMint handed over. */
-  handoff?: true;
   /** Why the bridge refused this browser for good (`4004`), when it did. */
   refusal?: string;
 }
@@ -246,7 +229,6 @@ export function linkStatuses(): LinkStatus[] {
       url: link.url,
       connected: link.ws?.readyState === WebSocket.OPEN,
       sessions: mcpIdsForLink(link).length,
-      ...(link.handoff ? { handoff: true as const } : {}),
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
     });
   }

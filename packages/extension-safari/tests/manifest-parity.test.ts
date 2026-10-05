@@ -22,14 +22,6 @@ const chrome = JSON.parse(
 
 /** Absent in Safari 27 (spike): `chrome.downloads` and `chrome.tabGroups` do not exist. */
 const DROPPED = ['downloads', 'tabGroups'];
-/**
- * The ONE deliberate Safari-only addition: `browser.runtime.sendNativeMessage`
- * exists only with it, and nullnet-app/mcp-host-app's appex build refuses a
- * manifest without it (the extension asks the containing ContextMint app for
- * its bridge target).
- */
-const ADDED = ['nativeMessaging'];
-
 const PASSED_THROUGH = [
   'manifest_version',
   'name',
@@ -65,9 +57,9 @@ describe.each(cases)('%s keeps parity with Chrome', (_label, safari) => {
     for (const cs of safari().content_scripts ?? []) expect(cs).not.toHaveProperty('world');
   });
 
-  it('permissions are Chrome’s minus exactly {downloads, tabGroups} plus exactly {nativeMessaging}', () => {
-    const expected = [...(chrome.permissions ?? []).filter((p) => !DROPPED.includes(p)), ...ADDED];
-    expect([...(safari().permissions ?? [])].sort()).toEqual([...expected].sort());
+  it('permissions are exactly Chrome’s minus {downloads, tabGroups} — nothing added', () => {
+    const expected = (chrome.permissions ?? []).filter((p) => !DROPPED.includes(p));
+    expect(safari().permissions).toEqual(expected);
   });
 
   it('differs from Chrome’s key set only by minimum_chrome_version out and browser_specific_settings in', () => {
@@ -97,8 +89,8 @@ describe.each(cases)('%s keeps parity with Chrome', (_label, safari) => {
   });
 
   // The PNG-only icon rule (Safari 27 drops the extension for an SVG toolbar
-  // icon) is mcp-host-app's to enforce, so it lives with the rest of that
-  // consumer's gate in manifest-consumer-contract.test.ts; `icons` and `action`
+  // icon) is pinned on the built output, so it lives with the rest of the
+  // container's gate in appex-staging-contract.test.ts; `icons` and `action`
   // passing through from Chrome's manifest unchanged is pinned above.
 });
 
@@ -114,12 +106,9 @@ describe('safariManifest', () => {
     expect(safari['homepage_url']).toBe('https://example.com');
   });
 
-  it('does not list nativeMessaging twice if Chrome ever asks for it', () => {
-    const safari = safariManifest({
-      ...chrome,
-      permissions: [...(chrome.permissions ?? []), 'nativeMessaging'],
-    });
-    expect(safari.permissions?.filter((p) => p === 'nativeMessaging')).toHaveLength(1);
+  it('adds no permission to a manifest that has none', () => {
+    const { permissions: _permissions, ...bare } = chrome;
+    expect(safariManifest(bare)).not.toHaveProperty('permissions');
   });
 
   it('keeps another browser’s browser_specific_settings and sets only the Safari floor', () => {

@@ -5,7 +5,7 @@ import type { AccountAttestFrame } from '@fetchproxy/protocol';
 function link(id: string, tokenId: string): Link {
   return { id, kind: 'remote', url: 'wss://gateway.example', protocols: [], label: id,
     ws: null, reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: null,
-    accountAttestations: new Map(), closed: false, handoff: false, targetId: id,
+    accountAttestations: new Map(), closed: false, targetId: id,
     tokenId, refusal: null, lastImmediateRedialAt: 0 };
 }
 const frame = (mcpId: string, tokenId = 'token'): AccountAttestFrame => ({

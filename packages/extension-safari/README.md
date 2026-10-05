@@ -51,11 +51,9 @@ _Spike results — macOS_):
   permission whose API Safari has). WebKit reportedly does not honour it for
   IndexedDB, so it may not stop eviction there; it is harmless, and a lost
   vault is detected and announced in the popup either way (fleet-audit #1002).
-- **`nativeMessaging`** is added (Safari only): the extension asks ContextMint,
-  the app that contains it, for the bridge target the user set up there
-  (extension-core `native-handoff.ts`, implementing nullnet-app/mcp-host-app
-  `docs/BRIDGE-HANDOFF.md`), holds it in memory only, and reports back whether
-  the link to it is up.
+- **No permission is added.** The extension never talks to the app that
+  contains it (no `nativeMessaging`); it pairs from the popup's Connect, like
+  Chrome.
 - **No manifest `world` key.** Safari does not support it; content scripts run
   in the isolated world by default, and MAIN-world code is registered at
   runtime, which Safari runs.
@@ -71,8 +69,8 @@ _Spike results — macOS_):
 The manifest is **generated** from Chrome's (`manifest.ts`), so name, version,
 icons, popup, content scripts and host permissions cannot drift;
 `tests/manifest-parity.test.ts` pins that nothing else changes, and
-`tests/manifest-consumer-contract.test.ts` restates the checks mcp-host-app's
-build applies to it.
+`tests/appex-staging-contract.test.ts` restates what the container app's appex
+build and Safari require of it.
 
 ## Signing
 

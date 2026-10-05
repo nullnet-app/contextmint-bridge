@@ -49,7 +49,6 @@ import {
 import type { ChromeApi } from '../chrome-api.js';
 import { bridgeSubprotocols, type RemoteTarget } from '../remote-targets.js';
 import { loadRemoteTargets } from '../vault-records.js';
-import { isUsableHandoffTarget, type HandoffTarget } from '../native-handoff.js';
 import { currentPlatform } from '../platform.js';
 import { unavailableCapabilities } from '../capabilities.js';
 // `MIN_SERVER_VERSION` — the `@fetchproxy/server` version at which protocol 4
@@ -80,7 +79,6 @@ import { handleRequest } from './handlers/dispatch.js';
 import { broadcastConnectionsChanged, clearSessionScopeFor } from './session-scope.js';
 import { syncMainWorldBridgeForActiveTrust } from './main-world-bridge-sync.js';
 import {
-  HANDOFF_LINK_PREFIX,
   IMMEDIATE_REDIAL_SPACING_MS,
   LOCAL_LINK_ID,
   anyLinkOpen,
@@ -120,90 +118,25 @@ function ensureLocalLink(): Link {
 let vaultTargets: RemoteTarget[] = [];
 
 /**
- * The target ContextMint handed over (`native-handoff.ts`), or none. In
- * memory ONLY: the credential in it is never written anywhere, and is lost —
- * then asked for again — whenever Safari unloads the event page.
- */
-let handoffTarget: RemoteTarget | null = null;
-
-/** Told when the hand-off link opens (true) or drops (false). */
-let handoffListener: ((connected: boolean) => void) | null = null;
-
-/**
  * Bring the live link set in line with the configured remote targets.
  *
  * Called at boot and on every storage change. Targets that vanished (or were
  * disabled) are torn down here rather than left dangling: a target the user
- * removed must stop being dialled, and its sessions must go with it. The
- * ContextMint hand-off link is not a vault target and is kept.
+ * removed must stop being dialled, and its sessions must go with it.
  */
 export function reconcileRemoteLinks(targets: RemoteTarget[]): void {
   vaultTargets = targets;
   reconcileLinks();
 }
 
-/**
- * Hold (or, with null, drop) the link to the target ContextMint handed over.
- *
- * Re-checked here with the Bridges form's own validation rather than trusted
- * because a caller parsed it: a handed-off target is trusted no more than one
- * the person typed. An unusable one is treated as none.
- */
-export function setHandoffTarget(target: HandoffTarget | null): void {
-  handoffTarget =
-    target && isUsableHandoffTarget(target)
-      ? {
-          id: target.id,
-          url: target.url,
-          token: target.token,
-          tokenId: target.id,
-          label: target.name,
-          enabled: true,
-        }
-      : null;
-  reconcileLinks();
-}
-
-/** Register the one listener for the hand-off link's open / drop. */
-export function onHandoffLinkState(cb: ((connected: boolean) => void) | null): void {
-  handoffListener = cb;
-}
-
-/** Whether the link to the handed-off target is open right now. */
-export function handoffLinkOpen(): boolean {
-  for (const link of links.values()) {
-    if (link.handoff && link.ws?.readyState === WebSocket.OPEN) return true;
-  }
-  return false;
-}
-
-/**
- * Whether the link to the handed-off target is open OR dialling right now —
- * the page-load wake's "already served" test, so a load while the socket is
- * still connecting does not ask ContextMint again (`page-load-wake.ts`).
- */
-export function handoffLinkLive(): boolean {
-  for (const link of links.values()) {
-    const rs = link.ws?.readyState;
-    if (link.handoff && (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING)) return true;
-  }
-  return false;
-}
-
 function reconcileLinks(): void {
-  const wanted = new Map<string, { target: RemoteTarget; handoff: boolean }>();
+  const wanted = new Map<string, RemoteTarget>();
   for (const t of vaultTargets) {
-    if (t.enabled) wanted.set(`remote:${t.id}`, { target: t, handoff: false });
-  }
-  if (handoffTarget) {
-    wanted.set(`${HANDOFF_LINK_PREFIX}${handoffTarget.id}`, {
-      target: handoffTarget,
-      handoff: true,
-    });
+    if (t.enabled) wanted.set(`remote:${t.id}`, t);
   }
   for (const link of [...links.values()]) {
     if (link.kind !== 'remote') continue;
-    const target = wanted.get(link.id)?.target;
+    const target = wanted.get(link.id);
     // A URL or credential change is a different bridge, not the same one with
     // new details: drop the link so the new one handshakes from scratch. The
     // credential counts because a rotated token means the old socket is
@@ -213,9 +146,9 @@ function reconcileLinks(): void {
       bridgeSubprotocols(target.token).join(',') === link.protocols.join(',');
     if (!target || target.url !== link.url || !sameCredential) removeLink(link);
   }
-  for (const [id, { target, handoff }] of wanted) {
+  for (const [id, target] of wanted) {
     if (links.has(id)) continue;
-    links.set(id, remoteLink(target, bridgeSubprotocols(target.token), handoff));
+    links.set(id, remoteLink(target, bridgeSubprotocols(target.token)));
   }
   connect();
 }
@@ -301,7 +234,6 @@ function connectLink(link: Link): void {
     link.reconnectAttempt = 0;
     link.nextAttemptAt = 0;
     setConnectionStatus('connected');
-    if (link.handoff) handoffListener?.(true);
     // Fresh per-LINK, per-connection nonce. The corresponding ready-frame
     // signature commits to (mcpHelloNonce || this nonce || the ephemeral pub),
     // so each connection on each link gets a fresh handshake — replaying a
@@ -363,10 +295,6 @@ function connectLink(link: Link): void {
       );
     }
     if (!anyLinkOpen()) setConnectionStatus('disconnected');
-    // A link REMOVED on purpose (a new credential, or the target withdrawn)
-    // is not a drop to report: the hand-off reports the state after that
-    // change itself, and a late close event must not contradict a newer link.
-    if (link.handoff && !link.closed) handoffListener?.(false);
     // 1008 on a remote link is the relay refusing this browser — a revoked or
     // wrong credential, or another browser already holding the account's
     // bridge. Say so once per close rather than letting it read as a network
