@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.3...v1.5.0) (2026-10-05)
+
+
+### Features
+
+* **popup:** rebuild the popup on the Nullnet design system ([#65](https://github.com/nullnet-app/contextmint-bridge/issues/65)) ([53e77b9](https://github.com/nullnet-app/contextmint-bridge/commit/53e77b94a424274053b5350a0c12739e20faf5bf))
+
 ## [1.4.3](https://github.com/nullnet-app/contextmint-bridge/compare/v1.4.2...v1.4.3) (2026-10-04)
 
 
