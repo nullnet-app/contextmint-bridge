@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
@@ -320,5 +321,92 @@ describe('apple/: the generated project is not checked in', () => {
 
   it('every info.path lives in the ignored Support/', () => {
     for (const { name } of TARGETS) expect(targets[name]?.info?.path, name).toMatch(/^Support\//);
+  });
+});
+
+describe('apple/: the app icon (Task 1 step 7)', () => {
+  /**
+   * Both apps compile the one `App/Assets.xcassets`, so one AppIcon set holds
+   * both platforms' icons: iOS's single 1024 and macOS's ten sizes. The
+   * masters are chrischall/nullnet-design-system's, copied in byte for byte
+   * (CLAUDE.md §Icons): `contextmint-bridge-icon-1024.png` (opaque, square:
+   * iOS applies its own mask) and `contextmint-bridge-icon-macos-1024.png`
+   * (the tile on Apple's macOS grid, transparent margin). The smaller macOS
+   * sizes are `apple/tools/make-app-icons.sh`'s downscales of that master.
+   */
+  const SET = join(APPLE, 'App', 'Assets.xcassets', 'AppIcon.appiconset');
+  const sha256 = (file: string): string =>
+    createHash('sha256').update(readFileSync(join(SET, file))).digest('hex');
+  /** Width, height and PNG colour type, from the IHDR chunk. */
+  const png = (file: string): { width: number; height: number; colourType: number } => {
+    const bytes = readFileSync(join(SET, file));
+    expect(bytes.subarray(1, 4).toString('latin1'), file).toBe('PNG');
+    expect(bytes.subarray(12, 16).toString('latin1'), file).toBe('IHDR');
+    return {
+      width: bytes.readUInt32BE(16),
+      height: bytes.readUInt32BE(20),
+      colourType: bytes.readUInt8(25),
+    };
+  };
+
+  // nullnet-design-system main @ 601a30a (PR #33), system/assets/.
+  const IOS_MASTER_SHA256 = '46ceb4bddea022f7c153e304baa7d3ffbcdc98a0d0913695a5e007ff437c1a31';
+  const MAC_MASTER_SHA256 = '9c16ab0e178eef862d33bb1a1b04cc5ac3d5d9e382523e371e68ecf8e33384ed';
+
+  const MAC_SIZES = [16, 32, 128, 256, 512].flatMap((points) => [
+    { file: `icon_${points}x${points}.png`, size: `${points}x${points}`, scale: '1x', px: points },
+    {
+      file: `icon_${points}x${points}@2x.png`,
+      size: `${points}x${points}`,
+      scale: '2x',
+      px: points * 2,
+    },
+  ]);
+
+  interface IconEntry {
+    filename?: string;
+    idiom: string;
+    platform?: string;
+    size: string;
+    scale?: string;
+  }
+  const contents = JSON.parse(readFileSync(join(SET, 'Contents.json'), 'utf8')) as {
+    images: IconEntry[];
+  };
+
+  it.each(APPS)('$name builds the AppIcon set', ({ name }) => {
+    expect(settingsOf(name)['ASSETCATALOG_COMPILER_APPICON_NAME']).toBe('AppIcon');
+    expect(sourcePaths(name)).toContain('App');
+  });
+
+  it('iOS: one universal 1024, the design system’s opaque master byte for byte', () => {
+    const ios = contents.images.filter((i) => i.platform === 'ios');
+    expect(ios).toEqual([
+      { filename: 'icon-ios-1024.png', idiom: 'universal', platform: 'ios', size: '1024x1024' },
+    ]);
+    expect(sha256('icon-ios-1024.png')).toBe(IOS_MASTER_SHA256);
+    // App Store Connect rejects an iOS icon with an alpha channel, after the upload.
+    expect(png('icon-ios-1024.png')).toEqual({ width: 1024, height: 1024, colourType: 2 });
+  });
+
+  it('macOS: all ten sizes, each the pixel size its slot asks for', () => {
+    const mac = contents.images.filter((i) => i.idiom === 'mac');
+    expect(mac).toEqual(
+      MAC_SIZES.map(({ file, size, scale }) => ({ filename: file, idiom: 'mac', scale, size })),
+    );
+    for (const { file, px } of MAC_SIZES) {
+      const { width, height } = png(file);
+      expect([width, height], file).toEqual([px, px]);
+    }
+  });
+
+  it('macOS: the 512@2x slot is the design system’s macOS master byte for byte', () => {
+    expect(sha256('icon_512x512@2x.png')).toBe(MAC_MASTER_SHA256);
+  });
+
+  it('the set holds nothing but the icons it names', () => {
+    const named = contents.images.map((i) => i.filename).sort();
+    expect(contents.images).toHaveLength(1 + MAC_SIZES.length);
+    expect(readdirSync(SET).filter((f) => f !== 'Contents.json').sort()).toEqual(named);
   });
 });
