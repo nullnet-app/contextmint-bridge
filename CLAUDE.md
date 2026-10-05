@@ -19,11 +19,11 @@ and the protocol reference (`docs/PROTOCOL.md`) all still live in fetchproxy.
 
 ## Packages
 
-| Package                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/extension-core` (`@fetchproxy/extension-core`)     | Browser-agnostic business logic: the service worker (`src/background/`), `handleServerHello` (the security-critical pair / auto-trust decision, `src/background/hello.ts`), the trust store and IndexedDB vault, session keys, the content scripts, popup rendering, badge logic. Tested under vitest with mocked `chrome.*` globals. `private`, never published.                                             |
-| `packages/extension-chrome` (`@fetchproxy/extension-chrome`) | Thin Chrome MV3 wrapper: esbuild bundling (`build.ts`, over the entry points in `build-lib.ts` that extension-safari reuses), `manifest.json`, icons. Produces `packages/extension-chrome/dist/` for sideloading and the release `.zip`. `private`, never published.                                                                                                                                          |
-| `packages/extension-safari` (`@fetchproxy/extension-safari`) | Safari web-extension resources, embedded by ContextMint's Apple apps (nullnet-app/mcp-host-app), never distributed alone. Reuses extension-chrome's esbuild entries (`build-lib.ts`); owns only `manifest.ts` (the Safari manifest GENERATED from Chrome's) and the `'safari'` platform. Produces `packages/extension-safari/dist/` (`manifest.json` at its root). Signs nothing. `private`, never published. |
+| Package                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/extension-core` (`@fetchproxy/extension-core`)     | Browser-agnostic business logic: the service worker (`src/background/`), `handleServerHello` (the security-critical pair / auto-trust decision, `src/background/hello.ts`), the trust store and IndexedDB vault, session keys, the content scripts, popup rendering, badge logic. Tested under vitest with mocked `chrome.*` globals. `private`, never published.                                                                                                                           |
+| `packages/extension-chrome` (`@fetchproxy/extension-chrome`) | Thin Chrome MV3 wrapper: esbuild bundling (`build.ts`, over the entry points in `build-lib.ts` that extension-safari reuses), `manifest.json`, icons. Produces `packages/extension-chrome/dist/` for sideloading and the release `.zip`. `private`, never published.                                                                                                                                                                                                                        |
+| `packages/extension-safari` (`@fetchproxy/extension-safari`) | Safari web-extension resources. They ship as the appex of `apple/`, the ContextMint Bridge container app with its own App Store listing (macOS + iOS); nothing at runtime talks to the ContextMint app. Reuses extension-chrome's esbuild entries (`build-lib.ts`); owns only `manifest.ts` (the Safari manifest GENERATED from Chrome's) and the `'safari'` platform. Produces `packages/extension-safari/dist/` (`manifest.json` at its root). Signs nothing. `private`, never published. |
 
 ## Commands
 
@@ -34,7 +34,7 @@ and the protocol reference (`docs/PROTOCOL.md`) all still live in fetchproxy.
 | `npm run build`                                                 | `npm run build --workspaces --if-present`, in npm's alphabetical workspace order: extension-chrome's esbuild bundle (which bundles extension-core from source, so it does not need core built first), extension-core's `tsc -b`, then extension-safari (which reads Chrome's manifest and icons, never its `dist/`).                                                                                         |
 | `npm run build --workspace=@fetchproxy/extension-chrome`        | Rebuild just the unpacked extension after a source edit, then reload it in `chrome://extensions/`. **No sourcemaps** — release is the default because this is the command that gets zipped.                                                                                                                                                                                                                  |
 | `npm run build:dev --workspace=@fetchproxy/extension-chrome`    | Same with inline sourcemaps, for DevTools. Never what ships.                                                                                                                                                                                                                                                                                                                                                 |
-| `npm run build --workspace=@fetchproxy/extension-safari`        | Rebuild just the Safari resources into `packages/extension-safari/dist/` (release, no sourcemaps). `build:dev` adds inline sourcemaps; point mcp-host-app's `BRIDGE_SAFARI_RESOURCES_DIR` at `dist/` to run it inside a signed ContextMint build.                                                                                                                                                            |
+| `npm run build --workspace=@fetchproxy/extension-safari`        | Rebuild just the Safari resources into `packages/extension-safari/dist/` (release, no sourcemaps). `build:dev` adds inline sourcemaps. To run it in Safari, build `apple/` signed (`packages/extension-safari/README.md` §Development loop).                                                                                                                                                                 |
 | `npm run store-assets --workspace=@fetchproxy/extension-chrome` | Rebuild the extension, then re-render the Chrome Web Store images in `docs/store-assets/` from the real popup in headless Chrome (needs a local Chrome; `CHROME_PATH` overrides). Run it after any popup change and commit the PNGs. Generator in `packages/extension-chrome/store-assets/`, dev-only.                                                                                                       |
 
 ## The protocol comes from npm
@@ -66,10 +66,16 @@ builds `extension-chrome` and `extension-safari` from the tag and attaches
 `contextmint-bridge-chrome-${VERSION}.zip`, `contextmint-bridge-safari-${VERSION}.zip`
 and a `.sha256` for each to the GitHub Release, never overwriting an asset
 already there. Both zips are made from inside `dist/`, so `manifest.json` is at
-the zip root — nullnet-app/mcp-host-app unzips the Safari one straight into its
-appex's `Resources/`, and downloads it from
-`releases/download/v${VERSION}/contextmint-bridge-safari-${VERSION}.zip`, so the
-`v` tag prefix and that asset name are a contract. A tag without
+the zip root. Safari reaches people through `apple/`'s App Store app, which
+builds the extension from the tagged tree itself, so the Safari zip is an audit
+and sideload artifact. Until nullnet-app/mcp-host-app removes the copy it still
+embeds (plan `docs/superpowers/plans/2026-10-05-safari-extension-standalone.md`,
+Task 7), that app downloads
+`releases/download/v${VERSION}/contextmint-bridge-safari-${VERSION}.zip` into its
+appex's `Resources/`, so the `v` tag prefix and that asset name stay pinned
+(`tests/release-workflow.test.ts`). `apple/project.yml`'s `MARKETING_VERSION` is a
+release-please `extra-files` entry too, so the container app, its appex and the
+manifest carry one version. A tag without
 `packages/extension-safari` (v1.0.0) attaches Chrome only. If an attach fails
 part-way, dispatch the workflow from main with `republish_tag`: assets already
 there are left alone and the missing ones are added. Nothing is published to npm.
@@ -164,25 +170,18 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `@fetchproxy/protocol`, from its own probe — never from anything on the wire.
   A new capability whose API can be absent in some browser MUST be added to
   `capabilities.ts`, or it is treated as always available.
-- **Safari takes a bridge target from ContextMint over native messaging.**
-  `extension-core/src/native-handoff.ts` implements nullnet-app/mcp-host-app
-  `docs/BRIDGE-HANDOFF.md` (that contract wins over any summary here): at each
-  wake, on a 5-minute `contextmint-handoff` alarm, and when the link opens or
-  drops. It runs only where `sendNativeMessage` exists (the Safari manifest's
-  `nativeMessaging`), so Chrome is inert. The handed-off target is a
-  `contextmint:<brt id>` link held IN MEMORY beside the vault's targets
-  (`background/socket.ts` `setHandoffTarget`), re-validated like a typed-in
-  one, never persisted or logged, and shown read-only in the popup.
-- **A page load on an approved site wakes the background** (contextmint-bridge#32,
-  for mcp-host-app's iOS "Refresh from Safari"). `page-load-wake.js` is
-  registered at runtime beside the MAIN-world bridge, on the same approved-host
-  patterns (`syncMainWorldBridgeFromTrust` keeps both), never in the manifest:
-  waking Safari's event page runs boot, and boot runs the hand-off, so a
-  manifest `<all_urls>` wake would lift on every site. The background still
-  judges each wake by the browser's `sender` (tab, top frame, approved host;
-  `background/page-load-wake.ts`), and `createWakeLift` joins a lift in flight
-  and never repeats one while its link is open or dialling, nor within 30 s.
-  Boot's own "at every wake" run goes through the same lift.
+- **A page load on an approved site wakes the background** (contextmint-bridge#32).
+  Safari runs the background as an event page that a page load alone never
+  wakes, so opening an MCP's site left a suspended background with no loopback
+  or account link. `page-load-wake.js` is registered at runtime beside the
+  MAIN-world bridge, on the same approved-host patterns
+  (`syncMainWorldBridgeFromTrust` keeps both), never in the manifest, so no
+  other site sends anything. The background still judges each wake by the
+  browser's `sender` (tab, top frame, approved host;
+  `background/page-load-wake.ts`). What the wake buys is the wake itself: the
+  event page restarting runs boot, which dials every link. The lift
+  (`createWakeLift`) is just `connect()`, run once per worker through boot's
+  own run, so a later page-load wake does not dial again.
 - **Account pairing starts at the extension popup.** The person chooses a
   configured gateway and browser name; the background signs a Connect request,
   opens that gateway's Connect page, and accepts its approval only from the
@@ -192,8 +191,29 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   confirmation action. For Chrome, enterprise policy may extend the default
   gateway through chrome.storage.managed.bridgeConnectOrigins; the schema is
   packages/extension-chrome/managed-schema.json, and both the background and
-  relay validate origins before use. The native ContextMint hand-off remains a
-  separate, in-memory path for Safari.
+  relay validate origins before use. Safari pairs the same way; it has no
+  other path to a bridge target.
+- **`apple/` is the Safari container app (XcodeGen; the `.xcodeproj` is
+  generated, never checked in).** Apple ships a Safari web extension only
+  inside an app, so this is that app: one screen saying how to turn the
+  extension on, plus the appex, whose pre-build phase
+  (`apple/tools/stage-extension.sh`) builds `extension-safari` from the same
+  tree and stages `dist/`. Three rules:
+  - **This Mac is the shared self-hosted CI runner** (`[self-hosted, macOS]`).
+    Before any `xcodebuild`, run `ps -axo pid,comm | grep Runner.Worker` and
+    wait while a job is running; delete the DerivedData and archives you make.
+  - **Signing is by profile name, never `-allowProvisioningUpdates`.** The
+    project is unsigned (`CODE_SIGNING_ALLOWED: NO`) unless a build names
+    profiles, one variable per target (`MAC_APP_PROFILE`,
+    `MAC_EXTENSION_PROFILE`, `IOS_APP_PROFILE`, `IOS_EXTENSION_PROFILE`), because
+    a command-line `PROVISIONING_PROFILE_SPECIFIER` would override every target
+    at once. Unsigned builds only prove it compiles: Safari never runs an
+    ad-hoc-signed extension.
+  - **The version marker.** `MARKETING_VERSION` in `apple/project.yml` carries an
+    inline `# x-release-please-version` (a `generic` extra-file, so the comments
+    survive), and the staging script refuses a manifest whose version differs.
+    Never hand-edit it. `CURRENT_PROJECT_VERSION` is the deploy workflow's build
+    number, not release-please's.
 - **A refused remote browser is not retried forever.** A 4004
   EXTENSION_MISMATCH close stops that link for good (link.refusal, shown in
   the popup); only a new credential creates a fresh link. A 4005

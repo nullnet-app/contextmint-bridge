@@ -2,12 +2,15 @@
 
 Safari web-extension resources for **ContextMint Bridge**, the [fetchproxy](https://github.com/chrischall/fetchproxy) browser extension.
 
-Workspace-internal, and **not distributed on its own**. ContextMint's Apple apps
-([nullnet-app/mcp-host-app](https://github.com/nullnet-app/mcp-host-app)) embed
-these resources in their Safari web-extension appex: the app's build unzips them
-straight into the appex's `Resources/`. This package owns no source of its own —
-it reuses `extension-chrome`'s esbuild entry points (`../extension-chrome/build-lib.ts`)
-and owns only its manifest generator and the `'safari'` platform constant.
+Workspace-internal. It ships to people as **ContextMint Bridge**, its own
+App Store app for macOS and iOS: Apple only distributes a Safari web extension
+inside a containing app, and that app is `apple/` in this repo (an XcodeGen
+project whose appex pre-build phase, `apple/tools/stage-extension.sh`, builds
+this package from the same commit and copies `dist/` into the appex). It does
+not need, and never talks to, the ContextMint app. This package owns no source
+of its own — it reuses `extension-chrome`'s esbuild entry points
+(`../extension-chrome/build-lib.ts`) and owns only its manifest generator and
+the `'safari'` platform constant.
 
 ## Build
 
@@ -20,7 +23,7 @@ npm run build:dev --workspace=@fetchproxy/extension-safari  # inline sourcemaps,
 ```
 
 Output lands in `packages/extension-safari/dist/`, with `manifest.json` at the
-root — the layout the appex expects:
+root — the layout the appex in `apple/` expects:
 
 ```
 dist/
@@ -76,16 +79,49 @@ build and Safari require of it.
 
 This package signs nothing. Safari never runs an ad-hoc-signed web extension:
 the containing app and its appex must be signed with an Apple Development (or
-distribution) identity, which is mcp-host-app's job.
+distribution) identity, and that happens in `apple/`. Profiles are resolved by
+name, one variable per target (`MAC_APP_PROFILE`, `MAC_EXTENSION_PROFILE`,
+`IOS_APP_PROFILE`, `IOS_EXTENSION_PROFILE`); the project is unsigned
+(`CODE_SIGNING_ALLOWED: NO`) unless a build names them.
 
 ## Development loop
 
+An unsigned build proves the container and appex compile and package, and
+nothing more:
+
 ```sh
-npm run build:dev --workspace=@fetchproxy/extension-safari
+cd apple
+xcodegen generate
+xcodebuild -scheme ContextMintBridgeMac build CODE_SIGNING_ALLOWED=NO
+xcodebuild -scheme ContextMintBridgeIOS -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO
 ```
 
-then point mcp-host-app's `BRIDGE_SAFARI_RESOURCES_DIR` at
-`packages/extension-safari/dist` and build the app there (its `ios/README.md`
-has the signed-build command). Release builds of the app instead download the
-`contextmint-bridge-safari-${VERSION}.zip` attached to this repo's GitHub
-Releases.
+To run it in Safari, build it signed with the development profiles (plan
+`docs/superpowers/plans/2026-10-05-safari-extension-standalone.md`, owner step
+O3):
+
+```sh
+cd apple
+xcodegen generate
+xcodebuild -scheme ContextMintBridgeMac build \
+  CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM=5A673K24X6 CODE_SIGN_IDENTITY="Apple Development" \
+  MAC_APP_PROFILE="ContextMint Bridge Mac Dev" \
+  MAC_EXTENSION_PROFILE="ContextMint Bridge Extension Mac Dev"
+```
+
+then launch the built app once (Safari finds a web extension only inside an
+app it has been launched from) and turn the extension on in Safari → Settings →
+Extensions. The appex's pre-build phase rebuilds this package each time; to
+iterate on the Swift side without rebuilding the extension, set
+`STAGE_EXTENSION_DIST` to an already-built `dist/` (for example after
+`npm run build:dev --workspace=@fetchproxy/extension-safari`, for sourcemaps in
+Web Inspector).
+
+This Mac is also the shared self-hosted CI runner: before any `xcodebuild`,
+check `ps -axo pid,comm | grep Runner.Worker` and wait while a job is running,
+and delete the DerivedData you create.
+
+Each GitHub Release also carries `contextmint-bridge-safari-${VERSION}.zip`,
+the same `dist/` zipped, for audit and sideloading. Until nullnet-app/mcp-host-app
+removes the copy it embeds today (plan Task 7), that zip is also what its
+appex downloads, so its name stays fixed.

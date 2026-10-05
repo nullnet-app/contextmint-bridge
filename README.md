@@ -8,7 +8,7 @@ encrypted WebSocket (`127.0.0.1:37149`). Every server has to be paired first:
 you compare an 8-digit code and approve the exact domains and capabilities it
 declared, and you can revoke it from the popup at any time.
 
-In the Chrome Web Store (and in Safari, inside the ContextMint app) it's **ContextMint Bridge**; the protocol
+In the Chrome Web Store and the App Store (for Safari) it's **ContextMint Bridge**; the protocol
 and npm packages are **fetchproxy**. It works with ContextMint and with any
 fetchproxy-based MCP or `fpx` running on your machine.
 

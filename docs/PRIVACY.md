@@ -1,6 +1,6 @@
 # Privacy Policy — ContextMint Bridge (fetchproxy)
 
-**Last updated: 2026-09-29**
+**Last updated: 2026-10-05**
 
 ContextMint Bridge is a Chrome and Safari extension that bridges MCP (Model Context Protocol) servers to your signed-in browser tabs, either locally or through a remote bridge you connect. This policy describes what data ContextMint Bridge processes, stores, and shares.
 
@@ -82,7 +82,7 @@ ContextMint Bridge contains no telemetry, analytics, crash reporting, feature fl
 - HTTP requests made inside your browser tabs at the explicit direction of an approved MCP server.
 - **Connect pairing with a gateway.** When you click a Connect button, the extension sends `POST /bridge/connect/start` to that configured HTTPS origin. It includes this browser's public identity keys, your editable browser name, a timestamp and a signature made with the extension's non-extractable identity key. The gateway returns a request id, one-time nonce and same-origin Connect page URL. After you approve on that page, the page relays only the approval value to the extension; the extension sends `POST /bridge/connect/finish` with the request id, nonce, approval and another signature. The gateway returns the bridge credential directly to the extension, which stores it in the vault described in §3.3. The credential and nonce are never sent to the page or put in a URL. The default origin is `https://mcp.nullnet.app`; any additional origins must be supplied by a managed browser policy. No browsing data, cookies or request content are sent in these pairing requests.
 - **Outbound WebSocket connections to remote bridge targets.** These begin only after you start and approve Connect. The extension stores the resulting `wss://` bridge URL and credential in its vault and uses the credential as a WebSocket subprotocol. Removing or disabling a target closes its connection. Request and response contents are end-to-end encrypted between the extension and each MCP server. The relay operator can see handshake metadata: the extension's ID, version and public identity keys; MCP server names, versions, `mcpId`, declared domains, capabilities and key names; each MCP's pair code and other pairing frames; and timing and frame sizes. See [SECURITY.md §T-remote-bridge](https://github.com/chrischall/fetchproxy/blob/main/docs/SECURITY.md#t-remote-bridge--a-configured-remote-bridge-target).
-- **Safari only — the temporary app hand-off.** In Safari, ContextMint Bridge still asks the containing ContextMint app over native messaging for a bridge target the app already holds. The extension keeps that address and credential in memory only, never writes them to browser storage or logs, and asks for them again after Safari restarts the extension. It reports only whether the handed-off connection is up. Connect pairing itself uses the extension popup and the gateway flow above; it does not use native messaging. The Chrome build does not use the app hand-off.
+- **The Safari container app.** In Safari, ContextMint Bridge is installed as its own app from the App Store, because Apple ships Safari extensions only inside an app. The Safari container app only shows how to turn the extension on; it collects nothing, makes no network connections and exchanges no messages with the extension. The extension does not talk to the ContextMint app.
 
 ---
 
