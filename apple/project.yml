@@ -59,7 +59,7 @@ settings:
     # PROVISIONING_PROFILE_SPECIFIER given on the xcodebuild command line
     # overrides every target at once, so each target reads its profile from a
     # variable of its own. Empty (no profile) unless a signed build names one,
-    # e.g. MAC_APP_PROFILE="ContextMint Bridge Mac App Store" (plan O3).
+    # e.g. MAC_APP_PROFILE="ContextMint Bridge App Mac App Store" (plan O3).
     MAC_APP_PROFILE: ""
     MAC_EXTENSION_PROFILE: ""
     IOS_APP_PROFILE: ""
@@ -98,13 +98,11 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Entitlements/ContextMintBridgeMac.entitlements
         PROVISIONING_PROFILE_SPECIFIER: $(MAC_APP_PROFILE)
         ENABLE_HARDENED_RUNTIME: YES
-        # No AppIcon yet: the design system has no 1024 px master of the
-        # ContextMint Bridge mark (system/assets/contextmint-bridge-icon-* stops
-        # at 128), and CLAUDE.md §Icons forbids drawing one here. A
-        # design-system PR adds it first; then it is copied into an AppIcon set
-        # and this is set to AppIcon on both apps. Empty, not absent: xcodegen
-        # defaults an app to "AppIcon", which fails the build while no set exists.
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # App/Assets.xcassets/AppIcon.appiconset: the design system's masters
+        # (system/assets/contextmint-bridge-icon-*-1024.png), copied in and
+        # downscaled by tools/make-app-icons.sh, never drawn here (CLAUDE.md
+        # §Icons). One set for both apps: iOS's 1024 and macOS's ten sizes.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Safari finds a web extension only inside an app (Contents/PlugIns/).
     dependencies:
       - target: ContextMintBridgeExtensionMac
@@ -179,8 +177,8 @@ targets:
         PRODUCT_NAME: ContextMint Bridge
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1,2"
-        # No AppIcon yet, as on the Mac app (see there).
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # The same AppIcon set as the Mac app (see there).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # No entitlements on iOS (plan D2): an iOS app is sandboxed by the OS.
         CODE_SIGNING_ALLOWED: NO
         PROVISIONING_PROFILE_SPECIFIER: $(IOS_APP_PROFILE)

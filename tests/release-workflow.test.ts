@@ -612,3 +612,229 @@ describe('ci.yml protocol@next job', () => {
     expect(test).toBeGreaterThan(install);
   });
 });
+
+/**
+ * The TestFlight deploy of the Safari app (plan
+ * 2026-10-05-safari-extension-standalone, Task 5). It holds the org's signing
+ * certificates on the shared self-hosted Mac and uploads to App Store Connect,
+ * so the parts pinned here are the ones whose silent drift would ship from the
+ * wrong place, sign with the wrong profile, or leave signing material behind.
+ * What it checks before signing is apple/tools/testflight-preflight.ts
+ * (tests/apple-testflight-preflight.test.ts).
+ */
+describe('deploy-safari-app.yml', () => {
+  const FILE = 'deploy-safari-app.yml';
+  const text = read(join('.github', 'workflows', FILE));
+  const wf = parse(text) as Workflow & {
+    permissions?: Record<string, string>;
+    concurrency?: { group?: string; 'cancel-in-progress'?: boolean };
+  };
+  interface DeployJob extends Job {
+    'runs-on'?: string[];
+    environment?: string;
+    'timeout-minutes'?: number;
+    strategy?: { 'fail-fast'?: boolean; matrix?: { include?: Record<string, string>[] } };
+    env?: Record<string, string>;
+  }
+  const jobs = Object.entries(wf.jobs) as [string, DeployJob][];
+  const [, job] = jobs[0] ?? ['', {} as DeployJob];
+  const steps = job.steps ?? [];
+  const named = (name: string): number => steps.findIndex((s) => s.name === name);
+  const runOf = (name: string): string => steps[named(name)]?.run ?? '';
+  const matrix = job.strategy?.matrix?.include ?? [];
+  /** The workflow with its comments removed: what actually runs. */
+  const code = text
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+
+  it('runs on a v* tag push or a manual dispatch, never on a PR or a branch push', () => {
+    expect(Object.keys(wf.on ?? {}).sort()).toEqual(['push', 'workflow_dispatch']);
+    expect(wf.on?.['push']).toEqual({ tags: ['v*'] });
+    const dispatch = wf.on?.['workflow_dispatch'] as {
+      inputs: Record<string, { type: string; required: boolean }>;
+    };
+    expect(Object.keys(dispatch.inputs)).toEqual(['build_number']);
+    expect(dispatch.inputs['build_number']).toMatchObject({ type: 'string', required: false });
+  });
+
+  it('is its own workflow, so an Apple failure never reddens attach-extension', () => {
+    const release = workflow('release-please.yml');
+    expect(Object.keys(release.jobs)).not.toContain(jobs[0]?.[0]);
+    expect(read(join('.github', 'workflows', 'release-please.yml'))).not.toMatch(
+      /xcodebuild|TestFlight upload|asc publish/,
+    );
+  });
+
+  it('reads contents only, and never cancels a deploy half-way', () => {
+    expect(wf.permissions).toEqual({ contents: 'read' });
+    expect(wf.concurrency?.['cancel-in-progress']).toBe(false);
+  });
+
+  it('one job, on the testflight environment and the shared self-hosted Mac', () => {
+    expect(jobs).toHaveLength(1);
+    expect(job.environment).toBe('testflight');
+    expect(job['runs-on']).toEqual(['self-hosted', 'macOS']);
+    expect(job['timeout-minutes']).toBeGreaterThan(0);
+    expect(job.env?.['DEVELOPER_DIR']).toBe('/Applications/Xcode.app/Contents/Developer');
+    expect(code).not.toContain('xcode-select');
+  });
+
+  it('builds iOS and macOS, each failing on its own', () => {
+    expect(matrix.map((m) => m['platform'])).toEqual(['ios', 'macos']);
+    expect(job.strategy?.['fail-fast']).toBe(false);
+  });
+
+  it.each([
+    {
+      platform: 'ios',
+      scheme: 'ContextMintBridgeIOS',
+      destination: 'generic/platform=iOS',
+      profile_type: 'IOS_APP_STORE',
+      app_profile_var: 'IOS_APP_PROFILE',
+      extension_profile_var: 'IOS_EXTENSION_PROFILE',
+      app_profile_name: 'ContextMint Bridge iOS App Store',
+      extension_profile_name: 'ContextMint Bridge Extension iOS App Store',
+    },
+    {
+      platform: 'macos',
+      scheme: 'ContextMintBridgeMac',
+      destination: 'generic/platform=macOS',
+      profile_type: 'MAC_APP_STORE',
+      app_profile_var: 'MAC_APP_PROFILE',
+      extension_profile_var: 'MAC_EXTENSION_PROFILE',
+      // Not the plan's "ContextMint Bridge Mac App Store": that profile signs
+      // ContextMint for Mac's embedded appex until plan Task 7.
+      app_profile_name: 'ContextMint Bridge App Mac App Store',
+      extension_profile_name: 'ContextMint Bridge Extension Mac App Store',
+    },
+  ])('$platform signs with the owner’s profiles, by exact name', (expected) => {
+    expect(matrix.find((m) => m['platform'] === expected.platform)).toMatchObject(expected);
+    // The variables apple/project.yml reads each target's profile from.
+    const project = read('apple/project.yml');
+    expect(project).toContain(`PROVISIONING_PROFILE_SPECIFIER: $(${expected.app_profile_var})`);
+    expect(project).toContain(
+      `PROVISIONING_PROFILE_SPECIFIER: $(${expected.extension_profile_var})`,
+    );
+  });
+
+  it('refuses a commit that is not on main before anything is checked out', () => {
+    const checkout = steps.findIndex((s) => (s.uses ?? '').startsWith('actions/checkout@'));
+    expect(steps[0]?.name).toBe('Refuse a commit that is not on main');
+    expect(steps[0]?.run).toContain('compare/main...$GITHUB_SHA');
+    expect(steps[0]?.run).toMatch(/identical\|behind\)/);
+    expect(checkout).toBe(1);
+  });
+
+  it('never lets Xcode provision on its own, and signs manually', () => {
+    expect(code).not.toMatch(/allowProvisioningUpdates/);
+    expect(runOf('Archive')).toContain('CODE_SIGN_STYLE=Manual');
+    expect(runOf('Archive')).toContain('CODE_SIGNING_ALLOWED=YES');
+    // One profile per target, through the project's variables.
+    expect(runOf('Archive')).not.toContain('PROVISIONING_PROFILE_SPECIFIER');
+    expect(runOf('Export')).toContain('<string>manual</string>');
+  });
+
+  it('checks every prerequisite before a certificate reaches the runner', () => {
+    const order = [
+      'Resolve version and build number',
+      'Check the App Store prerequisites',
+      'Import signing certificates',
+      'Download + install the App Store provisioning profiles',
+      'Check the signing identities and profiles',
+      'Archive',
+      'The archive carries one version and the icon',
+      'Export',
+      'Upload to TestFlight via asc',
+    ].map(named);
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(runOf('Resolve version and build number')).toContain('testflight-preflight.ts tag');
+    expect(runOf('Check the App Store prerequisites')).toContain('testflight-preflight.ts account');
+    expect(runOf('Check the signing identities and profiles')).toContain(
+      'testflight-preflight.ts signing',
+    );
+    expect(runOf('The archive carries one version and the icon')).toContain(
+      'testflight-preflight.ts archive',
+    );
+  });
+
+  it('installs the workspaces without lifecycle scripts', () => {
+    expect(runOf('Install the workspaces').trim()).toBe('npm ci --ignore-scripts');
+  });
+
+  it('uploads nothing but to TestFlight: no artifact, no App Store submission', () => {
+    expect(steps.some((s) => (s.uses ?? '').startsWith('actions/upload-artifact'))).toBe(false);
+    expect(code).not.toMatch(/--submit\b|asc submit|review submit/);
+  });
+
+  it('always destroys the signing material and build products, last', () => {
+    const last = steps.at(-1);
+    expect(last?.if).toBe('always()');
+    for (const needle of [
+      'security delete-keychain "$KEYCHAIN_PATH"',
+      'installed-profiles.txt',
+      '"$RUNNER_TEMP/private_keys"',
+      '"$RUNNER_TEMP/dd"',
+      '"$WORKSPACE_APPLE/build"',
+    ]) {
+      expect(last?.run, needle).toContain(needle);
+    }
+  });
+
+  describe('Resolve version and build number (executed)', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'deploy-ver-'));
+      mkdirSync(join(dir, 'tools'));
+      writeFileSync(
+        join(dir, 'tools', 'testflight-preflight.ts'),
+        readFileSync(join(ROOT, 'apple', 'tools', 'testflight-preflight.ts')),
+      );
+      writeFileSync(
+        join(dir, 'project.yml'),
+        'settings:\n  base:\n    MARKETING_VERSION: "1.6.0" # x-release-please-version\n',
+      );
+      writeFileSync(join(dir, 'out'), '');
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const run = (env: Record<string, string>) =>
+      runStep(runOf('Resolve version and build number'), {
+        cwd: dir,
+        env: {
+          GITHUB_OUTPUT: join(dir, 'out'),
+          GITHUB_REF_TYPE: 'tag',
+          GITHUB_REF_NAME: 'v1.6.0',
+          EVENT: 'push',
+          BUILD_IN: '',
+          RUN_NUMBER: '42',
+          RUN_ATTEMPT: '3',
+          PLATFORM: 'ios',
+          ...env,
+        },
+      });
+    const outputs = (): string => readFileSync(join(dir, 'out'), 'utf8');
+
+    it('numbers the build run_number*100 + run_attempt', () => {
+      const r = run({});
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(outputs()).toBe('marketing=1.6.0\nbuild=4203\n');
+    });
+
+    it('takes a digits-only build_number override, and refuses anything else', () => {
+      expect(run({ BUILD_IN: '9001' }).status).toBe(0);
+      expect(outputs()).toContain('build=9001\n');
+      const bad = run({ BUILD_IN: '9001; rm -rf /' });
+      expect(bad.status).not.toBe(0);
+      expect(bad.stdout).toContain('build_number must be digits');
+    });
+
+    it('refuses a tag that is not v + MARKETING_VERSION, writing no outputs', () => {
+      const r = run({ GITHUB_REF_NAME: 'v1.7.0' });
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toContain('::error::The tag v1.7.0 is not v1.6.0');
+      expect(outputs()).toBe('');
+    });
+  });
+});

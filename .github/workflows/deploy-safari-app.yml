@@ -1,0 +1,595 @@
+# Deploy the ContextMint Bridge Safari app (apple/) to TestFlight, iOS and
+# macOS, on every release tag: archive, sign, export, upload. Plan
+# docs/superpowers/plans/2026-10-05-safari-extension-standalone.md, Task 5
+# (decisions D1–D3, owner steps O1–O4).
+#
+# A SEPARATE workflow from release-please.yml, so an Apple failure (signing,
+# App Store Connect, the shared Mac) never reddens or delays attach-extension,
+# which publishes the Chrome and Safari zips from the same tag.
+#
+# release-please tags with NULLNET_RELEASE_PAT, not GITHUB_TOKEN, which is what
+# lets that tag push start this workflow at all (a GITHUB_TOKEN push starts
+# nothing).
+#
+# Signing mirrors nullnet-app/mcp-host-app's deploy-testflight-mac.yml:
+#   * a job-local keychain holding the org's Apple Distribution certificate
+#     (plus the Mac installer certificate for the .pkg), destroyed in the last
+#     step whatever happened, with the search list restored;
+#   * App Store profiles resolved and downloaded BY EXACT NAME, never
+#     `-allowProvisioningUpdates`: Xcode never creates or edits a profile
+#     here, so a missing one fails with its name rather than being papered
+#     over by a profile nobody reviewed;
+#   * apple/tools/testflight-preflight.ts names every missing owner-side item
+#     at once, BEFORE a certificate reaches the runner, and holds the archive
+#     to one version before anything is uploaded.
+#
+# The profile names are plan O3's, except the macOS app's: "ContextMint Bridge
+# App Mac App Store". The plan's "ContextMint Bridge Mac App Store" already
+# signs the appex ContextMint for Mac embeds (app.nullnet.mcphost.bridge) and
+# stays untouched until plan Task 7 removes that copy.
+#
+# Build number: this workflow's run_number*100 + run_attempt, one counter for
+# both platforms (separate TestFlight trains). A re-run of a failed job gets a
+# fresh number; `build_number` overrides it on a manual dispatch.
+#
+# Uploads to TestFlight only. App Store submission stays a manual step in App
+# Store Connect (plan O6). Never runs on a pull request: it is the tag push (or
+# a dispatch) on the `testflight` environment, whose deployment policy allows
+# main and v* tags only.
+#
+# The runner is the org's ONE shared, non-ephemeral self-hosted Mac, so Xcode
+# is selected with DEVELOPER_DIR (never `sudo xcode-select`), builds go to a
+# job-local DerivedData, and nothing this job made outlives it. No archive is
+# uploaded as an artifact on failure: this repo is public.
+
+name: deploy-safari-app
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: "Optional CFBundleVersion override (digits). Blank = run_number*100 + run_attempt."
+        required: false
+        default: ""
+        type: string
+
+# One deploy at a time, never cancelled half-way through an upload.
+concurrency:
+  group: deploy-safari-app
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    name: testflight (${{ matrix.label }})
+    runs-on: [self-hosted, macOS]
+    environment: testflight
+    timeout-minutes: 60
+    strategy:
+      # Each platform ships on its own: an iOS failure never cancels macOS.
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: ios
+            label: iOS
+            scheme: ContextMintBridgeIOS
+            destination: generic/platform=iOS
+            asc_platform: IOS
+            profile_type: IOS_APP_STORE
+            profile_ext: mobileprovision
+            app_profile_var: IOS_APP_PROFILE
+            extension_profile_var: IOS_EXTENSION_PROFILE
+            app_profile_name: ContextMint Bridge iOS App Store
+            extension_profile_name: ContextMint Bridge Extension iOS App Store
+            # The iOS app bundle is flat; the macOS one has Contents/.
+            app_info: Info.plist
+            appex_info: PlugIns/ContextMintBridgeExtension.appex/Info.plist
+            appex_manifest: PlugIns/ContextMintBridgeExtension.appex/manifest.json
+          - platform: macos
+            label: macOS
+            scheme: ContextMintBridgeMac
+            destination: generic/platform=macOS
+            asc_platform: MAC_OS
+            profile_type: MAC_APP_STORE
+            profile_ext: provisionprofile
+            app_profile_var: MAC_APP_PROFILE
+            extension_profile_var: MAC_EXTENSION_PROFILE
+            app_profile_name: ContextMint Bridge App Mac App Store
+            extension_profile_name: ContextMint Bridge Extension Mac App Store
+            app_info: Contents/Info.plist
+            appex_info: Contents/PlugIns/ContextMintBridgeExtension.appex/Contents/Info.plist
+            appex_manifest: Contents/PlugIns/ContextMintBridgeExtension.appex/Contents/Resources/manifest.json
+    defaults:
+      run:
+        working-directory: apple
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      APP_BUNDLE_ID: app.nullnet.contextmint.bridge
+      APPEX_BUNDLE_ID: app.nullnet.contextmint.bridge.extension
+      TEAM_ID: "5A673K24X6"
+      PROJECT: ContextMintBridge.xcodeproj
+      PLATFORM: ${{ matrix.platform }}
+      SCHEME: ${{ matrix.scheme }}
+      APP_PROFILE_NAME: ${{ matrix.app_profile_name }}
+      EXTENSION_PROFILE_NAME: ${{ matrix.extension_profile_name }}
+      ARCHIVE_PATH: build/ContextMintBridge-${{ matrix.platform }}.xcarchive
+      EXPORT_PATH: build/export-${{ matrix.platform }}
+      EXPORT_OPTIONS: build/ExportOptions-${{ matrix.platform }}.plist
+    steps:
+      # Before checkout, so nothing from a commit that is not on main runs on
+      # the signing Mac. A `v*` tag is allowed by the environment's policy
+      # wherever it points; this is what holds it to a commit already merged.
+      - name: Refuse a commit that is not on main
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STATUS="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)"
+          case "$STATUS" in
+            identical|behind) echo "$GITHUB_REF_NAME ($GITHUB_SHA) is on main" ;;
+            *)
+              echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is '$STATUS' relative to main. Only a commit already merged to main ships; tag a commit on main (release-please does)."
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26
+          cache: npm
+
+      # Resolved once, before anything is built or signed. The tag must be
+      # `v` + apple/project.yml's MARKETING_VERSION (release-please moves both
+      # in one commit); the archive check below holds the app, the appex and
+      # its manifest.json to the same version.
+      - name: Resolve version and build number
+        id: ver
+        env:
+          BUILD_IN: ${{ inputs.build_number }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BUILD_IN:-}" ]; then
+            case "$BUILD_IN" in *[!0-9]*) echo "::error::build_number must be digits, got '$BUILD_IN'"; exit 1 ;; esac
+            BUILD="$BUILD_IN"
+          else
+            BUILD=$(( RUN_NUMBER * 100 + RUN_ATTEMPT ))
+          fi
+          MARKETING=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\([^"]*\)".*/\1/p' project.yml | head -1)
+          node tools/testflight-preflight.ts tag \
+            --event="$EVENT" --ref-type="$GITHUB_REF_TYPE" --ref-name="$GITHUB_REF_NAME" \
+            --marketing="$MARKETING"
+          echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "ContextMint Bridge $MARKETING (build $BUILD) for $PLATFORM, from $EVENT of $GITHUB_REF_NAME"
+
+      # The appex's pre-build phase (tools/stage-extension.sh) builds
+      # packages/extension-safari from this tree. No lifecycle scripts beside
+      # a job that holds signing material.
+      - name: Install the workspaces
+        working-directory: .
+        run: npm ci --ignore-scripts
+
+      # The App Store accepts uploads only from App Store-supported Xcode
+      # builds; this is the one mcp-host-app's deploys pin.
+      - name: Verify Xcode
+        run: |
+          set -euo pipefail
+          XCODE_VERSION=$(xcodebuild -version | sed -n '1s/^Xcode //p')
+          ACTIVE_XCODE_BUILD=$(xcodebuild -version | sed -n '2s/^Build version //p')
+          XCODE_BUILD="27A266a"
+          case "$XCODE_VERSION" in 27.*) ;; *)
+            echo "::error::Expected Xcode 27, found $XCODE_VERSION"
+            exit 1
+          esac
+          if [ "$ACTIVE_XCODE_BUILD" != "$XCODE_BUILD" ]; then
+            echo "::error::Expected App Store-supported Xcode build $XCODE_BUILD, found $ACTIVE_XCODE_BUILD"
+            exit 1
+          fi
+          echo "Xcode $XCODE_VERSION ($ACTIVE_XCODE_BUILD)"
+
+      # A pinned XcodeGen, checked by digest, never whatever Homebrew has: the
+      # generated project is what gets signed.
+      - name: Generate the Xcode project
+        env:
+          XCODEGEN_VERSION: "2.46.0"
+          XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
+        run: |
+          set -euo pipefail
+          ZIP="$RUNNER_TEMP/xcodegen.zip"
+          curl -fsSL --retry 3 --retry-connrefused -o "$ZIP" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          if ! echo "$XCODEGEN_SHA256  $ZIP" | shasum -a 256 -c - >/dev/null; then
+            echo "::error::xcodegen $XCODEGEN_VERSION is not the pinned bytes (want $XCODEGEN_SHA256, got $(shasum -a 256 "$ZIP" | cut -d' ' -f1))."
+            exit 1
+          fi
+          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/xcodegen-dist"
+          XCODEGEN="$RUNNER_TEMP/xcodegen-dist/xcodegen/bin/xcodegen"
+          chmod +x "$XCODEGEN"
+          "$XCODEGEN" --version
+          "$XCODEGEN" generate
+
+      # asc comes from the self-hosted Mac's Homebrew; this job never installs
+      # it. Every subcommand and flag used below is checked up front.
+      - name: Verify the runner's Homebrew asc
+        run: |
+          set -euo pipefail
+          ASC_BIN=/opt/homebrew/bin/asc
+          if [ ! -x "$ASC_BIN" ]; then
+            echo "::error::$ASC_BIN is missing. Install or repair asc on the self-hosted Mac; this job never installs it."
+            exit 1
+          fi
+          echo "asc: $ASC_BIN ($("$ASC_BIN" --version))"
+          missing=0
+          for spec in \
+            "apps list|--bundle-id --output" \
+            "versions list|--app --platform --limit --output" \
+            "profiles list|--profile-type --include --paginate --output" \
+            "profiles download|--id --output" \
+            "testflight groups list|--app --output" \
+            "publish testflight|--app --ipa --pkg --version --build-number --platform --group --upload-only --wait --output"; do
+            read -r -a sub <<<"${spec%%|*}"
+            if ! help=$("$ASC_BIN" "${sub[@]}" --help 2>&1); then
+              echo "::error::The runner's asc has no \`asc ${sub[*]}\`. Update asc on the self-hosted Mac."
+              missing=1
+              continue
+            fi
+            for flag in ${spec#*|}; do
+              if ! grep -qE -- "(^|[[:space:]])${flag}([[:space:]]|=|$)" <<<"$help"; then
+                echo "::error::The runner's asc has no \`asc ${sub[*]} ${flag}\`. Update asc on the self-hosted Mac."
+                missing=1
+              fi
+            done
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          dirname "$ASC_BIN" >> "$GITHUB_PATH"
+
+      - name: Configure ASC API key
+        env:
+          ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          KEY_DIR="$RUNNER_TEMP/private_keys"
+          mkdir -p "$KEY_DIR"
+          chmod 700 "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_$ASC_KEY_ID.p8"
+          echo "$ASC_PRIVATE_KEY_B64" | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          mkdir -p "$RUNNER_TEMP/asc"
+          {
+            echo "ASC_PRIVATE_KEY_PATH=$KEY_PATH"
+            echo "ASC_BYPASS_KEYCHAIN=1"
+            echo "ASC_CONFIG_PATH=$RUNNER_TEMP/asc/config.json"
+          } >> "$GITHUB_ENV"
+
+      # Every owner-side item at once (plan O1–O4), before any certificate is
+      # decoded onto the runner: the app record and its platform, both App
+      # Store profiles by name (for the right App ID, active, bound to the
+      # distribution certificate), and the certificate secrets.
+      - name: Check the App Store prerequisites
+        id: pre
+        env:
+          ASC_PLATFORM: ${{ matrix.asc_platform }}
+          PROFILE_TYPE: ${{ matrix.profile_type }}
+          HAS_DIST_CERT: ${{ secrets.DIST_CERT_P12_B64 != '' && secrets.DIST_CERT_PASSWORD != '' }}
+          HAS_INSTALLER_CERT: ${{ secrets.MAC_INSTALLER_CERT_P12_B64 != '' && secrets.MAC_INSTALLER_CERT_PASSWORD != '' }}
+        run: |
+          set -euo pipefail
+          PRE="$RUNNER_TEMP/preflight"
+          mkdir -p "$PRE"
+          asc apps list --bundle-id "$APP_BUNDLE_ID" --output json > "$PRE/apps.json"
+          APP_ID=$(jq -r '.data[0].id // empty' "$PRE/apps.json")
+          if [ -n "$APP_ID" ]; then
+            asc versions list --app "$APP_ID" --platform "$ASC_PLATFORM" --limit 1 --output json > "$PRE/versions.json"
+          else
+            echo '{"data":[]}' > "$PRE/versions.json"
+          fi
+          asc profiles list --profile-type "$PROFILE_TYPE" --include bundleId,certificates --paginate --output json \
+            > "$PRE/profiles.json"
+          node tools/testflight-preflight.ts account \
+            --platform="$PLATFORM" \
+            --apps="$PRE/apps.json" \
+            --versions="$PRE/versions.json" \
+            --profiles="$PRE/profiles.json" \
+            --dist-secret="$HAS_DIST_CERT" \
+            --installer-secret="$HAS_INSTALLER_CERT" \
+            --github-output="$GITHUB_OUTPUT"
+
+      # A keychain of this job's own, first in the search list so codesign and
+      # productbuild find the identities without a prompt; the original list
+      # is saved for the last step to restore.
+      - name: Import signing certificates
+        env:
+          DIST_CERT_P12_B64: ${{ secrets.DIST_CERT_P12_B64 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
+          MAC_INSTALLER_CERT_P12_B64: ${{ secrets.MAC_INSTALLER_CERT_P12_B64 }}
+          MAC_INSTALLER_CERT_PASSWORD: ${{ secrets.MAC_INSTALLER_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//' \
+            > "$RUNNER_TEMP/keychain-search-list.orig"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$DIST_CERT_P12_B64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$DIST_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security \
+            -t cert -f pkcs12
+          if [ "$PLATFORM" = macos ]; then
+            echo "$MAC_INSTALLER_CERT_P12_B64" | base64 --decode > "$RUNNER_TEMP/macinstaller.p12"
+            security import "$RUNNER_TEMP/macinstaller.p12" \
+              -k "$KEYCHAIN_PATH" \
+              -P "$MAC_INSTALLER_CERT_PASSWORD" \
+              -T /usr/bin/productbuild -T /usr/bin/productsign \
+              -t cert -f pkcs12
+          fi
+          SEARCH=("$KEYCHAIN_PATH")
+          while IFS= read -r kc; do
+            [ -n "$kc" ] && SEARCH+=("$kc")
+          done < "$RUNNER_TEMP/keychain-search-list.orig"
+          security list-keychains -d user -s "${SEARCH[@]}"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null || true
+          rm -f "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/macinstaller.p12"
+
+      # By the ids the prerequisites check resolved from the exact names. A
+      # profile already installed is left as found (and left behind); one this
+      # job installs is recorded and removed by the last step.
+      - name: Download + install the App Store provisioning profiles
+        env:
+          APP_PROFILE_ID: ${{ steps.pre.outputs.app_profile_id }}
+          EXTENSION_PROFILE_ID: ${{ steps.pre.outputs.extension_profile_id }}
+          PROFILE_EXT: ${{ matrix.profile_ext }}
+        run: |
+          set -euo pipefail
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+          for pair in "app:$APP_PROFILE_ID" "extension:$EXTENSION_PROFILE_ID"; do
+            role="${pair%%:*}"
+            id="${pair#*:}"
+            FILE="$RUNNER_TEMP/$role.$PROFILE_EXT"
+            asc profiles download --id "$id" --output "$FILE"
+            security cms -D -i "$FILE" > "$RUNNER_TEMP/$role-profile.plist"
+            UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$RUNNER_TEMP/$role-profile.plist")
+            DEST="$PROFILES_DIR/$UUID.$PROFILE_EXT"
+            if [ ! -e "$DEST" ]; then
+              cp "$FILE" "$DEST"
+              echo "$DEST" >> "$RUNNER_TEMP/installed-profiles.txt"
+              echo "Installed $role profile $id (UUID $UUID)"
+            else
+              echo "$role profile $id (UUID $UUID) was already installed; leaving it as found"
+            fi
+          done
+
+      - name: Check the signing identities and profiles
+        id: signing
+        run: |
+          set -euo pipefail
+          security find-identity -v "$RUNNER_TEMP/build.keychain-db" > "$RUNNER_TEMP/identities.txt"
+          node tools/testflight-preflight.ts signing \
+            --platform="$PLATFORM" \
+            --identities="$RUNNER_TEMP/identities.txt" \
+            --app-profile="$RUNNER_TEMP/app-profile.plist" \
+            --extension-profile="$RUNNER_TEMP/extension-profile.plist" \
+            --github-output="$GITHUB_OUTPUT"
+
+      # Manual signing, each target's profile by name through its own
+      # variable (apple/project.yml): a PROVISIONING_PROFILE_SPECIFIER here
+      # would sign the app and the appex with one profile.
+      - name: Archive
+        env:
+          BUILD_NUMBER: ${{ steps.ver.outputs.build }}
+          DESTINATION: ${{ matrix.destination }}
+          APP_PROFILE_VAR: ${{ matrix.app_profile_var }}
+          EXTENSION_PROFILE_VAR: ${{ matrix.extension_profile_var }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "$DESTINATION" \
+            -archivePath "$ARCHIVE_PATH" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_STYLE=Manual \
+            "DEVELOPMENT_TEAM=$TEAM_ID" \
+            "CODE_SIGN_IDENTITY=Apple Distribution" \
+            "$APP_PROFILE_VAR=$APP_PROFILE_NAME" \
+            "$EXTENSION_PROFILE_VAR=$EXTENSION_PROFILE_NAME" \
+            "CURRENT_PROJECT_VERSION=$BUILD_NUMBER"
+
+      # Plan Task 5's version guard: the app, the appex and the appex's
+      # manifest.json carry MARKETING_VERSION (already held to the tag), the
+      # build number is this run's, and the app carries its AppIcon. Before
+      # export, so a disagreeing archive is never uploaded.
+      - name: The archive carries one version and the icon
+        env:
+          BUILD_NUMBER: ${{ steps.ver.outputs.build }}
+          MARKETING_VERSION: ${{ steps.ver.outputs.marketing }}
+          APP_INFO: ${{ matrix.app_info }}
+          APPEX_INFO: ${{ matrix.appex_info }}
+          APPEX_MANIFEST: ${{ matrix.appex_manifest }}
+        run: |
+          set -euo pipefail
+          APP="$ARCHIVE_PATH/Products/Applications/ContextMint Bridge.app"
+          for f in "$APP/$APP_INFO" "$APP/$APPEX_INFO" "$APP/$APPEX_MANIFEST"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing from the archive."
+              exit 1
+            fi
+          done
+          plutil -convert json -o "$RUNNER_TEMP/app-info.json" "$APP/$APP_INFO"
+          plutil -convert json -o "$RUNNER_TEMP/appex-info.json" "$APP/$APPEX_INFO"
+          node tools/testflight-preflight.ts archive \
+            --platform="$PLATFORM" \
+            --marketing="$MARKETING_VERSION" \
+            --build="$BUILD_NUMBER" \
+            --app-info="$RUNNER_TEMP/app-info.json" \
+            --appex-info="$RUNNER_TEMP/appex-info.json" \
+            --manifest="$APP/$APPEX_MANIFEST"
+
+      - name: Export
+        timeout-minutes: 15
+        env:
+          INSTALLER_IDENTITY: ${{ steps.signing.outputs.installer_identity }}
+        run: |
+          set -euo pipefail
+          INSTALLER_KEYS=""
+          if [ "$PLATFORM" = macos ]; then
+            case "$INSTALLER_IDENTITY" in
+              "3rd Party Mac Developer Installer"|"Mac Installer Distribution") ;;
+              *)
+                echo "::error::The signing check named no Mac installer identity (got '$INSTALLER_IDENTITY'); refusing to export an unsigned or wrongly signed .pkg."
+                exit 1
+                ;;
+            esac
+            # The name the job keychain holds: exportArchive matches it by name.
+            INSTALLER_KEYS="<key>installerSigningCertificate</key><string>$INSTALLER_IDENTITY</string>"
+          fi
+          mkdir -p "$(dirname "$EXPORT_OPTIONS")"
+          cat > "$EXPORT_OPTIONS" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store-connect</string>
+              <key>teamID</key>
+              <string>$TEAM_ID</string>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>$APP_BUNDLE_ID</key>
+                  <string>$APP_PROFILE_NAME</string>
+                  <key>$APPEX_BUNDLE_ID</key>
+                  <string>$EXTENSION_PROFILE_NAME</string>
+              </dict>
+              <key>signingCertificate</key>
+              <string>Apple Distribution</string>
+              $INSTALLER_KEYS
+              <!-- The build number is this workflow's; never renumbered by the export. -->
+              <key>manageAppVersionAndBuildNumber</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+          plutil -lint "$EXPORT_OPTIONS"
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$EXPORT_OPTIONS"
+          ls -la "$EXPORT_PATH"
+
+      # Attached to every beta group the app has; with none yet, uploaded
+      # without testers rather than failing.
+      - name: Upload to TestFlight via asc
+        env:
+          APP_ID: ${{ steps.pre.outputs.app_id }}
+          ASC_PLATFORM: ${{ matrix.asc_platform }}
+          BUILD_NUMBER: ${{ steps.ver.outputs.build }}
+          MARKETING_VERSION: ${{ steps.ver.outputs.marketing }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          # As mcp-host-app uploads each: an .ipa says its own version and
+          # build; a .pkg must be told them, and its platform.
+          if [ "$PLATFORM" = macos ]; then
+            ARTIFACT=(--pkg "$(ls "$EXPORT_PATH"/*.pkg)" --platform "$ASC_PLATFORM"
+              --version "$MARKETING_VERSION" --build-number "$BUILD_NUMBER")
+          else
+            ARTIFACT=(--ipa "$(ls "$EXPORT_PATH"/*.ipa)")
+          fi
+          BETA_GROUPS=$(asc testflight groups list --app "$APP_ID" --output json \
+            | jq -r '[((.data // .groups // [])[]? | .id)] | join(",")')
+          if [ -n "$BETA_GROUPS" ]; then
+            echo "Attaching to beta group(s): $BETA_GROUPS"
+            TESTERS=(--group "$BETA_GROUPS")
+          else
+            echo "::warning::No TestFlight beta groups for $APP_BUNDLE_ID; uploading without attaching testers."
+            TESTERS=(--upload-only)
+          fi
+          asc publish testflight \
+            --app "$APP_ID" \
+            "${ARTIFACT[@]}" \
+            "${TESTERS[@]}" \
+            --wait \
+            --output json | tee build/publish.json
+
+      - name: Summary
+        if: always()
+        env:
+          BUILD_NUMBER: ${{ steps.ver.outputs.build }}
+          MARKETING_VERSION: ${{ steps.ver.outputs.marketing }}
+          LABEL: ${{ matrix.label }}
+        run: |
+          {
+            echo "## ContextMint Bridge for Safari ($LABEL) TestFlight"
+            echo
+            echo "**Version:** $MARKETING_VERSION (build $BUILD_NUMBER)"
+            if [ -f build/publish.json ]; then
+              BUILD_ID=$(jq -r '.publish.buildId // .buildId // empty' build/publish.json)
+              STATE=$(jq -r '.publish.processingState // .processingState // empty' build/publish.json)
+              echo
+              echo "**Build ID:** \`$BUILD_ID\` — **State:** $STATE"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Whatever happened: the job keychain out of the search list and
+      # deleted, the profiles this job installed removed, every decoded secret,
+      # the archive, the export and the DerivedData gone. The shared Mac keeps
+      # nothing of this run.
+      - name: Destroy the signing material and build products
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          WORKSPACE_APPLE: ${{ github.workspace }}/apple
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_REAL="$(cd "$(dirname "$KEYCHAIN_PATH")" 2>/dev/null && pwd -P)/$(basename "$KEYCHAIN_PATH")"
+          RESTORE=()
+          while IFS= read -r kc; do
+            if [ -n "$kc" ] && [ "$kc" != "$KEYCHAIN_PATH" ] && [ "$kc" != "$KEYCHAIN_REAL" ]; then
+              RESTORE+=("$kc")
+            fi
+          done < <(security list-keychains -d user 2>/dev/null | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')
+          if [ "${#RESTORE[@]}" -eq 0 ] && [ -s "$RUNNER_TEMP/keychain-search-list.orig" ]; then
+            while IFS= read -r kc; do
+              [ -n "$kc" ] && RESTORE+=("$kc")
+            done < "$RUNNER_TEMP/keychain-search-list.orig"
+          fi
+          if [ "${#RESTORE[@]}" -gt 0 ]; then
+            security list-keychains -d user -s "${RESTORE[@]}" || true
+          fi
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          if [ -f "$RUNNER_TEMP/installed-profiles.txt" ]; then
+            while IFS= read -r profile; do
+              [ -n "$profile" ] && rm -f "$profile" || true
+            done < "$RUNNER_TEMP/installed-profiles.txt"
+          fi
+          rm -f "$RUNNER_TEMP"/*.p12 "$RUNNER_TEMP"/*.mobileprovision "$RUNNER_TEMP"/*.provisionprofile \
+            "$RUNNER_TEMP"/*-profile.plist "$RUNNER_TEMP"/*-info.json "$RUNNER_TEMP/identities.txt" || true
+          rm -rf "$RUNNER_TEMP/private_keys" "$RUNNER_TEMP/asc" "$RUNNER_TEMP/preflight" || true
+          rm -rf "$RUNNER_TEMP/dd" "$RUNNER_TEMP/xcodegen-dist" "$RUNNER_TEMP/xcodegen.zip" || true
+          rm -rf "$WORKSPACE_APPLE/build" "$WORKSPACE_APPLE/ContextMintBridge.xcodeproj" || true
+          rm -f "$RUNNER_TEMP/installed-profiles.txt" "$RUNNER_TEMP/keychain-search-list.orig" || true
+          echo "Signing material removed (keychain, .p12 bundles, ASC .p8, provisioning profiles), search list restored, archive and DerivedData deleted."
