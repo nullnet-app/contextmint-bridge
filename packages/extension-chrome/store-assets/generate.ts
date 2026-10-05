@@ -7,7 +7,7 @@
  * `-- --only=chrome` or `-- --only=app-store` renders just one set. The App
  * Store set is captured from the SAFARI build's popup
  * (packages/extension-safari/dist/, which the npm script builds too), so it
- * shows what Safari shows ("Safari on iPhone", not "Chrome on MacIntel").
+ * shows what Safari shows ("Safari on iPhone", not "Chrome on Mac").
  *
  * For each screenshot scene it serves the BUILT popup (`dist/popup.html` +
  * `popup.js`, rebuilt by the npm script first) from a loopback HTTP server,

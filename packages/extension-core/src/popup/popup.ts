@@ -1458,7 +1458,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
     elem(
       'p',
       { class: 'hint' },
-      "Verify this code matches the one shown in the server's terminal before approving.",
+      'Verify this code matches the one the server shows before approving.',
     ),
   );
 
@@ -1553,6 +1553,19 @@ interface PendingScopeUpdateRecord {
 type AnyPendingRecord = PendingPairRecord | PendingScopeUpdateRecord;
 
 /** One entry of the background's link-status answer (background/links.ts). */
+/**
+ * The device half of the suggested Connect browser name ("Safari on Mac"):
+ * `navigator.platform` reads "MacIntel" even on Apple silicon, "Win32" on
+ * 64-bit Windows, so the common ones get their everyday names.
+ */
+export function deviceName(platform: string | undefined): string {
+  if (!platform) return 'this device';
+  if (/^Mac/.test(platform)) return 'Mac';
+  if (/^Win/.test(platform)) return 'Windows';
+  if (/^Linux/.test(platform)) return 'Linux';
+  return platform;
+}
+
 export interface LinkStatusMessage {
   id: string;
   connected: boolean;
@@ -1822,7 +1835,7 @@ async function bootstrap(): Promise<void> {
       if (typeof options?.status === 'string') connectStatus = options.status;
     } catch { /* retain the built-in gateway */ }
     const browser = currentPlatform() === 'safari' ? 'Safari' : 'Chrome';
-    const host = typeof navigator !== 'undefined' && navigator.platform ? navigator.platform : 'this device';
+    const host = deviceName(typeof navigator !== 'undefined' ? navigator.platform : undefined);
     return {
       ...(localConnected === undefined ? {} : { localConnected }),
       connectOrigins,

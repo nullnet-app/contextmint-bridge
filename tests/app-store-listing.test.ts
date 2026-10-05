@@ -28,6 +28,8 @@ function field(md: string, heading: string): string {
   return lines.slice(open + 1, close).join('\n').trim();
 }
 
+const THIRD_PARTY_PRODUCTS = /claude|cursor|windsurf|chatgpt|openai|anthropic|copilot|gemini/i;
+
 const OTHER_PLATFORMS = /chrome|chromium|android|google|firefox|\bedge\b|windows|linux/i;
 
 describe('docs/store-assets/app-store/listing.md', () => {
@@ -47,6 +49,15 @@ describe('docs/store-assets/app-store/listing.md', () => {
     expect(keywords).not.toMatch(/\s,|,\s/);
     // The name is indexed already; repeating it in keywords wastes bytes.
     expect(keywords.toLowerCase().split(',')).not.toContain('contextmint');
+  });
+
+  it('keeps third-party trademarks and other apps\' names out of the keywords (Guideline 2.3.7)', () => {
+    const keywords = field(md, 'Keywords');
+    expect(keywords).not.toMatch(THIRD_PARTY_PRODUCTS);
+  });
+
+  it('does not claim to collect nothing, which the App Privacy label may contradict (app-privacy.md)', () => {
+    expect(field(md, 'Description')).not.toMatch(/collects nothing/i);
   });
 
   it('never names another browser or platform', () => {
