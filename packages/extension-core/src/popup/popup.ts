@@ -34,6 +34,8 @@ import { currentPlatform } from '../platform.js';
 import { DEFAULT_BRIDGE_ORIGIN } from '../bridge-connect-contract.js';
 import { gatewayOriginFor } from '../bridge-gateway.js';
 import { HIGH_RISK_KEYWORDS } from '../lib/scope.js';
+import { LinkStatusWatch, type LinkStatusMessage, type StatusAnswer } from './link-status-watch.js';
+export type { LinkStatusMessage } from './link-status-watch.js';
 
 /**
  * UI labels for the inner-verb capabilities surfaced in the pair popup.
@@ -1552,7 +1554,6 @@ interface PendingScopeUpdateRecord {
 
 type AnyPendingRecord = PendingPairRecord | PendingScopeUpdateRecord;
 
-/** One entry of the background's link-status answer (background/links.ts). */
 /**
  * The device half of the suggested Connect browser name ("Safari on Mac"):
  * `navigator.platform` reads "MacIntel" even on Apple silicon, "Win32" on
@@ -1564,15 +1565,6 @@ export function deviceName(platform: string | undefined): string {
   if (/^Win/.test(platform)) return 'Windows';
   if (/^Linux/.test(platform)) return 'Linux';
   return platform;
-}
-
-export interface LinkStatusMessage {
-  id: string;
-  connected: boolean;
-  label?: string;
-  url?: string;
-  /** Why the bridge refused this browser for good (`4004`), when it did. */
-  refusal?: string;
 }
 
 declare const chrome: {
@@ -1635,10 +1627,24 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
+  /** The background's link and session status, or undefined if nobody answered. */
+  const queryLinkStatus = async (): Promise<StatusAnswer | undefined> => {
+    if (!chrome.runtime?.sendMessage) return undefined;
+    return (await chrome.runtime.sendMessage({ type: 'get-connected-identities' })) as StatusAnswer | undefined;
+  };
+  /** True while the status view (not a pairing card) is what the popup shows. */
+  let showingStatus = false;
+  const statusWatch = new LinkStatusWatch(queryLinkStatus, () => {
+    if (showingStatus) void renderNext();
+  });
+
   // Hoisted so onApprove/onCancel can re-render the next entry without
   // re-reading from storage (storage gets the write but we want immediate
   // visual feedback, before the next popup open).
   const renderNext = async (): Promise<void> => {
+    // Cleared here and set again only when the status view is what renders,
+    // so the link-status watch never repaints over a pairing card.
+    showingStatus = false;
     const got = await queue.get(['pendingPair', 'pendingAccountCards', 'pendingAccountMcpCards']);
     const mcpCards = got['pendingAccountMcpCards'] && typeof got['pendingAccountMcpCards'] === 'object'
       ? got['pendingAccountMcpCards'] as Record<string, { key: string; kind: 'confirm' | 'scope-update'; registrationSlug: string; accountSlug: string; origin: string; scope: import('../lib/scope.js').AccountScope }>
@@ -1888,17 +1894,16 @@ async function bootstrap(): Promise<void> {
     // did not answer, and a bridge row then renders WITHOUT a dot rather than
     // claiming a state nobody vouched for.
     let links: LinkStatusMessage[] = [];
-    if (chrome.runtime?.sendMessage) {
-      try {
-        const resp = await chrome.runtime.sendMessage({ type: 'get-connected-identities' }) as
-          | { connectedHashes?: string[]; links?: LinkStatusMessage[] }
-          | undefined;
-        connectedHashes = new Set(resp?.connectedHashes ?? []);
-        links = resp?.links ?? [];
-      } catch {
-        // Background not available — dots will be absent.
-      }
+    let answer: StatusAnswer | undefined;
+    try {
+      answer = await queryLinkStatus();
+      connectedHashes = new Set(answer?.connectedHashes ?? []);
+      links = answer?.links ?? [];
+    } catch {
+      // Background not available — dots will be absent.
     }
+    // What this paint shows, so the watch re-renders only when it changes.
+    statusWatch.noteRendered(answer);
     const trustedList = mergeTrustedSummaries(records, derivedRecords, connectedHashes);
     for (const [identityHash, derived] of Object.entries(derivedRecords)) {
       if (records[identityHash]) continue;
@@ -1932,6 +1937,7 @@ async function bootstrap(): Promise<void> {
       : undefined;
     if (trustedList.length === 0 && accounts.length === 0) {
       renderPopup(root, { mode: 'empty', bridges, mismatches, vaultLoss });
+      showingStatus = true;
     } else {
       const refresh = async (): Promise<void> => {
         try { await chrome.runtime?.sendMessage?.({ type: 'sync-main-world-bridge' }); } catch { /* worker may be asleep */ }
@@ -1960,12 +1966,19 @@ async function bootstrap(): Promise<void> {
         } catch { return false; }
       };
       renderPopup(root, { mode: 'status', trusted: trustedList, onRevoke, onForget, onAlwaysAsk, accounts, onForgetAccount, bridges, mismatches, vaultLoss });
+      showingStatus = true;
     }
   };
 
   // Branch: pending pairs take precedence over the status list. If no
   // pending pairs, render the trusted-MCPs status view.
   await renderNext();
+
+  // Safari: the broadcast below is not enough on its own (link-status-watch.ts
+  // says why). Re-ask while the popup is open; repaint the status view only
+  // when the bridge or session state actually changed. The popup's page —
+  // and this timer with it — goes away when the popup closes.
+  statusWatch.start();
 
   // Part 3: listen for connection-change notifications from the background
   // service worker. When a session comes up or tears down, re-render the
