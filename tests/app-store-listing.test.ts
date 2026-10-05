@@ -85,15 +85,29 @@ describe('docs/store-assets/app-store/review-notes.md', () => {
     expect([...field(md, 'Notes')].length).toBeLessThanOrEqual(4000);
   });
 
-  it('gives App Review a way to see it work, the demo account, and why the app is minimal', () => {
+  it('gives App Review a way to see it work, the Connect video, and why the app is minimal', () => {
     const notes = field(md, 'Notes');
     expect(notes).toMatch(/fpx/);
     expect(notes).toMatch(/example\.com/);
-    expect(notes).toMatch(/demo account/i);
     expect(notes).toMatch(/4\.2/);
     // All-sites access and the per-MCP consent (plan Q4).
     expect(notes).toMatch(/all websites|every website/i);
     expect(notes).toMatch(/pair code/i);
+  });
+
+  it('needs no sign-in: Connect is shown by an attached video, not a demo account', () => {
+    expect(md).toMatch(/\*\*Sign-in required: no\*\*/);
+    const notes = field(md, 'Notes');
+    expect(notes).toContain('ContextMint-Bridge-Connect.mov');
+    expect(notes).toMatch(/invite-only/i);
+    expect(notes).not.toMatch(/Sign-In Information/i);
+    expect(notes).not.toMatch(/demo account/i);
+  });
+
+  it('gives the owner a shot list for the Connect video', () => {
+    expect(md).toMatch(/^## Demo video shot list/m);
+    expect(md).toContain('~/Movies/ContextMint-Bridge-Connect.mov');
+    expect(md).toMatch(/Cmd-Shift-5/);
   });
 
   it('never carries a password', () => {

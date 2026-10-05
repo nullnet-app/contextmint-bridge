@@ -8,7 +8,7 @@ this folder is the Safari app's.
 | File | App Store Connect field |
 | --- | --- |
 | [`listing.md`](listing.md) | Name, subtitle, promotional text, description, keywords, category, support / marketing / privacy policy URLs, copyright |
-| [`review-notes.md`](review-notes.md) | The version → App Review Information (notes; what goes in Sign-In Information) |
+| [`review-notes.md`](review-notes.md) | The version → App Review Information (notes, sign-in not required, and the shot list for the Connect demo video attachment) |
 | [`app-privacy.md`](app-privacy.md) | App Privacy, App Information → Age Rating, export compliance (owner step O5) |
 | `screenshots/mac/*-1280x800.png` | macOS → Screenshots (1280x800) |
 | `screenshots/iphone/*-1320x2868.png` | iOS → iPhone 6.9" Display (1320x2868) |
