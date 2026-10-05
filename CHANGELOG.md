@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.6.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.6.0...v1.6.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **apple:** list ContextMint Bridge under Productivity ([#81](https://github.com/nullnet-app/contextmint-bridge/issues/81)) ([912ccf2](https://github.com/nullnet-app/contextmint-bridge/commit/912ccf21d5e825bd36e94a70b824b35e03281457))
+* **store:** drop trademarked keywords; say "Mac" and no "terminal" in the popup ([#79](https://github.com/nullnet-app/contextmint-bridge/issues/79)) ([3ab73e8](https://github.com/nullnet-app/contextmint-bridge/commit/3ab73e8bcb2004e0d28873777cef2172a861edbf))
+
+
+### Documentation
+
+* **store:** App Review gets a Connect demo video, not a demo account ([#82](https://github.com/nullnet-app/contextmint-bridge/issues/82)) ([396d676](https://github.com/nullnet-app/contextmint-bridge/commit/396d67639767eb5f90c93151465c894af5645032))
+* **store:** App Store listing for ContextMint Bridge ([#77](https://github.com/nullnet-app/contextmint-bridge/issues/77)) ([635ea98](https://github.com/nullnet-app/contextmint-bridge/commit/635ea9846ece08e3a89b322f1bab45577c72cd37))
+* **store:** keywords no longer repeat the subtitle ([#83](https://github.com/nullnet-app/contextmint-bridge/issues/83)) ([3cc4896](https://github.com/nullnet-app/contextmint-bridge/commit/3cc4896af893b43e8b5ec64cb9fe87fb27789d0e))
+
 ## [1.6.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.5.0...v1.6.0) (2026-10-05)
 
 
