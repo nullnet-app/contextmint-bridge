@@ -1552,7 +1552,6 @@ interface PendingScopeUpdateRecord {
 
 type AnyPendingRecord = PendingPairRecord | PendingScopeUpdateRecord;
 
-/** One entry of the background's link-status answer (background/links.ts). */
 /**
  * The device half of the suggested Connect browser name ("Safari on Mac"):
  * `navigator.platform` reads "MacIntel" even on Apple silicon, "Win32" on
@@ -1566,6 +1565,7 @@ export function deviceName(platform: string | undefined): string {
   return platform;
 }
 
+/** One entry of the background's link-status answer (background/links.ts). */
 export interface LinkStatusMessage {
   id: string;
   connected: boolean;
