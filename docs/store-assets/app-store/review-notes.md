@@ -6,13 +6,14 @@ block below is pasted as-is (4000-character limit, held by
 
 ## Sign-in information
 
-**Sign-in required: yes**, for Connect only (local pairing on the Mac needs no
-account). Before the first submission the owner creates a ContextMint demo
-account for App Review, with MCP servers already registered so that Connect
-has something to show, and types its user name and password into App Store
-Connect's **Sign-In Information** fields. The credentials never go in this
-repository. The demo account must stay usable for as long as a version is in
-review.
+**Sign-in required: no**. The extension's core function, pairing an MCP server
+and approving its sites (the Mac steps in the Notes), needs no account. Connect
+is optional and links the extension to a ContextMint account, which is
+invite-only and signs in only through Google, Apple or GitHub (no passwords),
+so it cannot be offered as a reviewer login. Instead, a short screen recording
+of the Connect flow is uploaded as a review attachment in App Review
+Information, file name `ContextMint-Bridge-Connect.mov` (see the shot list
+below). Leave App Store Connect's sign-in fields empty.
 
 ## Contact information
 
@@ -39,11 +40,50 @@ HOW TO SEE IT WORK ON A MAC (no account needed)
 5. The terminal prints the HTML of example.com, fetched through the open Safari tab. Running step 3's second command again needs no approval. Removing the pairing (Forget in the extension) makes it ask again.
 
 HOW TO SEE IT WORK WITH CONNECT (Mac, iPhone or iPad)
-1. Turn the extension on as above (on iPhone or iPad: Settings > Apps > Safari > Extensions > ContextMint Bridge).
-2. Open the extension in Safari and choose Connect to mcp.nullnet.app.
-3. A tab opens on ContextMint; sign in with the demo account in Sign-In Information and confirm this browser.
-4. The extension now shows "Connected to" the demo account, and the MCP servers that account hosts appear under Trusted MCPs. When one asks for something new, the extension asks the person to allow it first.
-On iPhone and iPad there are no local MCP servers, so Connect is the only path, and iOS serves requests while Safari is open.
+Connect is optional. It links the extension to a ContextMint account, which is invite-only and signs in through Google, Apple or GitHub (no passwords), so no demo login can be provided. The attached video ContextMint-Bridge-Connect.mov shows the full flow on a Mac: turning the extension on, choosing Connect to mcp.nullnet.app, signing in and confirming the browser on ContextMint's page, the extension showing "Connected to" the account, a hosted MCP server attaching, and a request served through a signed-in Safari tab. On iPhone and iPad Connect works the same way, and requests are served while Safari is open.
 
 The source, the protocol and the threat model are public: github.com/nullnet-app/contextmint-bridge and github.com/chrischall/fetchproxy.
 ```
+
+## Demo video shot list
+
+For the owner: a recording of about 2 minutes, attached in App Store Connect →
+the version → App Review Information → **Attachment**.
+
+**Before recording**
+
+- Use a ContextMint account that shows only demo MCP servers, for example one
+  MCP against a public site such as example.com. No personal or work MCPs.
+- Use a clean Safari window: no other tabs, no bookmarks bar, no other signed-in
+  accounts or tabs with personal data. Hide the Dock and turn on Do Not Disturb
+  so no notifications appear.
+- Make sure ContextMint Bridge is installed from the build under review and
+  that no Connect pairing exists yet (Forget it in the extension if it does).
+
+**Recording**
+
+Press Cmd-Shift-5, choose Record Selected Window (or Record Selected Portion
+around Safari and System Settings), then Record. No narration is needed; pause
+a second or two on each screen so the reviewer can read it.
+
+1. Open the ContextMint Bridge app: its one screen, then Open Safari
+   Extensions Settings.
+2. Turn ContextMint Bridge on in Safari's Extensions settings and allow it on
+   the demo site.
+3. In Safari, open the extension from the toolbar and choose Connect to
+   mcp.nullnet.app.
+4. On ContextMint's page, sign in with Google, Apple or GitHub, then confirm
+   this browser. (Keep any account picker showing only the demo identity.)
+5. Back in the extension: it shows "Connected to" the account.
+6. A hosted MCP server attaches and appears under Trusted MCPs; approve what it
+   asks for.
+7. Open the demo site in a Safari tab, signed in if it needs it, and run a
+   request from the hosted MCP; show the result arriving and the extension's
+   activity for that request.
+8. Stop the recording from the menu bar.
+
+**Export**
+
+Trim the start and end in QuickTime Player (Edit → Trim), then save as a .mov
+under 500 MB at ~/Movies/ContextMint-Bridge-Connect.mov and upload it as the
+review attachment.
