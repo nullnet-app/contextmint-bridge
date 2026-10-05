@@ -38,7 +38,7 @@ TURN IT ON
 Open ContextMint Bridge once, then turn the extension on in Safari's Extensions settings and allow it on the websites you want your tools to reach. The app shows you where, and whether Safari has it on.
 
 HOW IT WORKS
-1. An MCP server asks to pair. The extension's toolbar icon shows a badge; open it to see the server's name, the exact domains it wants to reach, every capability it declares, and, by name, each cookie, storage key or request header it would read. It also shows an 8-digit pair code, and the same code appears in the MCP server's terminal.
+1. An MCP server asks to pair. The extension's toolbar icon shows a badge; open it to see the server's name, the exact domains it wants to reach, every capability it declares, and, by name, each cookie, storage key or request header it would read. It also shows an 8-digit pair code, and the server shows the same code (in its terminal, for one on your Mac).
 2. You compare the code and approve. Matching codes prove the extension and the server are talking to each other, not to something in between. Approve once; the pairing is remembered.
 3. Requests flow through your tab. When the server asks for a page on an approved domain, ContextMint Bridge makes the request from your open tab on that site and returns the response.
 
@@ -57,7 +57,7 @@ SECURITY
 - Per-server domain allowlist: requests to any host you did not approve are refused before they reach a tab.
 - Secrets stay out of page reach: keys and pairings live in the extension's own storage, which websites cannot read.
 - Revoke any time from the extension.
-- No analytics, no crash reporting, no remote configuration. The app itself collects nothing and makes no network connections.
+- No analytics, no tracking, no crash reporting, no remote configuration. The app itself makes no network connections; only Connect, when you choose it, stores this browser with your ContextMint account.
 
 OPEN SOURCE
 ContextMint Bridge is MIT-licensed. The extension, the protocol specification and the security threat model are public:
@@ -68,7 +68,7 @@ github.com/chrischall/fetchproxy
 ## Keywords
 
 ```text
-mcp,ai,safari extension,claude,cursor,fetchproxy,fpx,assistant,agent,automation,developer,session
+mcp,ai,llm,model context protocol,safari extension,tabs,cookies,login,fetchproxy,fpx,agent,session
 ```
 
 ## Category

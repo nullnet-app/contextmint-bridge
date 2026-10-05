@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
+  deviceName,
   mergeTrustedSummaries,
   renderPopup,
   type BridgesView,
@@ -387,6 +388,26 @@ describe('renderPopup', () => {
     expect(approve).not.toBeNull();
     expect(cancel).not.toBeNull();
     expect(cancel.getAttribute('autofocus')).not.toBeNull();
+  });
+
+  it('asks to compare the pair code without assuming the server runs in a terminal', () => {
+    // A server ContextMint hosts (the only kind on iPhone and iPad) has no
+    // terminal the user can see; the hint must fit it as well as a local one.
+    renderPopup(container, {
+      mode: 'pending-pair',
+      pending: {
+        serverName: 'opentable-mcp',
+        version: '0.9.1',
+        domains: ['opentable.com'],
+        capabilities: ['fetch'],
+        pairCode: '4729-1836',
+      },
+      onApprove: () => undefined,
+      onCancel: () => undefined,
+    });
+    const hint = container.querySelector('.hint')?.textContent ?? '';
+    expect(hint).toMatch(/matches the one the server shows/);
+    expect(container.textContent).not.toMatch(/terminal/i);
   });
 
   it('renders pending-pair with multiple domains all visible', () => {
@@ -1889,5 +1910,19 @@ describe('renderPopup — retired confirmation action', () => {
     expect(root.textContent).not.toContain('Confirm this browser');
     expect(root.querySelector('.bridge-confirm')).toBeNull();
     expect(root.querySelectorAll('input, textarea, [contenteditable]')).toHaveLength(0);
+  });
+});
+
+describe('deviceName', () => {
+  it('names the device for the Connect browser name, not by its raw navigator.platform', () => {
+    expect(deviceName('MacIntel')).toBe('Mac');
+    expect(deviceName('MacPPC')).toBe('Mac');
+    expect(deviceName('iPhone')).toBe('iPhone');
+    expect(deviceName('iPad')).toBe('iPad');
+    expect(deviceName('Win32')).toBe('Windows');
+    expect(deviceName('Linux x86_64')).toBe('Linux');
+    expect(deviceName('CrOS')).toBe('CrOS');
+    expect(deviceName('')).toBe('this device');
+    expect(deviceName(undefined)).toBe('this device');
   });
 });
