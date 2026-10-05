@@ -52,7 +52,10 @@ export type SceneName =
   | 'connected'
   | 'warnings'
   | 'account-key-changed'
-  | 'vouched';
+  | 'vouched'
+  | 'account-connected'
+  | 'account-pair'
+  | 'account-vouched';
 
 /** 44 base64 characters, as a 32-byte key would be. Deterministic. */
 const fakeKey = (seed: string): string => Buffer.from(seed.padEnd(32, '.')).toString('base64');
@@ -260,6 +263,44 @@ const VOUCHED_CARD = {
   },
 };
 
+// The App Store's iPhone and iPad shots: nothing on an iPhone dials the
+// extension over loopback, so every MCP in them arrives through the account's
+// bridge (Connect), and the loopback link is shown as it is there, down.
+// Connected through the real gateway (mcp.nullnet.app, the popup's default
+// Connect origin), so the popup shows the healthy pairing, not the Connect card.
+const GATEWAY = 'https://mcp.nullnet.app';
+const ACCOUNT_BRIDGE: RemoteTarget = {
+  id: 'baccount',
+  url: 'wss://mcp.nullnet.app/bridge',
+  token: 'mcpb_illustrative-only',
+  label: 'Safari',
+  enabled: true,
+};
+const ACCOUNT_LINKS: LinkStatusMessage[] = [
+  { id: 'local', connected: false },
+  { id: `remote:${ACCOUNT_BRIDGE.id}`, connected: true, label: ACCOUNT_BRIDGE.label!, url: ACCOUNT_BRIDGE.url },
+];
+const GATEWAY_ACCOUNT: TrustedAccount = { ...ACCOUNT, origin: GATEWAY };
+const ACCOUNT_DERIVED = [
+  { identityHash: DERIVED_HASH, mcp: { ...DERIVED.mcp, origin: GATEWAY } },
+  {
+    identityHash: fakeHash('calendar-mcp-hosted'),
+    mcp: {
+      ...DERIVED.mcp,
+      origin: GATEWAY,
+      registrationId: 'reg_illustrative_calendar',
+      slug: 'calendar-mcp',
+      scope: {
+        domains: ['calendar.example.com'],
+        capabilities: ['fetch', 'read_cookies'],
+        ...EMPTY_SCOPE,
+        cookieKeys: ['session_id'],
+      },
+    },
+  },
+];
+const GATEWAY_VOUCHED_CARD = { ...VOUCHED_CARD, origin: GATEWAY };
+
 export const SCENES: Record<SceneName, PopupScene> = {
   status: {
     trusted: [CALENDAR, TICKETS, NOTES, FPX],
@@ -349,6 +390,32 @@ export const SCENES: Record<SceneName, PopupScene> = {
     links: [{ id: 'local', connected: true }],
     pendingAccountMcpCards: { [VOUCHED_CARD.key]: VOUCHED_CARD },
   },
+  'account-connected': {
+    trusted: [],
+    accounts: [GATEWAY_ACCOUNT],
+    derived: ACCOUNT_DERIVED,
+    remoteTargets: [ACCOUNT_BRIDGE],
+    connectedHashes: ACCOUNT_DERIVED.map((d) => d.identityHash),
+    links: ACCOUNT_LINKS,
+    connectStatus: 'Connected to Household',
+  },
+  'account-pair': {
+    pendingPair: { [PAIR_RECORD.key]: PAIR_RECORD },
+    trusted: [],
+    accounts: [GATEWAY_ACCOUNT],
+    remoteTargets: [ACCOUNT_BRIDGE],
+    connectedHashes: [],
+    links: ACCOUNT_LINKS,
+  },
+  'account-vouched': {
+    trusted: [],
+    accounts: [GATEWAY_ACCOUNT],
+    derived: ACCOUNT_DERIVED,
+    remoteTargets: [ACCOUNT_BRIDGE],
+    connectedHashes: ACCOUNT_DERIVED.map((d) => d.identityHash),
+    links: ACCOUNT_LINKS,
+    pendingAccountMcpCards: { [GATEWAY_VOUCHED_CARD.key]: GATEWAY_VOUCHED_CARD },
+  },
 };
 
 /**
@@ -381,6 +448,85 @@ export interface ScreenshotSpec {
   headline: string;
   sub: string;
 }
+
+/**
+ * The App Store listing's screenshots (docs/store-assets/app-store/), rendered
+ * from the SAFARI build's popup: the Mac size App Store Connect takes, the
+ * 6.9-inch iPhone and the 13-inch iPad (the iOS app is universal).
+ */
+export const APP_STORE_DEVICES = ['mac', 'iphone', 'ipad'] as const;
+export type AppStoreDevice = (typeof APP_STORE_DEVICES)[number];
+export const APP_STORE_SIZES: Record<AppStoreDevice, { width: number; height: number }> = {
+  mac: { width: 1280, height: 800 },
+  iphone: { width: 1320, height: 2868 },
+  ipad: { width: 2064, height: 2752 },
+};
+
+export interface AppStoreScreenshotSpec extends ScreenshotSpec {
+  device: AppStoreDevice;
+}
+
+interface AppStoreShot {
+  slug: string;
+  scene: SceneName;
+  headline: string;
+  sub: string;
+}
+
+const MAC_SHOTS: AppStoreShot[] = [
+  {
+    slug: '1-trusted-mcps',
+    scene: 'status',
+    headline: 'Your AI tools, in the Safari tabs you’re already signed into',
+    sub: 'ContextMint and the MCP servers on your Mac use your own Safari sessions — no copied passwords, no pasted cookies.',
+  },
+  {
+    slug: '2-pair-prompt',
+    scene: 'pair',
+    headline: 'Nothing connects until you match the code',
+    sub: 'Every server shows an 8-digit pair code and lists exactly which domains, capabilities, storage keys and headers it wants. You approve once.',
+  },
+  {
+    slug: '3-account',
+    scene: 'account-connected',
+    headline: 'Connect once, and ContextMint can use Safari',
+    sub: 'Choose Connect, confirm in ContextMint, and the MCP servers it hosts for you reach your signed-in sites, end-to-end encrypted.',
+  },
+];
+
+const MOBILE_SHOTS: AppStoreShot[] = [
+  {
+    slug: '1-account',
+    scene: 'account-connected',
+    headline: 'Your ContextMint tools, in the Safari tabs you’re signed into',
+    sub: 'Connect once, and the MCP servers ContextMint hosts for you use your own sessions — no copied passwords or cookies.',
+  },
+  {
+    slug: '2-pair-prompt',
+    scene: 'account-pair',
+    headline: 'Nothing connects until you match the code',
+    sub: 'Every server lists exactly which sites and data it wants, with an 8-digit code to compare. You approve once.',
+  },
+  {
+    slug: '3-approve',
+    scene: 'account-vouched',
+    headline: 'You decide, server by server',
+    sub: 'Approve or decline each one, and revoke it any time from the popup.',
+  },
+];
+
+export const APP_STORE_SCREENSHOTS: AppStoreScreenshotSpec[] = APP_STORE_DEVICES.flatMap(
+  (device) => {
+    const { width, height } = APP_STORE_SIZES[device];
+    return (device === 'mac' ? MAC_SHOTS : MOBILE_SHOTS).map((s) => ({
+      file: `app-store/screenshots/${device}/${s.slug}-${width}x${height}.png`,
+      device,
+      scene: s.scene,
+      headline: s.headline,
+      sub: s.sub,
+    }));
+  },
+);
 
 export const SCREENSHOTS: ScreenshotSpec[] = [
   {

@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { APP_STORE_SIZES, type AppStoreDevice } from './scenes.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -111,6 +112,100 @@ export function screenshotHtml(c: ScreenshotCanvas): string {
   </section>
   <section class="stage"><div class="popup"><img src="${c.popupPng}" alt=""></div></section>`;
   return page(CANVAS.width, CANVAS.height, css, body);
+}
+
+/** Where a portrait (iPhone / iPad) App Store canvas puts the copy and the popup. */
+export interface PortraitLayout {
+  width: number;
+  height: number;
+  /** The headline block, from the top edge. */
+  copyHeight: number;
+  /** The "works with" line, at the bottom edge. */
+  footerHeight: number;
+  pad: number;
+  scale: number;
+  popupTop: number;
+  popupWidth: number;
+  popupHeight: number;
+}
+
+export function portraitLayout(
+  device: Exclude<AppStoreDevice, 'mac'>,
+  popupWidth: number,
+  popupHeight: number,
+): PortraitLayout {
+  const { width, height } = APP_STORE_SIZES[device];
+  const pad = Math.round(width * 0.07);
+  const copyHeight = Math.round(height * (device === 'iphone' ? 0.33 : 0.3));
+  const footerHeight = Math.round(height * 0.06);
+  const availHeight = height - copyHeight - footerHeight - pad;
+  const scale = Math.min((width - 2 * pad) / popupWidth, availHeight / popupHeight);
+  const w = Math.round(popupWidth * scale);
+  const h = Math.round(popupHeight * scale);
+  return {
+    width,
+    height,
+    copyHeight,
+    footerHeight,
+    pad,
+    scale,
+    popupTop: copyHeight + Math.floor((availHeight - h) / 2),
+    popupWidth: w,
+    popupHeight: h,
+  };
+}
+
+/**
+ * One App Store screenshot: the Mac's is the landscape canvas above; the
+ * iPhone's and iPad's are portrait, the headline over the popup. Neither
+ * names another browser, and the portrait ones say nothing about MCPs on
+ * "your machine" or fpx, which an iPhone cannot run.
+ */
+export function appStoreScreenshotHtml(c: ScreenshotCanvas & { device: AppStoreDevice }): string {
+  if (c.device === 'mac') return screenshotHtml(c);
+  const l = portraitLayout(c.device, c.popupWidth, c.popupHeight);
+  const u = l.width / 100;
+  const css = `
+  body { position: relative;
+    background: radial-gradient(ellipse at 50% 70%, ${BRAND.ink3} 0%, ${BRAND.ink} 65%); }
+  .copy { position: absolute; left: ${l.pad}px; right: ${l.pad}px; top: 0; height: ${l.copyHeight}px;
+    box-sizing: border-box; padding: ${l.pad}px 0 ${Math.round(l.pad / 2)}px; overflow: hidden;
+    display: flex; flex-direction: column; justify-content: flex-end; }
+  .brand { display: flex; align-items: center; gap: ${(1.4 * u).toFixed(1)}px; margin-bottom: ${(3.2 * u).toFixed(1)}px; }
+  .brand img { width: ${(5.6 * u).toFixed(1)}px; height: ${(5.6 * u).toFixed(1)}px; }
+  .brand .wordmark { font-size: ${(2.9 * u).toFixed(1)}px; }
+  .brand .name { font-size: ${(1.7 * u).toFixed(1)}px; color: ${BRAND.mutedOnInk}; margin-top: 2px; letter-spacing: 0.02em; }
+  h1 { font-size: ${(c.device === 'iphone' ? 6.6 : 5.2) * u}px; line-height: 1.1; font-weight: 700;
+    letter-spacing: -0.02em; margin: 0 0 ${(2.2 * u).toFixed(1)}px; }
+  h1::after { content: ''; display: inline-block; width: 0.22em; height: 0.8em; margin-left: 0.14em;
+    background: ${BRAND.star}; vertical-align: -0.05em; }
+  p { font-size: ${(c.device === 'iphone' ? 3.3 : 2.6) * u}px; line-height: 1.45; color: ${BRAND.mutedOnInk}; margin: 0; }
+  .popup { position: absolute; left: ${Math.round((l.width - l.popupWidth) / 2)}px; top: ${l.popupTop}px;
+    width: ${l.popupWidth}px; height: ${l.popupHeight}px;
+    border-radius: ${(2.2 * u).toFixed(1)}px; overflow: hidden; background: #fff;
+    box-shadow: 0 0 0 2px rgba(250,250,250,0.10), 0 ${(3 * u).toFixed(1)}px ${(8 * u).toFixed(1)}px rgba(0,0,0,0.55); }
+  .popup img { display: block; width: 100%; height: 100%; }
+  .works { position: absolute; left: ${l.pad}px; right: ${l.pad}px; bottom: 0; height: ${l.footerHeight}px;
+    display: flex; align-items: center; justify-content: center; gap: ${(1.2 * u).toFixed(1)}px;
+    font-size: ${(c.device === 'iphone' ? 2.6 : 2) * u}px; color: ${BRAND.mutedOnInk}; }
+  .works img { width: 1.6em; height: 1.6em; }
+  .works b { color: ${BRAND.paper}; font-weight: 600; }
+`;
+  const body = `
+  <section class="copy">
+    <div class="brand">
+      <img src="${bridgeIcon()}" alt="">
+      <div>
+        <div class="wordmark">contextmint<span class="cursor" style="width:0.42em;height:0.9em;margin-left:0.08em"></span></div>
+        <div class="name">Bridge</div>
+      </div>
+    </div>
+    <h1>${escapeHtml(c.headline)}</h1>
+    <p>${escapeHtml(c.sub)}</p>
+  </section>
+  <div class="popup"><img src="${c.popupPng}" alt=""></div>
+  <div class="works"><img src="${contextMintIcon()}" alt=""><span>Works with <b>ContextMint</b></span></div>`;
+  return page(l.width, l.height, css, body);
 }
 
 export function promoTileHtml(): string {

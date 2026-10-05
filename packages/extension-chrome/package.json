@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsx build.ts",
     "build:dev": "tsx build.ts --dev",
-    "store-assets": "tsx build.ts && tsx store-assets/generate.ts"
+    "store-assets": "tsx build.ts && tsx ../extension-safari/build.ts && tsx store-assets/generate.ts"
   },
   "dependencies": {
     "@fetchproxy/extension-core": "*",

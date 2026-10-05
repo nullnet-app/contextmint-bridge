@@ -11,6 +11,9 @@ What to put where in the Chrome Web Store developer console.
 | [`screenshots/2-pair-prompt-1280x800.png`](screenshots/2-pair-prompt-1280x800.png)   | Screenshots, second                                  |
 | [`screenshots/3-scope-update-1280x800.png`](screenshots/3-scope-update-1280x800.png) | Screenshots, third                                   |
 
+The Safari app's App Store listing (copy, review notes, privacy answers and
+its Mac, iPhone and iPad screenshots) is in [`app-store/`](app-store/README.md).
+
 The store icon (128x128) is `packages/extension-chrome/icons/128.png`, which is
 already in the uploaded zip. The privacy policy URL is `docs/PRIVACY.md`.
 
