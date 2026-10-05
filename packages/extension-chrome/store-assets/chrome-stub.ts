@@ -11,9 +11,15 @@ import type { PopupScene } from './scenes.js';
 
 export function chromeStubSource(scene: PopupScene, extensionVersion: string): string {
   const init = {
-    session: scene.pendingPair ? { pendingPair: scene.pendingPair } : {},
+    session: {
+      ...(scene.pendingPair ? { pendingPair: scene.pendingPair } : {}),
+      ...(scene.pendingAccountCards ? { pendingAccountCards: scene.pendingAccountCards } : {}),
+      ...(scene.pendingAccountMcpCards ? { pendingAccountMcpCards: scene.pendingAccountMcpCards } : {}),
+    },
     version: extensionVersion,
     connected: { connectedHashes: scene.connectedHashes, links: scene.links },
+    connectStatus: scene.connectStatus ?? null,
+    versionMismatches: scene.versionMismatches ?? [],
   };
   return `(() => {
   const init = ${JSON.stringify(init)};
@@ -29,17 +35,28 @@ export function chromeStubSource(scene: PopupScene, extensionVersion: string): s
     async remove(keys) { for (const k of Array.isArray(keys) ? keys : [keys]) delete data[k]; },
     onChanged: { addListener() {} },
   });
+  // A refusal is shown only while fresh, so it is stamped at load time.
+  const local = {};
+  if (init.versionMismatches.length) {
+    local.versionMismatch = {};
+    init.versionMismatches.forEach((m, i) => {
+      local.versionMismatch[m.linkId + ':' + m.serverName] = { ...m, at: Date.now() - i };
+    });
+  }
   globalThis.chrome = {
     runtime: {
       id: 'store-assets',
       getManifest: () => ({ version: init.version }),
       async sendMessage(msg) {
         if (msg && msg.type === 'get-connected-identities') return clone(init.connected);
+        if (msg && msg.type === 'bridge-connect-origins' && init.connectStatus !== null) {
+          return { origins: ['https://mcp.nullnet.app'], status: init.connectStatus };
+        }
         return undefined;
       },
       onMessage: { addListener() {} },
     },
-    storage: { local: area({}), session: area(init.session) },
+    storage: { local: area(local), session: area(init.session) },
   };
 })();
 `;

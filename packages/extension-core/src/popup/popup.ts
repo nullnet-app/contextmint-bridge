@@ -816,6 +816,8 @@ function buildTrustedEntry(
   onAlwaysAsk?: (identityHash: string, enabled: boolean) => void,
   onForget?: (identityHash: string) => void | Promise<boolean>,
 ): HTMLLIElement {
+  // Row anatomy (design system ExtensionPopup): dot · body (name on line 1,
+  // origins + scope as one caption on line 2) · one quiet action column.
   const li = elem('li', { class: 'trusted-entry' });
   // Connection-status dot — only when `connected` is explicitly set, so
   // legacy callers and tests without the live-session path are unchanged.
@@ -828,40 +830,59 @@ function buildTrustedEntry(
       }),
     );
   }
-  li.appendChild(
-    elem('span', { class: 'trusted-label' }, `${t.serverName} → ${t.domains.join(', ')}`),
+  const body = elem('div', { class: 'trusted-body' });
+  const line = elem('div', { class: 'trusted-line' });
+  line.appendChild(elem('span', { class: 'trusted-label' }, t.serverName));
+  if (t.isNew) line.appendChild(elem('span', { class: 'trusted-new pill' }, 'new'));
+  body.appendChild(line);
+  const meta = elem('div', { class: 'trusted-meta' });
+  meta.appendChild(elem('span', { class: 'trusted-domains' }, t.domains.join(', ')));
+  meta.appendChild(elem('span', { class: 'sep', 'aria-hidden': 'true' }, '\u00a0· '));
+  meta.appendChild(
+    t.source
+      ? elem('span', { class: 'trusted-source' }, `via ${t.source.slug} on ${t.source.origin}`)
+      : elem('span', { class: 'trusted-source is-local' }, 'on this computer'),
   );
-  li.appendChild(elem('span', { class: 'trusted-source' }, t.source ? `via ${t.source.slug} on ${t.source.origin}` : 'on this computer'));
-  if (t.isNew) li.appendChild(elem('span', { class: 'trusted-new' }, 'new'));
+  body.appendChild(meta);
+  li.appendChild(body);
+
+  const actions = elem('div', { class: 'row-actions' });
   if (t.identityHash && t.accountDerived && onAlwaysAsk) {
-    const ask = elem('button', { 'data-action': 'always-ask', 'aria-pressed': String(!!t.alwaysAsk) }, t.alwaysAsk ? 'stop always asking' : 'always ask');
+    const ask = elem('button', { class: 'btn-ghost', 'data-action': 'always-ask', 'aria-pressed': String(!!t.alwaysAsk) }, t.alwaysAsk ? 'stop always asking' : 'always ask');
     ask.addEventListener('click', () => onAlwaysAsk(t.identityHash!, !t.alwaysAsk));
-    li.appendChild(ask);
+    actions.appendChild(ask);
   }
   if (t.identityHash && onForget) {
-    const forget = elem('button', { 'data-action': 'forget-mcp' }, 'forget this MCP');
+    const forget = elem('button', { class: 'btn-ghost is-destructive', 'data-action': 'forget-mcp', 'aria-label': `Forget ${t.serverName}` }, 'Forget');
     forget.addEventListener('click', () => {
       void Promise.resolve(onForget(t.identityHash!)).then((ok) => {
-        if (ok === false) li.appendChild(elem('p', { role: 'alert', class: 'action-error' }, 'Could not forget this MCP. Try again.'));
+        if (ok === false) body.appendChild(elem('p', { role: 'alert', class: 'action-error' }, 'Could not forget this MCP. Try again.'));
       });
     });
-    li.appendChild(forget);
+    actions.appendChild(forget);
   }
   // Revoke button — only when both an onRevoke callback and an identityHash
   // are available (older tests/callers get the read-only list as before).
   if (onRevoke && !onForget && t.identityHash) {
     const btn = elem(
       'button',
-      { 'data-action': 'revoke', 'data-identity-hash': t.identityHash, title: 'Revoke trust' },
-      '✕',
+      {
+        class: 'btn-ghost is-destructive',
+        'data-action': 'revoke',
+        'data-identity-hash': t.identityHash,
+        title: 'Revoke trust',
+        'aria-label': `Revoke trust for ${t.serverName}`,
+      },
+      'Revoke',
     );
     btn.addEventListener('click', () => {
       // Inline confirmation — the popup is too small for a modal.
       if (!window.confirm(`Revoke trust for ${t.serverName}?`)) return;
       onRevoke(t.identityHash!);
     });
-    li.appendChild(btn);
+    actions.appendChild(btn);
   }
+  if (actions.childElementCount > 0) li.appendChild(actions);
   return li;
 }
 
@@ -880,6 +901,70 @@ function statusDot(connected: boolean): HTMLElement {
   });
 }
 
+/** Lucide `trash-2`, drawn in `currentColor`; decorative (its button carries the label). */
+function trashIcon(): SVGSVGElement {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  for (const [k, v] of Object.entries({
+    width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+    'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true',
+  })) svg.setAttribute(k, v);
+  for (const d of ['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6', 'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2', 'M10 11v6', 'M14 11v6']) {
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  }
+  return svg;
+}
+
+/**
+ * A URL in a narrow caption: a `<wbr>` before each path `/`, so it wraps as
+ * `wss://host` + `/path` instead of mid-hostname. Text nodes only — the URL
+ * is still exactly the element's `textContent`, and nothing is parsed as HTML.
+ */
+function breakableUrl(url: string): HTMLElement {
+  const span = elem('span', { class: 'bridge-url' });
+  const scheme = url.indexOf('://');
+  const head = scheme >= 0 ? scheme + 3 : 0;
+  const pieces = url.slice(head).split('/');
+  span.appendChild(document.createTextNode(url.slice(0, head) + pieces[0]));
+  for (const piece of pieces.slice(1)) {
+    span.appendChild(document.createElement('wbr'));
+    span.appendChild(document.createTextNode(`/${piece}`));
+  }
+  return span;
+}
+
+/**
+ * A bridge row's body: the name on line 1 and, on line 2, the link state in
+ * WORDS (a dot is never the only carrier of a state) and the URL. `url` is
+ * omitted when the name already is the URL, so it is never shown twice.
+ */
+function bridgeBody(
+  name: string,
+  { connected, url, source, refusal }: { connected?: boolean; url?: string; source?: string; refusal?: string },
+): HTMLElement {
+  const body = elem('div', { class: 'bridge-body' });
+  const line = elem('div', { class: 'bridge-line' });
+  line.appendChild(elem('span', { class: 'bridge-name' }, name));
+  if (source) line.appendChild(elem('span', { class: 'bridge-source pill' }, source));
+  body.appendChild(line);
+  const parts: HTMLElement[] = [];
+  if (connected !== undefined) parts.push(elem('span', { class: 'bridge-state' }, connected ? 'Connected' : 'Offline'));
+  if (url !== undefined && url !== name) parts.push(breakableUrl(url));
+  if (parts.length > 0) {
+    const meta = elem('div', { class: 'bridge-meta' });
+    parts.forEach((part, i) => {
+      if (i > 0) meta.appendChild(elem('span', { class: 'sep', 'aria-hidden': 'true' }, '\u00a0· '));
+      meta.appendChild(part);
+    });
+    body.appendChild(meta);
+  }
+  const refused = refusalLine(refusal);
+  if (refused) body.appendChild(refused);
+  return body;
+}
+
 /**
  * The bridges section: where this browser is willing to answer MCPs from.
  *
@@ -893,17 +978,20 @@ function statusDot(connected: boolean): HTMLElement {
  * bridge URL is pasted into this popup.
  */
 function appendBridges(root: HTMLElement, bridges: BridgesView): void {
-  root.appendChild(elem('h3', {}, 'Bridges'));
+  root.appendChild(elem('h3', { class: 'section-title' }, 'Bridges'));
 
   if (bridges.onConnect && bridges.connectOrigins?.length) {
-    const connect = elem('section', { class: 'bridge-connect' });
+    const connect = elem('section', { class: 'bridge-connect card' });
     connect.appendChild(elem('p', { class: 'hint' }, 'Connect this browser to your account'));
+    const field = elem('label', { class: 'field' });
+    field.appendChild(elem('span', { class: 'field-label' }, 'Browser name'));
     const name = elem('input', { type: 'text', class: 'bridge-connect-name', 'aria-label': 'Browser name' });
     (name as HTMLInputElement).value = bridges.connectName ?? '';
+    field.appendChild(name);
     const message = elem('p', { class: 'bridge-connect-error hint', 'aria-live': 'polite' }, bridges.connectStatus ?? '');
-    connect.appendChild(name);
+    connect.appendChild(field);
     for (const origin of bridges.connectOrigins) {
-      const button = elem('button', { class: 'bridge-connect-start' }, `Connect to ${new URL(origin).host}`);
+      const button = elem('button', { class: 'bridge-connect-start btn-primary' }, `Connect to ${new URL(origin).host}`);
       button.addEventListener('click', () => {
         (button as HTMLButtonElement).disabled = true;
         message.textContent = '';
@@ -928,40 +1016,56 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
   // when a dead local concentrator — the one every MCP on this machine needs —
   // stops being visible.
   if (bridges.localConnected !== undefined) local.appendChild(statusDot(bridges.localConnected));
-  local.appendChild(elem('span', { class: 'bridge-url' }, 'localhost (always on)'));
+  local.appendChild(
+    bridgeBody('localhost (always on)', bridges.localConnected === undefined ? {} : { connected: bridges.localConnected }),
+  );
   ul.appendChild(local);
 
   if (bridges.handoff) {
     const h = bridges.handoff;
     const li = elem('li', { class: 'bridge remote handoff' });
     if (h.connected !== undefined) li.appendChild(statusDot(h.connected));
-    li.appendChild(elem('span', { class: 'bridge-url' }, `${h.name} — ${h.url}`));
-    li.appendChild(elem('span', { class: 'bridge-source hint' }, ' from ContextMint'));
-    const refused = refusalLine(h.refusal);
-    if (refused) li.appendChild(refused);
+    li.appendChild(
+      bridgeBody(h.name, {
+        url: h.url,
+        source: 'from ContextMint',
+        ...(h.connected === undefined ? {} : { connected: h.connected }),
+        ...(h.refusal === undefined ? {} : { refusal: h.refusal }),
+      }),
+    );
     ul.appendChild(li);
   }
 
   for (const t of bridges.targets) {
     const li = elem('li', { class: t.enabled ? 'bridge remote' : 'bridge remote disabled' });
     li.setAttribute('data-target-id', t.id);
+    if (t.connected !== undefined) li.appendChild(statusDot(t.connected));
+    li.appendChild(
+      bridgeBody(t.label ?? t.url, {
+        url: t.url,
+        ...(t.connected === undefined ? {} : { connected: t.connected }),
+        ...(t.refusal === undefined ? {} : { refusal: t.refusal }),
+      }),
+    );
+    const actions = elem('div', { class: 'row-actions' });
+    if (bridges.onRemove) {
+      // An icon button (Lucide `trash-2`), so the row's URL keeps the width;
+      // the word stays in the DOM for anything reading text, the label for AT.
+      const rm = elem('button', { class: 'bridge-remove btn-ghost btn-icon is-destructive', 'aria-label': `remove ${t.url}`, title: 'Remove' });
+      rm.appendChild(trashIcon());
+      rm.appendChild(elem('span', { class: 'visually-hidden' }, 'Remove'));
+      rm.addEventListener('click', () => bridges.onRemove!(t.id));
+      actions.appendChild(rm);
+    }
     if (bridges.onToggle) {
-      const box = elem('input', { type: 'checkbox', class: 'bridge-enabled' });
+      const box = elem('input', { type: 'checkbox', class: 'bridge-enabled', role: 'switch', 'aria-label': `Use ${t.label ?? t.url}` });
       (box as HTMLInputElement).checked = t.enabled;
       box.addEventListener('change', () => {
         bridges.onToggle!(t.id, (box as HTMLInputElement).checked);
       });
-      li.appendChild(box);
+      actions.appendChild(box);
     }
-    if (t.connected !== undefined) li.appendChild(statusDot(t.connected));
-    li.appendChild(elem('span', { class: 'bridge-url' }, t.label ? `${t.label} — ${t.url}` : t.url));
-    if (bridges.onRemove) {
-      const rm = elem('button', { class: 'bridge-remove', 'aria-label': `remove ${t.url}` }, '✕');
-      rm.addEventListener('click', () => bridges.onRemove!(t.id));
-      li.appendChild(rm);
-    }
-    const refused = refusalLine(t.refusal);
-    if (refused) li.appendChild(refused);
+    if (actions.childElementCount > 0) li.appendChild(actions);
     ul.appendChild(li);
   }
   root.appendChild(ul);
@@ -984,7 +1088,7 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
  */
 function appendVersionMismatches(root: HTMLElement, list: readonly VersionMismatch[]): void {
   if (list.length === 0) return;
-  root.appendChild(elem('h3', { class: 'mismatch-heading' }, 'Refused — out of date'));
+  root.appendChild(elem('h3', { class: 'section-title mismatch-heading' }, 'Refused — out of date'));
   const ul = elem('ul', { class: 'mismatch-list' });
   // Newest first, so a popup at the cap still shows what just happened.
   for (const m of [...list].sort((a, b) => b.at - a.at)) {
@@ -1028,7 +1132,7 @@ function appendVaultLoss(root: HTMLElement, loss: VaultLossView | undefined): vo
         "extension pin from each MCP if it asks.",
     ),
   );
-  const dismiss = elem('button', { 'data-action': 'dismiss-vault-loss' }, 'Got it');
+  const dismiss = elem('button', { class: 'btn-secondary', 'data-action': 'dismiss-vault-loss' }, 'Got it');
   dismiss.addEventListener('click', loss.onDismiss);
   box.appendChild(dismiss);
   root.appendChild(box);
@@ -1039,7 +1143,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
 
   if (state.mode === 'account-mcp-card') {
     const c = state.card;
-    root.appendChild(elem('h3', {}, c.kind === 'scope-update'
+    root.appendChild(elem('h3', { class: 'screen-title' }, c.kind === 'scope-update'
       ? `${c.registrationSlug} wants wider access through ${c.accountSlug}`
       : `${c.registrationSlug} wants to act as ${c.accountSlug}`));
     root.appendChild(elem('p', {}, `On ${c.scope.domains.map((d) => `${d} and its subdomains`).join(', ')} via ${c.origin}.`));
@@ -1058,34 +1162,38 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
     ];
     root.appendChild(elem('p', { class: 'hint' }, `Requested access: ${requested.join(', ') || 'none'}.`));
     const actions = elem('div', { class: 'account-card-actions' });
-    const approve = elem('button', { 'data-action': 'allow-account-mcp' }, c.kind === 'scope-update' ? 'Grant' : 'Allow');
+    const approve = elem('button', { class: 'btn-primary', 'data-action': 'allow-account-mcp' }, c.kind === 'scope-update' ? 'Grant' : 'Allow');
     approve.addEventListener('click', state.onApprove);
-    const notNow = elem('button', { 'data-action': 'deny-account-mcp' }, 'Not now');
+    const notNow = elem('button', { class: 'btn-secondary', 'data-action': 'deny-account-mcp' }, 'Not now');
     notNow.addEventListener('click', state.onNotNow);
-    actions.append(approve, notNow);
+    actions.append(notNow, approve);
     root.appendChild(actions);
     return;
   }
 
   if (state.mode === 'account-card') {
     const name = state.card.account.displayName;
-    root.appendChild(elem('h3', {}, state.card.keyChanged ? `The account key for ${name} changed. Approve again?` : 'Use this account in your browser?'));
+    root.appendChild(elem('h3', { class: 'screen-title' }, state.card.keyChanged ? `The account key for ${name} changed. Approve again?` : 'Use this account in your browser?'));
     root.appendChild(elem('p', { class: 'hint' }, `Use your browser for every MCP in ${state.card.account.slug}, including ones you add later, on the sites you approve for each.`));
     const details = elem('dl', { class: 'account-card-details' });
-    const row = (label: string, value: string): void => { details.appendChild(elem('dt', {}, label)); details.appendChild(elem('dd', {}, value)); };
+    // Identifiers (the gateway origin, the key fingerprint) are set in mono.
+    const row = (label: string, value: string, mono = false): void => {
+      details.appendChild(elem('dt', {}, label));
+      details.appendChild(elem('dd', mono ? { class: 'mono' } : {}, value));
+    };
     row('Account', `${name} (${state.card.account.slug})`);
     row('Confirmed by', state.card.account.confirmedBy);
-    row('Gateway', state.card.origin);
+    row('Gateway', state.card.origin, true);
     row('Bridged registrations', String(state.card.account.bridgedRegistrations));
-    row('Key fingerprint', state.card.account.kid);
+    row('Key fingerprint', state.card.account.kid, true);
     root.appendChild(details);
     root.appendChild(elem('p', { class: 'hint' }, 'The bridge only reads a tab when an MCP asks, and only on sites approved for that MCP.'));
     const actions = elem('div', { class: 'account-card-actions' });
-    const approve = elem('button', { 'data-action': 'approve-account' }, 'Approve');
+    const approve = elem('button', { class: 'btn-primary', 'data-action': 'approve-account' }, 'Approve');
     approve.addEventListener('click', state.onApprove);
-    const notNow = elem('button', { 'data-action': 'dismiss-account' }, 'Not now');
+    const notNow = elem('button', { class: 'btn-secondary', 'data-action': 'dismiss-account' }, 'Not now');
     notNow.addEventListener('click', state.onNotNow);
-    actions.append(approve, notNow);
+    actions.append(notNow, approve);
     root.appendChild(actions);
     return;
   }
@@ -1094,7 +1202,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
     appendVaultLoss(root, state.vaultLoss);
     appendVersionMismatches(root, state.mismatches ?? []);
     root.appendChild(
-      elem('p', {}, 'No MCP servers connected. Start an MCP server, then refresh.'),
+      elem('p', { class: 'empty-state' }, 'No MCP servers connected. Start an MCP server, then refresh.'),
     );
     if (state.bridges) appendBridges(root, state.bridges);
     return;
@@ -1103,7 +1211,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
   if (state.mode === 'status') {
     appendVaultLoss(root, state.vaultLoss);
     appendVersionMismatches(root, state.mismatches ?? []);
-    root.appendChild(elem('h3', {}, 'Trusted MCPs'));
+    root.appendChild(elem('h3', { class: 'section-title' }, 'Trusted MCPs'));
     if (state.trusted.length === 0) {
       root.appendChild(elem('p', { class: 'hint' }, 'No trusted MCPs yet.'));
     } else {
@@ -1148,15 +1256,15 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
       }
     }
     if (state.accounts?.length) {
-      root.appendChild(elem('h3', {}, 'Accounts'));
+      root.appendChild(elem('h3', { class: 'section-title' }, 'Accounts'));
       for (const account of state.accounts) {
-        const row = elem('section', { class: 'trusted-account' });
-        row.appendChild(elem('span', {}, `${account.slug} on ${account.origin}`));
+        const row = elem('section', { class: 'trusted-account card' });
+        row.appendChild(elem('span', { class: 'account-name' }, `${account.slug} on ${account.origin}`));
         const also = elem('input', { type: 'checkbox', 'data-action': 'also-forget-mcps' });
         const label = elem('label');
         label.append(also, document.createTextNode(' also forget MCPs from this account'));
         row.appendChild(label);
-        const forget = elem('button', { 'data-action': 'forget-account' }, 'forget this account');
+        const forget = elem('button', { class: 'btn-ghost is-destructive', 'data-action': 'forget-account' }, 'forget this account');
         forget.addEventListener('click', () => {
           void Promise.resolve(state.onForgetAccount?.(account.origin, account.accountId, also.checked)).then((ok) => {
             if (ok === false) row.appendChild(elem('p', { role: 'alert', class: 'action-error' }, 'Could not forget this account. Try again.'));
@@ -1173,7 +1281,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
   if (state.mode === 'scope-update') {
     const { serverName, pending, previous, onGrant, onKeepAsIs } = state;
     root.appendChild(
-      elem('h3', {}, `${serverName} wants to expand its access`),
+      elem('h3', { class: 'screen-title' }, `${serverName} wants to expand its access`),
     );
     // Reuse the existing diff renderer — `pending` is a ScopeSnapshot which
     // is structurally compatible with PendingPair for the diff fields.
@@ -1210,9 +1318,9 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
     }
 
     const btnRow = elem('div', { class: 'btn-row' });
-    const keepBtn = elem('button', { 'data-action': 'keep-as-is', autofocus: 'true' }, 'Keep as is');
+    const keepBtn = elem('button', { class: 'btn-secondary', 'data-action': 'keep-as-is', autofocus: 'true' }, 'Keep as is');
     keepBtn.addEventListener('click', onKeepAsIs);
-    const grantBtn = elem('button', { 'data-action': 'grant' }, 'Grant');
+    const grantBtn = elem('button', { class: 'btn-primary', 'data-action': 'grant' }, 'Grant');
     grantBtn.addEventListener('click', onGrant);
     btnRow.appendChild(keepBtn);
     btnRow.appendChild(grantBtn);
@@ -1227,7 +1335,7 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
   root.appendChild(
     elem(
       'h3',
-      {},
+      { class: 'screen-title' },
       previous
         ? `${pending.serverName} wants to UPDATE its access`
         : 'Approve new MCP connection?',
@@ -1325,12 +1433,12 @@ export function renderPopup(root: HTMLElement, state: PopupState): void {
 
   const btnRow = elem('div', { class: 'btn-row' });
 
-  const cancel = elem('button', { 'data-action': 'cancel', autofocus: 'true' }, 'Cancel');
+  const cancel = elem('button', { class: 'btn-secondary', 'data-action': 'cancel', autofocus: 'true' }, 'Cancel');
   cancel.addEventListener('click', onCancel);
 
   const approve = elem(
     'button',
-    { 'data-action': 'approve' },
+    { class: 'btn-primary', 'data-action': 'approve' },
     previous ? 'Approve update' : 'Approve',
   );
   approve.addEventListener('click', onApprove);

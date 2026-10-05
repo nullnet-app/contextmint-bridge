@@ -18,6 +18,17 @@ Every image is a 24-bit PNG with no alpha channel, as the store requires
 (`packages/extension-chrome/tests/store-assets.test.ts` checks the sizes and
 the format).
 
+## Popup reference shots (not uploaded)
+
+`popup/` holds the bare popup in every state worth reviewing — the trusted list
+with long names and the Inactive disclosure open, Connect waiting for the
+gateway's Confirm, connected with an account, a pairing prompt, a scope update,
+the key-changed account card, a vouched card, and the warnings — each in light
+and dark (`<scene>-<light|dark>.png`), plus `-end.png` where the popup scrolls
+past 600px, showing its foot. They are the visual reference for a popup change,
+rendered by the same command below; the layout they show is the design system's
+ExtensionPopup spec (`system/ui_kits/contextmint/components/ExtensionPopup.md`).
+
 ## Regenerating the images
 
 The screenshots are rendered from the **real popup**: the built
@@ -38,8 +49,8 @@ install locations. Commit the changed PNGs with the change that caused them.
 The generator lives in `packages/extension-chrome/store-assets/`:
 
 - `scenes.ts` — the popup states shown (trusted MCPs, a pairing prompt, a
-  scope-update offer) and each screenshot's headline. Every name and domain is
-  illustrative (`example.com`).
+  scope-update offer, and the `popup/` reference states) and each screenshot's
+  headline. Every name and domain is illustrative (`example.com`).
 - `chrome-stub.ts`, `seed.ts` — the `chrome.*` stub and the vault seeding.
 - `canvas.ts` — the branded canvases and the promo tile.
 - `png.ts` — re-encodes Chrome's RGBA screenshots as 24-bit RGB.

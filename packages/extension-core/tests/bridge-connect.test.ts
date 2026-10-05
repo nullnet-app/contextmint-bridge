@@ -7,7 +7,7 @@ import {
   bridgeConnectStartMessage,
   connectPageUrl,
 } from '../src/bridge-connect.js';
-import { BRIDGE_CONNECT_STATUS_KEY, configuredConnectOrigins, onBridgeConnectApproval, PENDING_BRIDGE_CONNECT_KEY, validConnectApproval, type ConnectApprovalDeps } from '../src/background/bridge-connect.js';
+import { BRIDGE_CONNECT_STATUS_KEY, CONNECT_CONFIRM_STATUS, beginBridgeConnect, configuredConnectOrigins, onBridgeConnectApproval, PENDING_BRIDGE_CONNECT_KEY, validConnectApproval, type ConnectApprovalDeps } from '../src/background/bridge-connect.js';
 import { bridgeConnectRelayMessage } from '../src/bridge-connect-relay.js';
 import { freshVault, installChromeLocal, chromeSession } from './helpers/vault.js';
 import { loadOrCreateExtensionIdentity } from '../src/extension-identity.js';
@@ -275,6 +275,32 @@ describe('configured Connect gateway origins', () => {
       'https://policy.example', 'http://insecure.example', 'https://path.example/path', 'https://policy.example',
     ] }) } } });
     expect(await configuredConnectOrigins()).toEqual(['https://mcp.nullnet.app', 'https://policy.example']);
+    vi.unstubAllGlobals();
+  });
+});
+
+// The design handoff fixes what the popup says once Connect has opened the
+// gateway's tab (nullnet-design-system HANDOFF.md, Part 2 → "What the extension
+// says"): "Confirm in the tab that opened", in Chrome and Safari alike.
+describe('beginBridgeConnect — the popup status while the Connect tab is open', () => {
+  const requestId = 'bcr_00112233445566778899aabbccddeeff';
+
+  beforeEach(async () => {
+    freshVault();
+    installChromeLocal();
+    (globalThis as { chrome: Record<string, unknown> }).chrome.tabs = { create: vi.fn(async () => ({ id: 41 })) };
+    state.extIdentity = await loadOrCreateExtensionIdentity();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      requestId,
+      nonce: 'AAAAAAAAAAAAAAAAAAAAAA',
+      connectUrl: `${ORIGIN}/bridge/connect?request=${requestId}`,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+  });
+
+  it('says "Confirm in the tab that opened"', async () => {
+    expect(CONNECT_CONFIRM_STATUS).toBe('Confirm in the tab that opened');
+    expect(await beginBridgeConnect(ORIGIN, 'Chrome on Mac')).toEqual({ ok: true });
+    expect(chromeSession().data[BRIDGE_CONNECT_STATUS_KEY]).toBe('Confirm in the tab that opened');
     vi.unstubAllGlobals();
   });
 });

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import puppeteer, { type Browser } from 'puppeteer-core';
 import { CHROME_TARGET } from '../build.js';
-import { SCENES, SCREENSHOTS, type PopupScene, type SceneName } from './scenes.js';
+import { POPUP_SHOTS, SCENES, SCREENSHOTS, type PopupScene, type SceneName } from './scenes.js';
 import { chromeStubSource } from './chrome-stub.js';
 import { promoTileHtml, screenshotHtml } from './canvas.js';
 import { stripAlpha } from './png.js';
@@ -35,8 +35,8 @@ const OUT = join(ROOT, 'docs', 'store-assets');
 
 /** Chrome's popup never grows past 600px tall; neither does ours. */
 const POPUP_MAX_HEIGHT = 600;
-/** body `min-width: 380px` + 12px padding either side. */
-const POPUP_WIDTH = 404;
+/** popup.html's `body { width: 380px }`. */
+const POPUP_WIDTH = 380;
 /** Captured at 2x so the enlarged popup on the canvas stays sharp. */
 const POPUP_SCALE = 2;
 
@@ -82,6 +82,9 @@ async function routesFor(scene: PopupScene, version: string, seedJs: string): Pr
     version,
     trusted: scene.trusted,
     remoteTargets: scene.remoteTargets,
+    accounts: scene.accounts ?? [],
+    derived: scene.derived ?? [],
+    vaultLoss: scene.vaultLoss ?? null,
   };
   return {
     '/popup.html': {
@@ -89,6 +92,8 @@ async function routesFor(scene: PopupScene, version: string, seedJs: string): Pr
       body: popupHtml.replace('</head>', `  ${stub}\n  </head>`),
     },
     '/popup.js': { type: 'text/javascript', body: await readFile(join(DIST, 'popup.js')) },
+    // The header's mark, as the extension serves it from dist/icons/.
+    '/icons/icon.svg': { type: 'image/svg+xml', body: await readFile(join(DIST, 'icons', 'icon.svg')) },
     '/stub.js': { type: 'text/javascript', body: chromeStubSource(scene, version) },
     '/seed.js': { type: 'text/javascript', body: seedJs },
     '/seed.html': {
@@ -121,13 +126,15 @@ async function capturePopup(
   browser: Browser,
   origin: string,
   scene: PopupScene,
-): Promise<{ png: Buffer; width: number; height: number }> {
+  scheme: 'light' | 'dark' = 'light',
+): Promise<{ png: Buffer; width: number; height: number; end?: Buffer }> {
   // A fresh profile per scene: the vault is per-origin IndexedDB, and every
   // scene is served from the same origin.
   const context = await browser.createBrowserContext();
   try {
     const page = await context.newPage();
     page.on('pageerror', (e) => console.error('[popup]', e));
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
     await page.setViewport({
       width: POPUP_WIDTH,
       height: POPUP_MAX_HEIGHT,
@@ -155,6 +162,8 @@ async function capturePopup(
     }
     // Nothing focused: a focus ring on the default button is not the popup at rest.
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    // At rest, too: the disclosure's rise would be captured half-faded.
+    await page.evaluate(() => document.getAnimations().forEach((a) => a.finish()));
 
     const height = Math.min(
       POPUP_MAX_HEIGHT,
@@ -164,7 +173,23 @@ async function capturePopup(
     const png = Buffer.from(
       await page.screenshot({ clip: { x: 0, y: 0, width: POPUP_WIDTH, height } }),
     );
-    return { png, width: POPUP_WIDTH, height };
+    // Past 600px the body scrolls under a sticky header; show its end as well.
+    const scrolls = await page.evaluate(() => {
+      const b = document.body;
+      if (b.scrollHeight <= b.clientHeight) return false;
+      b.scrollTop = b.scrollHeight;
+      return true;
+    });
+    const end = scrolls
+      ? Buffer.from(
+          await page.screenshot({
+            clip: { x: 0, y: 0, width: POPUP_WIDTH, height },
+            // Growing the viewport to fit the clip would undo the scroll.
+            captureBeyondViewport: false,
+          }),
+        )
+      : undefined;
+    return { png, width: POPUP_WIDTH, height, ...(end ? { end } : {}) };
   } finally {
     await context.close();
   }
@@ -226,6 +251,12 @@ async function main(): Promise<void> {
       await write(shot.file, await renderHtml(browser, html, 1280, 800));
     }
     await write('promo-small-440x280.png', await renderHtml(browser, promoTileHtml(), 440, 280));
+    for (const shot of POPUP_SHOTS) {
+      routes = await routesFor(SCENES[shot.scene], manifest.version, seedJs);
+      const popup = await capturePopup(browser, origin, SCENES[shot.scene], shot.scheme);
+      await write(shot.file, stripAlpha(popup.png));
+      if (popup.end) await write(shot.file.replace(/\.png$/, '-end.png'), stripAlpha(popup.end));
+    }
   } finally {
     await browser.close();
     server.close();
