@@ -217,6 +217,12 @@ describe('apple/project.yml: App Store keys', () => {
       /^public\.app-category\./,
     );
   });
+
+  it('the Mac app is listed under Productivity, matching App Store Connect', () => {
+    expect(targets['ContextMintBridgeMac']?.info?.properties['LSApplicationCategoryType']).toBe(
+      'public.app-category.productivity',
+    );
+  });
 });
 
 describe('apple/: the appex', () => {

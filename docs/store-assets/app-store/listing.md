@@ -73,10 +73,10 @@ mcp,ai,llm,model context protocol,safari extension,tabs,cookies,login,fetchproxy
 
 ## Category
 
-Primary **Developer Tools** (it is what `LSApplicationCategoryType` in
-`apple/project.yml` declares), secondary **Productivity**. If App Store Connect
-offers a "Safari Extensions" category at O2, take it instead and change
-`LSApplicationCategoryType` with it (plan Q3).
+Primary **Productivity** (set in App Store Connect on 2026-10-05; it is what
+`LSApplicationCategoryType` in `apple/project.yml` declares, and
+`tests/apple-project.test.ts` pins the two together), which settles plan Q3.
+Change both together if the category ever moves.
 
 ## Privacy Policy URL
 
