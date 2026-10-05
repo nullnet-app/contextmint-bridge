@@ -86,6 +86,18 @@ published.
 The bridge's version line is its own (it started at 1.0.0), independent of
 fetchproxy's; compatibility is the protocol number, not a version comparison.
 
+The same `v*` tag also starts `.github/workflows/deploy-safari-app.yml`, a
+separate workflow so it never reddens the attach: it archives `apple/` for iOS
+and macOS on the shared self-hosted Mac (environment `testflight`), signs
+manually with the owner's App Store profiles by exact name (never
+`-allowProvisioningUpdates`), and uploads both builds to TestFlight. The build
+number is that workflow's `run_number*100+run_attempt`. Before signing,
+`apple/tools/testflight-preflight.ts` names every missing App Store Connect
+item, profile or certificate at once, and it refuses an archive whose app,
+appex or `manifest.json` disagrees with the tag. App Store submission stays
+manual. A green tag does not mean a TestFlight build: check the run, or
+`asc builds list --profile Nullnet`.
+
 ## Icons
 
 The extension icons in `packages/extension-chrome/icons/` are copies of the

@@ -123,6 +123,15 @@ check a task runs first. If the step isn't done, that task stops at it.
   shared distribution certificate and the CI dev certificate (memory:
   `nullnet Apple signing`). While you're in App Store Connect, look at the web Safari
   Web Extension Packager and note whether it has an API (D1's fallback).
+
+  **As created (2026-10-05):** the macOS *container* profiles are named
+  `ContextMint Bridge App Mac App Store` and `ContextMint Bridge App Mac Dev`, because
+  `ContextMint Bridge Mac App Store` / `ContextMint Bridge Mac Dev` already sign
+  ContextMint for Mac's embedded appex (`app.nullnet.mcphost.bridge`) and must not be
+  touched until T7. Every other name is as above. T5's workflow and
+  `apple/tools/testflight-preflight.ts` use these names. The App Store Connect key
+  secret is `ASC_PRIVATE_KEY_B64` (not `ASC_KEY_P8_B64`, as O4 says), as in
+  mcp-host-app.
 - **O4 — `testflight` GitHub environment in nullnet-app/contextmint-bridge**, with a
   deployment branch policy of `main` + `v*` tags and no reviewers, matching
   mcp-host-app's. A workflow that names an environment that doesn't exist **creates**

@@ -336,7 +336,9 @@ describe('apple/: the app icon (Task 1 step 7)', () => {
    */
   const SET = join(APPLE, 'App', 'Assets.xcassets', 'AppIcon.appiconset');
   const sha256 = (file: string): string =>
-    createHash('sha256').update(readFileSync(join(SET, file))).digest('hex');
+    createHash('sha256')
+      .update(readFileSync(join(SET, file)))
+      .digest('hex');
   /** Width, height and PNG colour type, from the IHDR chunk. */
   const png = (file: string): { width: number; height: number; colourType: number } => {
     const bytes = readFileSync(join(SET, file));
@@ -407,6 +409,10 @@ describe('apple/: the app icon (Task 1 step 7)', () => {
   it('the set holds nothing but the icons it names', () => {
     const named = contents.images.map((i) => i.filename).sort();
     expect(contents.images).toHaveLength(1 + MAC_SIZES.length);
-    expect(readdirSync(SET).filter((f) => f !== 'Contents.json').sort()).toEqual(named);
+    expect(
+      readdirSync(SET)
+        .filter((f) => f !== 'Contents.json')
+        .sort(),
+    ).toEqual(named);
   });
 });
