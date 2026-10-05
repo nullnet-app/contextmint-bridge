@@ -32,6 +32,7 @@ import {
 } from '../remote-targets.js';
 import { currentPlatform } from '../platform.js';
 import { DEFAULT_BRIDGE_ORIGIN } from '../bridge-connect-contract.js';
+import { gatewayOriginFor } from '../bridge-gateway.js';
 import { HIGH_RISK_KEYWORDS } from '../lib/scope.js';
 
 /**
@@ -966,6 +967,50 @@ function bridgeBody(
 }
 
 /**
+ * The configured target this browser is healthily paired through for a
+ * Connect `origin`, if any: on that gateway (its `wss://` URL maps back to the
+ * origin), enabled, and with an OPEN link the background vouched for and no
+ * refusal. Anything less — disabled, refused (`4004`), or not up — returns
+ * none, so the Connect card stays the prominent recovery path. "Not up"
+ * includes ordinary re-dial backoff: the link statuses cannot tell that apart
+ * from a revoked credential being re-dialled into `401` forever, and the
+ * revoked case is the one that must not lose its Connect.
+ */
+export function healthyConnectTarget(targets: readonly RemoteTargetView[], origin: string): RemoteTargetView | undefined {
+  return targets.find(
+    (t) => t.enabled && t.connected === true && t.refusal === undefined && gatewayOriginFor(t.url) === origin,
+  );
+}
+
+/**
+ * A quiet "Reconnect this browser" under a healthily paired row: the same
+ * Connect flow, under the name this browser was paired with, for a deliberate
+ * re-pair. Its outcome is spoken in a polite live region beneath it.
+ */
+function appendReconnect(body: HTMLElement, origin: string, t: RemoteTargetView, bridges: BridgesView): void {
+  const host = new URL(origin).host;
+  const button = elem(
+    'button',
+    { class: 'bridge-reconnect btn-ghost', 'aria-label': `Reconnect this browser to ${host}` },
+    'Reconnect this browser',
+  );
+  const message = elem('p', { class: 'bridge-connect-error hint', 'aria-live': 'polite' }, '');
+  button.addEventListener('click', () => {
+    (button as HTMLButtonElement).disabled = true;
+    message.textContent = '';
+    void bridges.onConnect!(origin, t.label ?? bridges.connectName ?? '').then((problem) => {
+      (button as HTMLButtonElement).disabled = false;
+      if (problem) message.textContent = problem;
+    }).catch(() => {
+      (button as HTMLButtonElement).disabled = false;
+      message.textContent = 'Could not start Connect. Try again.';
+    });
+  });
+  body.appendChild(button);
+  body.appendChild(message);
+}
+
+/**
  * The bridges section: where this browser is willing to answer MCPs from.
  *
  * Loopback is rendered as a fixed row rather than an entry, because it is not
@@ -975,12 +1020,25 @@ function bridgeBody(
  *
  * Connect offers the configured gateways as explicit choices and asks for a
  * display name. The browser completes pairing through the gateway; no token or
- * bridge URL is pasted into this popup.
+ * bridge URL is pasted into this popup. A gateway this browser is already
+ * healthily paired with ({@link healthyConnectTarget}) is left out of the card
+ * and offered as a quiet Reconnect on its row instead.
  */
 function appendBridges(root: HTMLElement, bridges: BridgesView): void {
   root.appendChild(elem('h3', { class: 'section-title' }, 'Bridges'));
 
-  if (bridges.onConnect && bridges.connectOrigins?.length) {
+  // Origins this browser is already healthily paired with get a quiet
+  // Reconnect on their row instead of a Connect button: Connect mints a new
+  // credential and revokes the current one, so offering it prominently while
+  // that one works only invites churn.
+  const pairedOrigins = new Map<string, string>(); // target id -> origin
+  for (const origin of bridges.onConnect ? bridges.connectOrigins ?? [] : []) {
+    const target = healthyConnectTarget(bridges.targets, origin);
+    if (target && !pairedOrigins.has(target.id)) pairedOrigins.set(target.id, origin);
+  }
+  const unpairedOrigins = (bridges.connectOrigins ?? []).filter((o) => ![...pairedOrigins.values()].includes(o));
+
+  if (bridges.onConnect && unpairedOrigins.length > 0) {
     const connect = elem('section', { class: 'bridge-connect card' });
     connect.appendChild(elem('p', { class: 'hint' }, 'Connect this browser to your account'));
     const field = elem('label', { class: 'field' });
@@ -990,7 +1048,7 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
     field.appendChild(name);
     const message = elem('p', { class: 'bridge-connect-error hint', 'aria-live': 'polite' }, bridges.connectStatus ?? '');
     connect.appendChild(field);
-    for (const origin of bridges.connectOrigins) {
+    for (const origin of unpairedOrigins) {
       const button = elem('button', { class: 'bridge-connect-start btn-primary' }, `Connect to ${new URL(origin).host}`);
       button.addEventListener('click', () => {
         (button as HTMLButtonElement).disabled = true;
@@ -1007,6 +1065,10 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
     }
     connect.appendChild(message);
     root.appendChild(connect);
+  } else if (bridges.onConnect && bridges.connectStatus) {
+    // The card that normally carries it is hidden; a Connect in flight (or
+    // its outcome) still needs saying.
+    root.appendChild(elem('p', { class: 'bridge-connect-error hint', 'aria-live': 'polite' }, bridges.connectStatus));
   }
 
   const ul = elem('ul', { class: 'bridge-list' });
@@ -1047,6 +1109,8 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
         ...(t.refusal === undefined ? {} : { refusal: t.refusal }),
       }),
     );
+    const pairedOrigin = pairedOrigins.get(t.id);
+    if (pairedOrigin !== undefined) appendReconnect(li.lastElementChild as HTMLElement, pairedOrigin, t, bridges);
     const actions = elem('div', { class: 'row-actions' });
     if (bridges.onRemove) {
       // An icon button (Lucide `trash-2`), so the row's URL keeps the width;

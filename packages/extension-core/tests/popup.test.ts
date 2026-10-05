@@ -1575,6 +1575,101 @@ describe('renderPopup — bridges', () => {
     expect(onToggle).toHaveBeenCalledWith('b1', false);
   });
 
+  // Pressing Connect mints a new credential and revokes this browser's current
+  // one, so a healthy pairing must not be met with a prominent Connect card.
+  describe('Connect when this browser is already connected', () => {
+    const ORIGIN = 'https://mcp.nullnet.app';
+    const paired = { id: 'b1', url: 'wss://mcp.nullnet.app/bridge', label: 'Chrome (personal)', enabled: true };
+
+    it('hides the Connect card for a connected, enabled target on the Connect origin, and offers Reconnect on its row', async () => {
+      const onConnect = vi.fn(async () => null);
+      withBridges({ targets: [{ ...paired, connected: true }], connectOrigins: [ORIGIN], connectName: 'Chrome on Mac', onConnect });
+      expect(container.querySelector('.bridge-connect')).toBeNull();
+      expect(container.querySelector('.bridge-connect-start')).toBeNull();
+      expect(container.textContent).not.toContain('Connect this browser to your account');
+      const row = container.querySelector('.bridge.remote[data-target-id="b1"]')!;
+      const reconnect = row.querySelector<HTMLButtonElement>('button.bridge-reconnect')!;
+      expect(reconnect).not.toBeNull();
+      expect(reconnect.classList.contains('btn-ghost')).toBe(true);
+      expect(reconnect.classList.contains('btn-primary')).toBe(false);
+      expect(reconnect.textContent).toBe('Reconnect this browser');
+      expect(reconnect.getAttribute('aria-label')).toBe('Reconnect this browser to mcp.nullnet.app');
+      reconnect.click();
+      await Promise.resolve();
+      // Same Connect flow, keeping the name this browser was paired under.
+      expect(onConnect).toHaveBeenCalledWith(ORIGIN, 'Chrome (personal)');
+    });
+
+    it('shows a Reconnect problem next to the row', async () => {
+      withBridges({ targets: [{ ...paired, connected: true }], connectOrigins: [ORIGIN], onConnect: async () => 'Gateway said no' });
+      (container.querySelector('button.bridge-reconnect') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(container.querySelector('.bridge.remote .bridge-connect-error')?.textContent).toBe('Gateway said no');
+    });
+
+    it('still surfaces the Connect status when the card is hidden', () => {
+      withBridges({ targets: [{ ...paired, connected: true }], connectOrigins: [ORIGIN], connectStatus: 'Confirm in the tab that opened', onConnect: async () => null });
+      expect(container.querySelector('.bridge-connect')).toBeNull();
+      expect(container.textContent).toContain('Confirm in the tab that opened');
+    });
+
+    it('shows the Connect card when no target is on the Connect origin', () => {
+      withBridges({
+        targets: [{ id: 'o1', url: 'wss://other.example/bridge', enabled: true, connected: true }],
+        connectOrigins: [ORIGIN],
+        onConnect: async () => null,
+      });
+      expect(container.querySelector('.bridge-connect-start')?.textContent).toBe('Connect to mcp.nullnet.app');
+      expect(container.querySelector('button.bridge-reconnect')).toBeNull();
+    });
+
+    it('shows the Connect card when there are no targets', () => {
+      withBridges({ targets: [], connectOrigins: [ORIGIN], onConnect: async () => null });
+      expect(container.querySelector('.bridge-connect-start')).not.toBeNull();
+    });
+
+    it('shows the Connect card when the target is disabled', () => {
+      withBridges({ targets: [{ ...paired, enabled: false, connected: false }], connectOrigins: [ORIGIN], onConnect: async () => null });
+      expect(container.querySelector('.bridge-connect-start')).not.toBeNull();
+      expect(container.querySelector('button.bridge-reconnect')).toBeNull();
+    });
+
+    it('shows the Connect card when the bridge refused this browser (4004)', () => {
+      withBridges({
+        targets: [{ ...paired, connected: false, refusal: 'This bridge is paired with a different browser' }],
+        connectOrigins: [ORIGIN],
+        onConnect: async () => null,
+      });
+      expect(container.querySelector('.bridge-connect-start')).not.toBeNull();
+      expect(container.querySelector('button.bridge-reconnect')).toBeNull();
+    });
+
+    // A revoked credential (4003, then 401 on every re-dial) reads to the
+    // popup as an enabled row that is not up — the recovery path must stay
+    // prominent.
+    it('shows the Connect card when the target is offline (e.g. a revoked credential)', () => {
+      withBridges({ targets: [{ ...paired, connected: false }], connectOrigins: [ORIGIN], onConnect: async () => null });
+      expect(container.querySelector('.bridge-connect-start')).not.toBeNull();
+      expect(container.querySelector('button.bridge-reconnect')).toBeNull();
+    });
+
+    it('shows the Connect card when nobody vouched for the link state', () => {
+      withBridges({ targets: [paired], connectOrigins: [ORIGIN], onConnect: async () => null });
+      expect(container.querySelector('.bridge-connect-start')).not.toBeNull();
+    });
+
+    it('keeps the Connect buttons for the other origins', () => {
+      withBridges({
+        targets: [{ ...paired, connected: true }],
+        connectOrigins: [ORIGIN, 'https://mcp.example'],
+        onConnect: async () => null,
+      });
+      const buttons = [...container.querySelectorAll<HTMLButtonElement>('.bridge-connect-start')];
+      expect(buttons.map((b) => b.textContent)).toEqual(['Connect to mcp.example']);
+      expect(container.querySelector('button.bridge-reconnect')).not.toBeNull();
+    });
+  });
+
   it('shows the Connect flow rather than the retired credential paste form', () => {
     withBridges({ targets: [], connectOrigins: ['https://mcp.nullnet.app'], onConnect: async () => null });
     expect(container.textContent).toContain('Connect this browser to your account');
