@@ -99,8 +99,16 @@ jobs:
   # by tests/ci-apple-build.test.ts), so a PR that cannot change the container
   # never queues for the shared Mac. PRs only: main is not rebuilt on merge,
   # and a label changes no code.
+  #
+  # Same-repo PRs only. This repo is PUBLIC and the Mac below is the org's
+  # shared, non-ephemeral runner that also does every nullnet signed release
+  # job, so a fork PR's code (npm ci, stage-extension.sh, project.yml's build
+  # phases) must never run there, whatever the fork-PR approval policy says.
+  # GitHub advises against self-hosted runners on public repos for this reason.
   apple-changes:
-    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+    if: >-
+      github.event_name == 'pull_request' && github.event.action != 'labeled'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,12 +142,17 @@ jobs:
   # must never hold this repo's merges hostage to that queue. The required
   # check stays `ci / ci`.
   #
+  # The runner must be in a runner group that allows PUBLIC repositories (not
+  # the default) or this job queues until GitHub expires it 24h later. The
+  # same-repo guard (on apple-changes, and repeated here) must stay in place
+  # before that group is opened to this repo.
+  #
   # That Mac is not ephemeral, so: Xcode is selected with DEVELOPER_DIR for
   # this job only (never `sudo xcode-select`), builds go to a job-local
   # DerivedData, and the last step removes it whatever happened.
   apple:
     needs: apple-changes
-    if: needs.apple-changes.outputs.apple == 'true'
+    if: needs.apple-changes.outputs.apple == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS]
     # Caps the run, not the wait for the Mac.
     timeout-minutes: 45
