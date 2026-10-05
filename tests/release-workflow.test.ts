@@ -445,6 +445,19 @@ describe('release-please config', () => {
     for (const ws of workspaces) expect(paths, ws).toContain(ws);
   });
 
+  it('bumps the Safari container app’s MARKETING_VERSION, by its inline marker', () => {
+    // A `generic` updater rewrites only the line carrying
+    // `x-release-please-version`, so apple/project.yml keeps its comments and
+    // its build number (CURRENT_PROJECT_VERSION is the deploy workflow's). The
+    // container, its appex and manifest.json must carry one version, or App
+    // Store validation refuses the upload. tests/apple-project.test.ts pins the
+    // marker's line.
+    const entries = (pkg['extra-files'] as (string | { type: string; path: string })[]).filter(
+      (f) => (typeof f === 'string' ? f : f.path) === 'apple/project.yml',
+    );
+    expect(entries).toEqual([{ type: 'generic', path: 'apple/project.yml' }]);
+  });
+
   it('keeps the workspace dependency version-free, so a release bump cannot strand it', () => {
     // release-please moves every workspace `version` but never an
     // inter-workspace range. The first release takes extension-core from

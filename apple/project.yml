@@ -1,0 +1,219 @@
+# ContextMint Bridge for Safari: the container app and its Safari web
+# extension (appex), for macOS and iOS, as an XcodeGen DEFINITION. The
+# .xcodeproj is generated from this file (`xcodegen generate` in apple/) and
+# never checked in; tests/apple-project.test.ts pins the parts of it that break
+# silently. Plan: docs/superpowers/plans/2026-10-05-safari-extension-standalone.md
+# (Task 1, decisions D1-D3).
+#
+# Apple ships a Safari web extension only inside an app, so this is that app:
+# one screen that says how to turn the extension on, and nothing else. The
+# extension is packages/extension-safari, built from the same commit by the
+# appex's pre-build phase (tools/stage-extension.sh) — no download, no pin.
+#
+# Unsigned by default. Build with:
+#   xcodegen generate
+#   xcodebuild -scheme ContextMintBridgeMac build CODE_SIGNING_ALLOWED=NO
+#   xcodebuild -scheme ContextMintBridgeIOS -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO
+# An unsigned build proves it compiles and packages, and nothing more: Safari
+# never runs an ad-hoc-signed extension. Anything that is to RUN in Safari is
+# an Apple Development build with the owner's Dev profiles (plan O3).
+
+name: ContextMintBridge
+
+options:
+  bundleIdPrefix: app.nullnet
+  deploymentTarget:
+    # The Safari every rule in tools/stage-extension.ts was proven on, and the
+    # extension manifest's strict_min_version. iOS 27 also covers
+    # SFSafariSettings.openExtensionsSettings (iOS 26.2+).
+    macOS: "27.0"
+    iOS: "27.0"
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    # The appex's pre-build phase runs npm in the repo, outside the derived-data
+    # box that user-script sandboxing confines a phase to. Off for that phase.
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # Manual signing, profiles resolved by name (plan D1): never
+    # -allowProvisioningUpdates. Moot while CODE_SIGNING_ALLOWED is NO.
+    CODE_SIGN_STYLE: Manual
+    # release-please owns the MARKETING_VERSION line below and nothing else in
+    # this file (release-please-config.json, a `generic` extra-file).
+    #
+    # PROJECT-level, not a target's, so all four targets inherit the SAME line;
+    # each Info.plist restates it rather than carrying a literal. App Store
+    # validation requires the container, the appex and the extension's
+    # manifest.json to carry one version, and tools/stage-extension.ts refuses
+    # a manifest whose version differs.
+    #
+    # The marker is INLINE, so the generic updater rewrites this one line. The
+    # line after it, CURRENT_PROJECT_VERSION, is the build number: the deploy
+    # workflow's to move (run_number*100+run_attempt), never a release bump's.
+    # A `yaml` extra-file would reserialise this file and delete every comment.
+    MARKETING_VERSION: "1.5.0" # x-release-please-version
+    CURRENT_PROJECT_VERSION: "1"
+    # The app and its appex sign with DIFFERENT profiles, and a
+    # PROVISIONING_PROFILE_SPECIFIER given on the xcodebuild command line
+    # overrides every target at once, so each target reads its profile from a
+    # variable of its own. Empty (no profile) unless a signed build names one,
+    # e.g. MAC_APP_PROFILE="ContextMint Bridge Mac App Store" (plan O3).
+    MAC_APP_PROFILE: ""
+    MAC_EXTENSION_PROFILE: ""
+    IOS_APP_PROFILE: ""
+    IOS_EXTENSION_PROFILE: ""
+
+targets:
+  # The Mac container app. Its .app name and menu-bar name come from
+  # PRODUCT_NAME, so that is the person-facing name, not the target's.
+  ContextMintBridgeMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    info:
+      path: Support/InfoMac.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: ContextMint Bridge
+        # No cryptography of the app's own: the extension uses TLS and
+        # WebCrypto inside Safari, both exempt.
+        ITSAppUsesNonExemptEncryption: false
+        # The Mac App Store refuses an upload that declares no category, and
+        # says so only after the archive. Developer Tools unless App Store
+        # Connect offers "Safari Extensions" (plan Q3).
+        LSApplicationCategoryType: public.app-category.developer-tools
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.nullnet.contextmint.bridge
+        PRODUCT_NAME: ContextMint Bridge
+        GENERATE_INFOPLIST_FILE: YES
+        ARCHS: arm64
+        # Unsigned for CI and the default local build. The sandbox entitlement
+        # applies only when a build signs.
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_ENTITLEMENTS: Entitlements/ContextMintBridgeMac.entitlements
+        PROVISIONING_PROFILE_SPECIFIER: $(MAC_APP_PROFILE)
+        ENABLE_HARDENED_RUNTIME: YES
+        # No AppIcon yet: the design system has no 1024 px master of the
+        # ContextMint Bridge mark (system/assets/contextmint-bridge-icon-* stops
+        # at 128), and CLAUDE.md §Icons forbids drawing one here. A
+        # design-system PR adds it first; then it is copied into an AppIcon set
+        # and this is set to AppIcon on both apps. Empty, not absent: xcodegen
+        # defaults an app to "AppIcon", which fails the build while no set exists.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    # Safari finds a web extension only inside an app (Contents/PlugIns/).
+    dependencies:
+      - target: ContextMintBridgeExtensionMac
+        embed: true
+
+  # The Safari web extension for macOS. Its resources are staged by the phase
+  # below; its only code is the handler stub Safari's extension point requires.
+  ContextMintBridgeExtensionMac:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Extension
+    info:
+      path: Support/InfoExtensionMac.plist
+      properties:
+        # The project's version pair, never the appex's own (see MARKETING_VERSION).
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: ContextMint Bridge
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
+    settings:
+      base:
+        # Prefixed by the container's, as an embedded extension's must be.
+        PRODUCT_BUNDLE_IDENTIFIER: app.nullnet.contextmint.bridge.extension
+        PRODUCT_NAME: ContextMintBridgeExtension
+        GENERATE_INFOPLIST_FILE: YES
+        ARCHS: arm64
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_ENTITLEMENTS: Entitlements/ContextMintBridgeExtensionMac.entitlements
+        PROVISIONING_PROFILE_SPECIFIER: $(MAC_EXTENSION_PROFILE)
+        ENABLE_HARDENED_RUNTIME: YES
+        SKIP_INSTALL: YES
+    preBuildScripts:
+      # Anchored so the iOS appex runs this SAME entry: the script stages into
+      # whichever form it is given (Contents/Resources here, the flat appex on
+      # iOS). Every build, not by dependency analysis: the extension's sources
+      # are files Xcode does not track.
+      - &stage_extension
+        name: Build and stage the ContextMint Bridge extension
+        basedOnDependencyAnalysis: false
+        script: |
+          "$SRCROOT/tools/stage-extension.sh"
+
+  # The iOS container app (universal: iPhone and iPad).
+  ContextMintBridgeIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    info:
+      path: Support/InfoIOS.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: ContextMint Bridge
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.nullnet.contextmint.bridge
+        PRODUCT_NAME: ContextMint Bridge
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # No AppIcon yet, as on the Mac app (see there).
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # No entitlements on iOS (plan D2): an iOS app is sandboxed by the OS.
+        CODE_SIGNING_ALLOWED: NO
+        PROVISIONING_PROFILE_SPECIFIER: $(IOS_APP_PROFILE)
+    dependencies:
+      - target: ContextMintBridgeExtensionIOS
+        embed: true
+
+  # The same extension for iOS: a second target rather than xcodegen's
+  # `platform: [iOS, macOS]`, which would rename both to *_iOS / *_macOS.
+  ContextMintBridgeExtensionIOS:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Extension
+    info:
+      path: Support/InfoExtensionIOS.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: ContextMint Bridge
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.nullnet.contextmint.bridge.extension
+        # The Mac appex's product name too: the two land in different build
+        # directories, and the principal class is $(PRODUCT_MODULE_NAME)'s.
+        PRODUCT_NAME: ContextMintBridgeExtension
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGNING_ALLOWED: NO
+        PROVISIONING_PROFILE_SPECIFIER: $(IOS_EXTENSION_PROFILE)
+        SKIP_INSTALL: YES
+    preBuildScripts:
+      - *stage_extension

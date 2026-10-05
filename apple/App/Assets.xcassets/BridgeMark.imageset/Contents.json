@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "contextmint-bridge-icon-128.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
