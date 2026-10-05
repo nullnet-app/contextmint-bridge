@@ -105,7 +105,7 @@ cd apple
 xcodegen generate
 xcodebuild -scheme ContextMintBridgeMac build \
   CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM=5A673K24X6 CODE_SIGN_IDENTITY="Apple Development" \
-  MAC_APP_PROFILE="ContextMint Bridge Mac Dev" \
+  MAC_APP_PROFILE="ContextMint Bridge App Mac Dev" \
   MAC_EXTENSION_PROFILE="ContextMint Bridge Extension Mac Dev"
 ```
 
