@@ -229,8 +229,12 @@ function connectLink(link: Link): void {
     return;
   }
   link.ws = ws;
+  // Whether THIS socket ever opened: a close after an open is a change the
+  // popup must hear about, a failed dial (still "not connected") is not.
+  let wasOpen = false;
   ws.addEventListener('open', () => {
     if (!state.extIdentity || link.closed) return;
+    wasOpen = true;
     link.reconnectAttempt = 0;
     link.nextAttemptAt = 0;
     setConnectionStatus('connected');
@@ -274,6 +278,12 @@ function connectLink(link: Link): void {
       ...unavailableCapabilitiesHelloField(unavailableCapabilities(chrome)),
     };
     ws.send(JSON.stringify(extHello));
+    // The link is up: tell any open popup, whose bridge row otherwise keeps
+    // the "Offline" it rendered while this socket was still dialling. On
+    // Safari that is the normal order of events, not a race: the popup's own
+    // status query is what wakes the event page, so the first answer it gets
+    // always describes a link that has not opened yet.
+    broadcastConnectionsChanged();
   });
   ws.addEventListener('message', (ev: MessageEvent) => {
     void onMessage(link, ev.data as string).catch((e) =>
@@ -282,6 +292,10 @@ function connectLink(link: Link): void {
   });
   ws.addEventListener('close', (ev: CloseEvent) => {
     teardownLink(link);
+    // A link that was up is down: the popup's row must stop saying Connected.
+    // Only after an open, so a target that keeps failing to dial does not
+    // re-render an open popup on every retry.
+    if (wasOpen) broadcastConnectionsChanged();
     if (
       link.kind === 'remote' &&
       (ev?.code === CREDENTIAL_REVOKED_CLOSE || ev?.code === EXTENSION_MISMATCH_CLOSE) &&
