@@ -93,6 +93,11 @@ describe('ci.yml apple job', () => {
     expect(changes?.if).toContain("github.event_name == 'pull_request'");
     // A label changes no code, so it must not queue another Mac build.
     expect(changes?.if).toContain("github.event.action != 'labeled'");
+    // Public repo, shared self-hosted Mac that also holds the org's signing
+    // keychains: a fork PR must never reach it, approval policy or not.
+    expect(changes?.if).toContain(
+      'github.event.pull_request.head.repo.full_name == github.repository',
+    );
     expect(changes?.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' });
     const script = (changes?.steps ?? []).map((s) => s.run ?? '').join('\n');
     expect(script).toContain('/files');
@@ -105,7 +110,11 @@ describe('ci.yml apple job', () => {
     expect(apple).toBeDefined();
     expect(apple?.['runs-on']).toEqual(['self-hosted', 'macOS']);
     expect(apple?.needs).toBe('apple-changes');
-    expect(apple?.if).toBe("needs.apple-changes.outputs.apple == 'true'");
+    // Guarded again here, so the Mac job stays same-repo-only even if
+    // apple-changes' condition is ever loosened.
+    expect(apple?.if).toBe(
+      "needs.apple-changes.outputs.apple == 'true' && github.event.pull_request.head.repo.full_name == github.repository",
+    );
     expect(apple?.['timeout-minutes']).toBeGreaterThan(0);
     // Selects Xcode for this job only; never `sudo xcode-select`.
     expect(apple?.env?.['DEVELOPER_DIR']).toBe('/Applications/Xcode.app/Contents/Developer');
