@@ -83,9 +83,9 @@ targets:
         # WebCrypto inside Safari, both exempt.
         ITSAppUsesNonExemptEncryption: false
         # The Mac App Store refuses an upload that declares no category, and
-        # says so only after the archive. Developer Tools unless App Store
-        # Connect offers "Safari Extensions" (plan Q3).
-        LSApplicationCategoryType: public.app-category.developer-tools
+        # says so only after the archive. Productivity, matching the primary
+        # category chosen in App Store Connect (plan Q3, settled 2026-10-05).
+        LSApplicationCategoryType: public.app-category.productivity
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.nullnet.contextmint.bridge
