@@ -68,7 +68,7 @@ github.com/chrischall/fetchproxy
 ## Keywords
 
 ```text
-mcp,ai,llm,model context protocol,safari extension,tabs,cookies,login,fetchproxy,fpx,agent,session
+mcp,llm,model context protocol,safari extension,cookies,login,fetchproxy,fpx,agent,session,browser
 ```
 
 ## Category

@@ -56,6 +56,13 @@ describe('docs/store-assets/app-store/listing.md', () => {
     expect(keywords).not.toMatch(THIRD_PARTY_PRODUCTS);
   });
 
+  it('keeps subtitle words out of the keywords, which App Store Connect already indexes', () => {
+    const words = (s: string): string[] => s.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    const subtitle = new Set(words(field(md, 'Subtitle')));
+    const repeated = words(field(md, 'Keywords')).filter((w) => subtitle.has(w));
+    expect(repeated, 'keywords repeating a subtitle word').toEqual([]);
+  });
+
   it('does not claim to collect nothing, which the App Privacy label may contradict (app-privacy.md)', () => {
     expect(field(md, 'Description')).not.toMatch(/collects nothing/i);
   });
