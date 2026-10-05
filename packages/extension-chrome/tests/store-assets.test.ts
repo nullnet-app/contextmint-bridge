@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { deflateSync } from 'node:zlib';
-import { SCENES, SCREENSHOTS } from '../store-assets/scenes.js';
+import { POPUP_SHOTS, SCENES, SCREENSHOTS } from '../store-assets/scenes.js';
 import { chromeStubSource } from '../store-assets/chrome-stub.js';
 import { BRAND, promoTileHtml, screenshotHtml } from '../store-assets/canvas.js';
 import { pngInfo, stripAlpha } from '../store-assets/png.js';
@@ -284,6 +284,26 @@ describe('committed store assets', () => {
     const dir = join(ASSETS, 'screenshots');
     const onDisk = existsSync(dir) ? readdirSync(dir).map((f) => `screenshots/${f}`) : [];
     expect(onDisk.sort()).toEqual(SCREENSHOTS.map((s) => s.file).sort());
+  });
+
+  it.each(POPUP_SHOTS.map((s) => s.file))('%s is the 380px popup at 2x, a 24-bit PNG', (file) => {
+    const info = pngInfo(read(file));
+    expect(info).toMatchObject({ width: 760, colorType: 2, bitDepth: 8 });
+    expect(info.height).toBeLessThanOrEqual(1200);
+  });
+
+  it('holds a light and a dark shot of every popup scene, and nothing stale', () => {
+    const dir = join(ASSETS, 'popup');
+    const onDisk = readdirSync(dir).map((f) => `popup/${f}`);
+    const expected = POPUP_SHOTS.map((s) => s.file);
+    expect(expected.every((f) => onDisk.includes(f))).toBe(true);
+    // The only extras are the scrolled foot of a popup taller than 600px.
+    const extras = onDisk.filter((f) => !expected.includes(f));
+    for (const f of extras) expect(expected).toContain(f.replace(/-end\.png$/, '.png'));
+    for (const scene of new Set(POPUP_SHOTS.map((s) => s.scene))) {
+      expect(onDisk).toContain(`popup/${scene}-light.png`);
+      expect(onDisk).toContain(`popup/${scene}-dark.png`);
+    }
   });
 
   it('the store-assets README says how to regenerate them', () => {

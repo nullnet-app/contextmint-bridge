@@ -1,0 +1,517 @@
+/* ============================================================
+   Nullnet Design System — colours & type tokens
+   Colours and type: a Nullnet base look (roles, light + dark) with a per-product accent layer.
+
+   GENERATED FROM tokens.json — DO NOT EDIT.
+   Change the token, run `npm run build`, commit both.
+   Reverse-engineered from PassMint, StoryMint, CurtainCall, Encore and AllotMint, unified; base roles from ContextMint.
+   ============================================================ */
+
+/* ----- TYPE: web font imports -----
+   The Google Fonts @import is OMITTED in this build. A consumer whose CSP is
+   default-src 'self' cannot reach a third-party asset origin, so the import
+   would be blocked and the fallback stacks used anyway. SF Pro needs no
+   @font-face; non-Apple browsers fall back to system-ui. */
+
+:root {
+  color-scheme: light dark;
+  /* ============ COLORS — NULLNET UMBRELLA ============
+     Near-black + paper neutrals. Used on marketing site,
+     splash, terminal-style surfaces. Inspired by the
+     StoryMint app icon (pure black, yellow star).
+     
+     THE RAMP GOES FURTHER THAN THE WEB NEEDS, on purpose. A native colour
+     scheme wants concrete borders and secondary text; this system had expressed
+     both as alpha over a ground (--nn-line-dark, --fg-2), which a scheme cannot
+     use directly. mcp-host-app resolved them itself and invented five values,
+     two of which were a point away from tokens that already existed here
+     (#1f1f27 vs --nn-ink-3, #ececef vs --bg-3). Which greys exist is a BRAND
+     decision — two products with different greys look like different companies —
+     so they live here. Which grey is a "surface variant" is Material vocabulary
+     and stays in the app. */
+  --nn-ink: #0b0b0f;             /* primary marketing background */
+  --nn-ink-2: #16161c;           /* secondary surface on dark */
+  --nn-ink-3: #20202a;           /* tertiary surface, borders on dark */
+  --nn-paper: #fafafa;           /* primary light background */
+  --nn-paper-2: #f1f1f3;         /* secondary light surface */
+  --nn-ink-4: #3a3a44;           /* solid border on dark, where --nn-line-dark’s alpha will not do */
+  --nn-ink-fg-muted: #b6b6c0;    /* secondary text ON an ink ground */
+  --nn-paper-3: #ebebef;         /* tertiary light surface (the same value --bg-3 resolves to in light; this one does not switch with the theme) */
+  --nn-paper-4: #c9c9cf;         /* solid border on light */
+  --nn-paper-fg-muted: #52525c;  /* secondary text ON a paper ground */
+  --nn-line: rgba(0, 0, 0, 0.08);
+  --nn-line-dark: rgba(255, 255, 255, 0.10);
+  --nn-star: #f5c518;            /* the yellow star from the StoryMint icon */
+
+  /* ============ COLORS — BASE ROLES (the Nullnet look, from ContextMint) ============
+     THE BASE EVERY APP STARTS FROM. A component names a ROLE and the theme
+     picks the value; nothing names a hex. Taken from ContextMint (Theme.swift +
+     the 2026-09 handoff) and given a light theme, by the operator's decision of
+     2026-09-22 that the look is centralised here rather than per app.
+     
+     Light is :root (this file's convention); dark comes from prefers-color-scheme
+     or data-theme="dark". Every text pair is held to 4.5:1 in BOTH themes by
+     test/roles.test.mjs, against the pairs listed in roleContrast.
+     
+     The star has two roles: --accent is the star as a FILL (with --on-accent ink
+     text), --accent-text the star as text or a mark. On white the star is 1.6:1,
+     so light deepens --accent-text to a gold that reads. A product accent
+     (--doc-accent, --bt-accent, --cc-accent…) may replace --accent in its own app;
+     every other role is shared. */
+  --ground: #f4f4f7;             /* app ground behind everything (light: iOS grouped bg; dark: --nn-ink) */
+  --surface: #ffffff;            /* cards, list rows, tables — always with a 1px --border */
+  --surface-variant: #ebebef;    /* chips, secondary buttons, tool chips, future step discs */
+  --surface-hover: #f7f7f9;      /* table row hover / selected row */
+  --rail: #f1f1f3;               /* sidebar, log panel, code blocks */
+  --canvas: #e8e8ec;             /* presentation canvas behind device frames only */
+  --text-primary: #0b0b0f;       /* primary text on every ground above */
+  --text-strong: rgba(11, 11, 15, 0.85); /* mono values, env names */
+  --text-code: rgba(11, 11, 15, 0.75); /* config JSON on --rail */
+  --text-secondary: rgba(11, 11, 15, 0.62); /* body secondary — the floor for running text */
+  --text-tertiary: #5f5f6a;      /* row detail, blocked-button labels (solid in light: ink at 50% is 3.7:1 on white) */
+  --text-quaternary: #7c7c86;    /* eyebrows, timestamps, pins ONLY — ~4:1, never body copy */
+  --accent: var(--nn-star);      /* the star as a FILL: the one primary action, selected segment; always with --on-accent */
+  --on-accent: var(--nn-ink);    /* text on --accent — never white */
+  --accent-text: #7a5c00;        /* the star as TEXT or a MARK: links, inline Add, focus ring, selected tab (the star is 1.6:1 on white, so light deepens it) */
+  --accent-hover: #5c4500;       /* hover on --accent-text links */
+  --status-ok: #1e7b34;          /* Working / healthy / paired / done */
+  --status-degraded: #9e5700;    /* Needs you — losing state and behind; warnings */
+  --status-error: #d70015;       /* failing, destructive, error lines */
+  --status-off: #c9c9cf;         /* off / idle / ghost — below 3:1 on purpose; always with its word */
+  --on-status: #ffffff;          /* ticks and numerals on a --status-ok disc */
+  --border: #dcdce1;             /* 1px card borders, dashed ghost slots, off toggle track — decorative */
+  --border-rail: var(--surface-variant); /* row separators, sidebar edge, tab-bar top */
+  --border-frame: #d1d1d6;       /* device frames and browser chrome */
+  --border-hover: #c9c9cf;       /* card border on hover/press, row chevrons */
+  --icon-muted: #7c7c86;         /* field glyphs (search, paste) */
+  --ok-tint: rgba(30, 123, 52, 0.10); /* healthy pill / paired panel ground */
+  --degraded-tint: rgba(158, 87, 0, 0.10); /* required pill, losing-state / behind pill ground */
+  --error-tint: rgba(215, 0, 21, 0.08); /* failing pill ground (12% dark, not the handoff's 14%: red on 14% is 4.42:1) */
+  --error-border: rgba(215, 0, 21, 0.35); /* destructive action border */
+  --tabbar-glass: rgba(250, 250, 250, 0.92); /* tab bar under a 20px backdrop blur */
+
+  /* ============ COLORS — PASSMINT (utility, indigo) ============
+     Periwinkle / system indigo. Hex 6366F1 is the literal
+     `Color.indigo` fallback in DraftEditorView, and the icon BG. */
+  --doc-accent: #6366f1;
+  --doc-accent-soft: #eef2ff;
+  --doc-accent-strong: #4f46e5;
+  --doc-tint-glass: rgba(99, 102, 241, 0.18);
+  --doc-icon-bg: #7b7bff;        /* the brighter periwinkle of AppIcon.png */
+
+  /* ============ COLORS — STORYMINT (consumer, blue) ============
+     System blue + warmer support. */
+  --bt-accent: #3478f6;          /* iOS systemBlue */
+  --bt-accent-soft: #e7f0ff;
+  --bt-accent-strong: #1d63d8;
+  --bt-violet: #8b5cf6;          /* purple gradient stop on auth */
+  --bt-warm: #f5c518;            /* yellow — read-along current word, star */
+  --bt-read: #34c759;            /* green — words already read (systemGreen) */
+  --bt-difficult: #ff3b30;       /* red — difficult words / errors (systemRed) */
+  --bt-moderate: #ff9500;        /* orange — moderate-difficulty / amazon (systemOrange) */
+
+  /* ============ COLORS — CURTAINCALL (theater diary, amber/zinc) ============
+     "Letterboxd for live theater" (curtaincall.fm). Poster-art-free by design
+     (legal constraint) — a typographic diary aesthetic on zinc neutrals with a
+     single amber/gold accent for star ratings + wishlist (the curtain/spotlight
+     motif). Web: Tailwind zinc + Geist. iOS: native, .orange stars + system bg.
+     Android: proposed Material 3 translation. */
+  --cc-accent: #f59e0b;          /* amber-500 — stars, primary highlight, "gold" */
+  --cc-accent-strong: #b45309;   /* amber-700 — pressed / text-on-light */
+  --cc-accent-soft: #fef3c7;     /* amber-100 — wishlist pill bg */
+  --cc-ink: #18181b;             /* zinc-900 — primary button bg, headings */
+  --cc-ink-2: #3f3f46;           /* zinc-700 */
+  --cc-zinc-500: #71717a;        /* zinc-500 — secondary text */
+  --cc-zinc-400: #a1a1aa;        /* zinc-400 — eyebrow labels, tertiary */
+  --cc-zinc-200: #e4e4e7;        /* zinc-200 — borders (light) */
+  --cc-zinc-50: #fafafa;         /* zinc-50 — page bg (light) */
+  --cc-night: #0a0a0a;           /* near-black — page bg (dark) */
+  --cc-night-2: #18181b;         /* zinc-900 — card bg (dark) */
+  --cc-night-line: #27272a;      /* zinc-800 — borders (dark) */
+  --cc-star: #f59e0b;            /* alias — ★ rating glyphs */
+  --cc-wishlist: #d97706;        /* amber-600 — wishlist border/text */
+
+  /* ============ COLORS — ENCORE (setlist tracker, gold/night) ============
+     "Encore Setlists" — a setlist.fm companion (nullnet-app/encore). Open it
+     at a show: it finds the venue from your location, who's playing tonight
+     (Ticketmaster Discovery + SeatGeek), and the artist's recent setlists
+     (setlist.fm) as a tap-to-track checklist. The app icon sets the brand: a
+     deep indigo-navy "dark venue" with a warm spotlight glow and a gold-ringed
+     song checklist on cream bars. Stage GOLD is the brand accent; NIGHT indigo
+     is the surface. Functional state colors stay system: played songs render
+     system GREEN, the encore label system ORANGE. A Kotlin Multiplatform app:
+     native SwiftUI on iOS (SF Pro, SF Symbols, grouped lists) and Compose on
+     Android, sharing one core; no backend. Best shown in dark mode.
+     Gold, green and orange here are DARK-ground colours (2.1-2.2:1 on white).
+     On a light ground use --en-played-light and --en-encore-light for the
+     played mark and the encore label, and the base role --accent-text for
+     gold text. The -light pair are held to AA on white and on --en-cream. */
+  --en-gold: #dda23e;            /* stage gold — accent, prominent CTAs, tab selection, progress */
+  --en-gold-strong: #a8761f;     /* pressed / large or non-text gold on light (3.98:1 on white, 3.5:1 on cream: not AA for body text — use --accent-text) */
+  --en-gold-soft: #faf0d8;       /* soft gold highlight surface (light) */
+  --en-spot: #f0c268;            /* brighter spotlight highlight (icon glow center) */
+  --en-night: #15112b;           /* deep indigo-navy — app icon bg, dark base, marketing */
+  --en-night-2: #211b40;         /* raised dark surface */
+  --en-night-3: #2c2552;         /* card / grouped row bg on night */
+  --en-night-line: #34305c;      /* hairline separator on night */
+  --en-cream: #f2f0e2;           /* warm paper — the song bars in the icon */
+  --en-played: #34c759;          /* alias → system green: a played/checked song */
+  --en-encore: #ff9500;          /* alias → system orange: the "Encore N" label */
+  --en-played-light: #1e7b34;    /* played/checked on a LIGHT ground (5.3:1 on white, 4.7:1 on cream); --en-played is 2.2:1 there. Same value as the light --status-ok */
+  --en-encore-light: #9e5700;    /* the "Encore N" label on a LIGHT ground (5.5:1 on white, 4.8:1 on cream); --en-encore is 2.1:1 there. Same value as the light --status-degraded */
+
+  /* ============ COLORS — ALLOTMINT ("Botanical Ledger", garden greens) ============
+     AllotMint (nullnet-app/allotmint) — fair assignment of people to capacity-limited
+     slots by ranked preference (students→events, staff→shifts, …). Web (Next.js) + iOS
+     (SwiftUI) on one shared Kotlin engine. The signature is a LIVE, replayable draw:
+     people animate into capacity "plots" that fill like garden beds. Aesthetic is
+     "Botanical Ledger" — Allotment (garden plots) + Mint (the family): warm ledger
+     PAPER, deep botanical GREEN ink, a single CLAY/coral accent, Fraunces serif display
+     over a clean grotesque body, mono for seeds/ranks/numerals. This is the EVOLVED
+     system: the app's own hexes kept as the light foundation, plus a net-new dark mode
+     ("the greenhouse after dark"). Clay is the lone accent — the draw's live target,
+     "traded-off" states, errors. Green carries structure; sprout-green fills the beds. */
+  --am-paper: #f6f1e7;           /* warm ledger paper — app bg */
+  --am-paper-2: #efe7d6;         /* raised paper */
+  --am-paper-line: #e3d8c1;      /* hairline / ruled grid */
+  --am-ink: #1f2a24;             /* near-black green ink — primary text */
+  --am-ink-soft: #4a574e;        /* secondary text */
+  --am-ink-faint: #8a8674;       /* tertiary / eyebrow labels */
+  --am-leaf: #2f5d44;            /* botanical green — primary buttons, structure */
+  --am-leaf-deep: #1d3d2c;       /* deepest green — display headings, on-leaf shadow */
+  --am-leaf-bright: #4a8a5f;     /* brighter green — links, active accents */
+  --am-sprout: #8fbf7a;          /* young-sprout green — the soil/bed fill, rank pills */
+  --am-clay: #c0603f;            /* clay/coral — THE accent: live target, traded-off, danger */
+  --am-clay-soft: #d98a6a;       /* soft clay — glows, secondary accent */
+  --am-gold: #c9a23f;            /* wheat gold — rare tertiary highlight */
+  --am-d-bg: #14201a;            /* deep forest charcoal — dark app bg */
+  --am-d-surface: #1b2a22;       /* raised dark surface / card */
+  --am-d-surface-2: #223328;     /* higher surface / rows */
+  --am-d-line: #33453a;          /* hairline on dark */
+  --am-d-ink: #ece7d8;           /* warm paper text on dark */
+  --am-d-ink-soft: #a9b3a4;      /* secondary on dark */
+  --am-d-ink-faint: #6e7c6f;     /* tertiary on dark */
+  --am-d-leaf: #4a8a5f;          /* green reads brighter on dark — buttons */
+  --am-d-sprout: #9fd08a;        /* bed fill on dark */
+  --am-d-clay: #d2734f;          /* accent on dark */
+
+  /* ============ COLORS — SEMANTIC (light mode default) ============ */
+  /* CurtainCall web type: Geist Sans + Geist Mono (Google Fonts). Substitution: Geist is on Google Fonts, loaded in --font-cc-* below. */
+  --fg-1: #0b0b0f;               /* primary text */
+  --fg-2: rgba(11, 11, 15, 0.62); /* secondary text — matches SwiftUI .secondary */
+  --fg-3: rgba(11, 11, 15, 0.42); /* tertiary text */
+  --fg-on-accent: #ffffff;
+  --bg-1: #ffffff;               /* primary surface */
+  --bg-2: #f4f4f7;               /* grouped list background */
+  --bg-3: #ebebef;               /* deeper grouped */
+  --separator: rgba(60, 60, 67, 0.18);
+  /* status (mirrors SwiftUI semantic system colors) */
+  --status-red: #ff3b30;
+  --status-orange: #ff9500;
+  --status-yellow: #ffcc00;
+  --status-green: #34c759;
+  --status-blue: #007aff;
+  --status-indigo: #5856d6;
+  --status-purple: #af52de;
+
+  /* ============ MATERIALS (Liquid Glass approximations) ============ */
+  --glass-clear: rgba(255, 255, 255, 0.18);
+  --glass-clear-border: rgba(255, 255, 255, 0.45);
+  --glass-regular: rgba(255, 255, 255, 0.55);
+  --glass-thick: rgba(255, 255, 255, 0.72);
+  --glass-ultrathin: rgba(255, 255, 255, 0.32);
+  --glass-blur: 24px;
+  --glass-blur-thin: 14px;
+  --glass-blur-thick: 36px;
+
+  /* ============ SHADOW SYSTEM ============
+     mirrors LiquidGlassExtensions.swift native* helpers */
+  --shadow-nav: 0 1px 2px rgba(11, 11, 15, 0.05);
+  --shadow-card: 0 2px 4px rgba(11, 11, 15, 0.10);
+  --shadow-emph: 0 4px 8px rgba(11, 11, 15, 0.15);
+  --shadow-pop: 0 8px 24px rgba(11, 11, 15, 0.18);
+
+  /* ============ SPACING (Apple 4pt rhythm) ============ */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 56px;
+
+  /* ============ RADII ============ */
+  --r-sm: 6px;                   /* word chips in read-along */
+  --r-md: 8px;                   /* small chips, role buttons */
+  --r-lg: 12px;                  /* default cards, list rows */
+  --r-xl: 14px;                  /* generated bundle rows */
+  --r-2xl: 16px;                 /* primary cards, emphasized */
+  --r-pill: 999px;               /* capsule */
+
+  /* ============ TYPE — FAMILIES ============
+     SF Pro is the Apple system font — reached via -apple-system /
+     BlinkMacSystemFont (no font file needed, renders true SF Pro on Apple
+     devices). Inter is the explicit fallback on non-Apple browsers. */
+  --font-text: -apple-system, BlinkMacSystemFont, "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --font-rounded: ui-rounded, -apple-system, "Inter", system-ui, sans-serif; /* read-along; SF Pro Rounded via ui-rounded */
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  /* CurtainCall web (Next.js) ships Geist; Roboto is the Android M3 default */
+  --font-cc: "Geist", -apple-system, "Inter", system-ui, sans-serif;
+  --font-cc-mono: "Geist Mono", ui-monospace, "JetBrains Mono", monospace;
+  --font-android: "Roboto", system-ui, sans-serif;
+  /* AllotMint "Botanical Ledger": Fraunces serif display, Hanken Grotesk body, JetBrains Mono for seeds/ranks/numerals. iOS approximates with system serif/default/monospaced designs (see ui_kits/allotmint). */
+  --font-am-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-am-body: "Hanken Grotesk", -apple-system, "Inter", system-ui, sans-serif;
+  --font-am-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ============ TYPE SCALE — iOS Dynamic Type defaults @ Large ============
+     name              : size / line-height / weight
+     largeTitle        : 34 / 41 / 700
+     title             : 28 / 34 / 600
+     title2            : 22 / 28 / 600
+     title3            : 20 / 25 / 500
+     headline          : 17 / 22 / 600
+     body              : 17 / 22 / 400
+     callout           : 16 / 21 / 400
+     subheadline       : 15 / 20 / 400
+     footnote          : 13 / 18 / 400
+     caption           : 12 / 16 / 400
+     caption2          : 11 / 13 / 400 */
+  --t-large-title: 34px;
+  --lh-large-title: 41px;
+  --t-title: 28px;
+  --lh-title: 34px;
+  --t-title2: 22px;
+  --lh-title2: 28px;
+  --t-title3: 20px;
+  --lh-title3: 25px;
+  --t-headline: 17px;
+  --lh-headline: 22px;
+  --t-body: 17px;
+  --lh-body: 22px;
+  --t-callout: 16px;
+  --lh-callout: 21px;
+  --t-subhead: 15px;
+  --lh-subhead: 20px;
+  --t-footnote: 13px;
+  --lh-footnote: 18px;
+  --t-caption: 12px;
+  --lh-caption: 16px;
+  --t-caption2: 11px;
+  --lh-caption2: 13px;
+  /* tracking — SF Pro Display tightens slightly above 20px */
+  --tracking-display: -0.022em;
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0;
+  --tracking-eyebrow: 0.08em;
+
+  /* ============ COLORS — CONTEXTMINT (MCP tiles) ============
+     An MCP's own tile colour in ContextMint. Constants in both themes; they
+     identify an MCP and never mean a state. They are the sibling products'
+     accents, which is why several alias a product token. */
+  --cm-tile-ink: #16161c;        /* initial in --nn-paper */
+  --cm-tile-indigo: var(--doc-accent); /* PassMint */
+  --cm-tile-blue: var(--bt-accent); /* StoryMint */
+  --cm-tile-leaf: var(--am-leaf); /* AllotMint; initial white */
+  --cm-tile-leaf-deep: var(--am-leaf-deep); /* AllotMint; initial white */
+  --cm-tile-sprout: var(--am-sprout); /* AllotMint; initial --nn-ink */
+  --cm-tile-clay: var(--am-clay); /* AllotMint; initial white */
+  --cm-tile-gold: var(--en-gold); /* Encore; initial --nn-ink */
+
+  /* ============ RADII — base roles ============
+     The steps the base look adds between the existing ones. Chips stay --r-md (8),
+     controls --r-lg (12), small cards --r-xl (14), cards --r-2xl (16). */
+  --r-tile: 11px;                /* 38–40px identity tiles */
+  --r-tile-lg: 13px;             /* 46px tiles, compact rows */
+  --r-panel: 18px;               /* grouped panels, 62px tiles */
+
+  /* ============ SIZES & MOTION — base roles ============
+     Minimums, never fixed heights: nothing holding text gets one on device.
+     Motion is almost none — no bounces, springs or parallax. */
+  --hit-min: 44px;               /* floor for anything tappable */
+  --row-min: 52px;               /* every tappable row */
+  --button-lg: 56px;             /* the one primary action */
+  --button-md: 48px;             /* card actions */
+  --tabbar: 78px;                /* tab bar incl. home-indicator zone */
+  --rail-width: 224px;           /* admin sidebar */
+  --dur-pop: 350ms;              /* a tile landing: ease-out, scale .7 → 1 */
+  --dur-rise: 200ms;             /* a disclosure / new log line: ease-out, y+10 → 0 */
+  --dur-spin: 1s;                /* progress ring, linear */
+  --dur-breathe: 1.4s;           /* waiting / tailing, opacity .35 → 1 */
+  --dur-step: 620ms;             /* one checklist line ticking */
+  --dur-count: 70ms;             /* one step of a counter — never instant */
+
+  /* ============ TYPE SCALE — base roles ============
+     The sizes the base look adds to the Dynamic Type scale above. On device these
+     are the reference rendering at default size; use Dynamic Type, never fixed pt. */
+  --t-screen-title: 30px;
+  --lh-screen-title: 36px;
+  --t-statement: 32px;
+  --lh-statement: 37px;
+  --t-row-detail: 14px;
+  --lh-row-detail: 21px;
+  --t-counter: 56px;
+  --tracking-screen: -0.02em;
+  --tracking-label: 0.09em;
+}
+
+/* dark mode mirror */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --fg-1: #f5f5f7;
+    --fg-2: rgba(245, 245, 247, 0.62);
+    --fg-3: rgba(245, 245, 247, 0.40);
+    --bg-1: #000000;
+    --bg-2: #1c1c1e;
+    --bg-3: #2c2c2e;
+    --separator: rgba(84, 84, 88, 0.65);
+    --glass-clear: rgba(20, 20, 25, 0.32);
+    --glass-clear-border: rgba(255, 255, 255, 0.18);
+    --glass-regular: rgba(28, 28, 32, 0.62);
+    --glass-thick: rgba(28, 28, 32, 0.78);
+    --glass-ultrathin: rgba(28, 28, 32, 0.42);
+    --shadow-nav: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.5);
+    --shadow-emph: 0 4px 8px rgba(0, 0, 0, 0.6);
+    --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.7);
+    --ground: #0b0b0f;
+    --surface: #16161c;
+    --surface-variant: #1f1f27;
+    --surface-hover: #1a1a21;
+    --rail: #0d0d11;
+    --canvas: #08080b;
+    --text-primary: #fafafa;
+    --text-strong: rgba(250, 250, 250, 0.85);
+    --text-code: rgba(250, 250, 250, 0.75);
+    --text-secondary: rgba(250, 250, 250, 0.62);
+    --text-tertiary: rgba(250, 250, 250, 0.5);
+    --text-quaternary: rgba(250, 250, 250, 0.42);
+    --accent: var(--nn-star);
+    --on-accent: var(--nn-ink);
+    --accent-text: #f5c518;
+    --accent-hover: #ffdb4d;
+    --status-ok: #34c759;
+    --status-degraded: #ff9500;
+    --status-error: #ff3b30;
+    --status-off: #3a3a44;
+    --on-status: var(--nn-ink);
+    --border: #2c2c36;
+    --border-rail: var(--surface-variant);
+    --border-frame: #26262e;
+    --border-hover: #4a4a58;
+    --icon-muted: #6b6b78;
+    --ok-tint: rgba(52, 199, 89, 0.14);
+    --degraded-tint: rgba(255, 149, 0, 0.16);
+    --error-tint: rgba(255, 59, 48, 0.12);
+    --error-border: rgba(255, 59, 48, 0.4);
+    --tabbar-glass: rgba(11, 11, 15, 0.92);
+  }
+}
+
+/* explicit theme: data-theme on <html> overrides the OS setting */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --fg-1: #f5f5f7;
+  --fg-2: rgba(245, 245, 247, 0.62);
+  --fg-3: rgba(245, 245, 247, 0.40);
+  --bg-1: #000000;
+  --bg-2: #1c1c1e;
+  --bg-3: #2c2c2e;
+  --separator: rgba(84, 84, 88, 0.65);
+  --glass-clear: rgba(20, 20, 25, 0.32);
+  --glass-clear-border: rgba(255, 255, 255, 0.18);
+  --glass-regular: rgba(28, 28, 32, 0.62);
+  --glass-thick: rgba(28, 28, 32, 0.78);
+  --glass-ultrathin: rgba(28, 28, 32, 0.42);
+  --shadow-nav: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.5);
+  --shadow-emph: 0 4px 8px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.7);
+  --ground: #0b0b0f;
+  --surface: #16161c;
+  --surface-variant: #1f1f27;
+  --surface-hover: #1a1a21;
+  --rail: #0d0d11;
+  --canvas: #08080b;
+  --text-primary: #fafafa;
+  --text-strong: rgba(250, 250, 250, 0.85);
+  --text-code: rgba(250, 250, 250, 0.75);
+  --text-secondary: rgba(250, 250, 250, 0.62);
+  --text-tertiary: rgba(250, 250, 250, 0.5);
+  --text-quaternary: rgba(250, 250, 250, 0.42);
+  --accent: var(--nn-star);
+  --on-accent: var(--nn-ink);
+  --accent-text: #f5c518;
+  --accent-hover: #ffdb4d;
+  --status-ok: #34c759;
+  --status-degraded: #ff9500;
+  --status-error: #ff3b30;
+  --status-off: #3a3a44;
+  --on-status: var(--nn-ink);
+  --border: #2c2c36;
+  --border-rail: var(--surface-variant);
+  --border-frame: #26262e;
+  --border-hover: #4a4a58;
+  --icon-muted: #6b6b78;
+  --ok-tint: rgba(52, 199, 89, 0.14);
+  --degraded-tint: rgba(255, 149, 0, 0.16);
+  --error-tint: rgba(255, 59, 48, 0.12);
+  --error-border: rgba(255, 59, 48, 0.4);
+  --tabbar-glass: rgba(11, 11, 15, 0.92);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --fg-1: #0b0b0f;
+  --fg-2: rgba(11, 11, 15, 0.62);
+  --fg-3: rgba(11, 11, 15, 0.42);
+  --bg-1: #ffffff;
+  --bg-2: #f4f4f7;
+  --bg-3: #ebebef;
+  --separator: rgba(60, 60, 67, 0.18);
+  --glass-clear: rgba(255, 255, 255, 0.18);
+  --glass-clear-border: rgba(255, 255, 255, 0.45);
+  --glass-regular: rgba(255, 255, 255, 0.55);
+  --glass-thick: rgba(255, 255, 255, 0.72);
+  --glass-ultrathin: rgba(255, 255, 255, 0.32);
+  --shadow-nav: 0 1px 2px rgba(11, 11, 15, 0.05);
+  --shadow-card: 0 2px 4px rgba(11, 11, 15, 0.10);
+  --shadow-emph: 0 4px 8px rgba(11, 11, 15, 0.15);
+  --shadow-pop: 0 8px 24px rgba(11, 11, 15, 0.18);
+  --ground: #f4f4f7;
+  --surface: #ffffff;
+  --surface-variant: #ebebef;
+  --surface-hover: #f7f7f9;
+  --rail: #f1f1f3;
+  --canvas: #e8e8ec;
+  --text-primary: #0b0b0f;
+  --text-strong: rgba(11, 11, 15, 0.85);
+  --text-code: rgba(11, 11, 15, 0.75);
+  --text-secondary: rgba(11, 11, 15, 0.62);
+  --text-tertiary: #5f5f6a;
+  --text-quaternary: #7c7c86;
+  --accent: var(--nn-star);
+  --on-accent: var(--nn-ink);
+  --accent-text: #7a5c00;
+  --accent-hover: #5c4500;
+  --status-ok: #1e7b34;
+  --status-degraded: #9e5700;
+  --status-error: #d70015;
+  --status-off: #c9c9cf;
+  --on-status: #ffffff;
+  --border: #dcdce1;
+  --border-rail: var(--surface-variant);
+  --border-frame: #d1d1d6;
+  --border-hover: #c9c9cf;
+  --icon-muted: #7c7c86;
+  --ok-tint: rgba(30, 123, 52, 0.10);
+  --degraded-tint: rgba(158, 87, 0, 0.10);
+  --error-tint: rgba(215, 0, 21, 0.08);
+  --error-border: rgba(215, 0, 21, 0.35);
+  --tabbar-glass: rgba(250, 250, 250, 0.92);
+}

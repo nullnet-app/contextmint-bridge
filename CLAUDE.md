@@ -87,6 +87,20 @@ ContextMint Bridge mark from `chrischall/nullnet-design-system`
 (`system/assets/contextmint-bridge-icon-*`), which is the source of truth.
 Never redraw or edit them here: change the design system, then re-copy.
 
+## Popup design tokens
+
+The popup follows the design system's ExtensionPopup spec
+(`system/ui_kits/contextmint/components/ExtensionPopup.md` in
+`chrischall/nullnet-design-system`). `popup.html` inlines only the tokens it
+uses, between `tokens:begin` / `tokens:end`; everything after names a token,
+never a colour. `packages/extension-core/design-system/tokens.css` is the
+design system's generated `system/tokens.css`, vendored verbatim (as the icons
+are), and `extension-core/tests/popup-tokens.test.ts` holds every inlined value
+equal to it in both themes. To take a design-system change, re-copy that file,
+then fix the popup's block until the test passes — never edit the vendored
+copy. `docs/store-assets/popup/` holds the rendered popup in each state, light
+and dark; regenerate it with `store-assets` after any popup change.
+
 ## Testing
 
 Tests live in `packages/<pkg>/tests/` (plus root `tests/` for doc guards).

@@ -1,162 +1,492 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <title>ContextMint Bridge</title>
     <style>
+      /* ================================================================
+         Design tokens — a SUBSET of the Nullnet design system's
+         system/tokens.css, vendored whole at
+         packages/extension-core/design-system/tokens.css.
+
+         Copied rather than linked: the design system is another repo the
+         popup cannot reach at runtime, and the popup needs ~50 of its ~250
+         variables. tests/popup-tokens.test.ts holds every value below equal
+         to the vendored file, per theme, so this block cannot drift from it;
+         re-copy the vendored file to take a design-system change. Everything
+         after `tokens:end` names a token and never a colour.
+
+         Layout, rows and states: the design system's ExtensionPopup spec
+         (system/ui_kits/contextmint/components/ExtensionPopup.md).
+         ================================================================ */
+      /* tokens:begin */
+      :root {
+        color-scheme: light dark;
+        --nn-ink: #0b0b0f;
+        --nn-paper: #fafafa;
+        --nn-star: #f5c518;
+        --ground: #f4f4f7;
+        --surface: #ffffff;
+        --surface-variant: #ebebef;
+        --text-primary: #0b0b0f;
+        --text-secondary: rgba(11, 11, 15, 0.62);
+        --text-tertiary: #5f5f6a;
+        --text-quaternary: #7c7c86;
+        --accent: var(--nn-star);
+        --on-accent: var(--nn-ink);
+        --accent-text: #7a5c00;
+        --status-ok: #1e7b34;
+        --status-degraded: #9e5700;
+        --status-error: #d70015;
+        --status-off: #c9c9cf;
+        --border: #dcdce1;
+        --border-rail: var(--surface-variant);
+        --border-hover: #c9c9cf;
+        --degraded-tint: rgba(158, 87, 0, 0.10);
+        --error-tint: rgba(215, 0, 21, 0.08);
+        --font-text: -apple-system, BlinkMacSystemFont, "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+        --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+        --t-headline: 17px;
+        --lh-headline: 22px;
+        --t-subhead: 15px;
+        --lh-subhead: 20px;
+        --t-footnote: 13px;
+        --lh-footnote: 18px;
+        --t-caption: 12px;
+        --lh-caption: 16px;
+        --t-caption2: 11px;
+        --lh-caption2: 13px;
+        --t-row-detail: 14px;
+        --lh-row-detail: 21px;
+        --tracking-tight: -0.01em;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --space-5: 20px;
+        --r-md: 8px;
+        --r-lg: 12px;
+        --r-xl: 14px;
+        --r-pill: 999px;
+        --hit-min: 44px;
+        --row-min: 52px;
+        --dur-rise: 200ms;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --ground: #0b0b0f;
+          --surface: #16161c;
+          --surface-variant: #1f1f27;
+          --text-primary: #fafafa;
+          --text-secondary: rgba(250, 250, 250, 0.62);
+          --text-tertiary: rgba(250, 250, 250, 0.5);
+          --text-quaternary: rgba(250, 250, 250, 0.42);
+          --accent: var(--nn-star);
+          --on-accent: var(--nn-ink);
+          --accent-text: #f5c518;
+          --status-ok: #34c759;
+          --status-degraded: #ff9500;
+          --status-error: #ff3b30;
+          --status-off: #3a3a44;
+          --border: #2c2c36;
+          --border-rail: var(--surface-variant);
+          --border-hover: #4a4a58;
+          --degraded-tint: rgba(255, 149, 0, 0.16);
+          --error-tint: rgba(255, 59, 48, 0.12);
+        }
+      }
+      /* tokens:end */
+
+      /* ---------- Page ---------- */
+      *, *::before, *::after { box-sizing: border-box; }
+      /* Chrome draws a popup at its content's size up to 800x600, so the body
+         sets the width and owns the scroll: past 600px the list scrolls under
+         a header that stays put, rather than the popup being clipped. `html`
+         is overflow:hidden so the body's overflow is its own and does not
+         propagate to the viewport. */
+      html { background: var(--ground); overflow: hidden; }
       body {
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-        min-width: 380px;
-        margin: 0;
-        padding: 12px;
-        font-size: 14px;
-      }
-      h3 { font-size: 16px; margin: 0 0 12px; }
-      .pair-code {
-        font-size: 28px;
-        font-weight: bold;
-        text-align: center;
-        margin: 14px 0;
-        letter-spacing: 3px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      }
-      .warn {
-        color: #b91c1c;
-        padding: 8px;
-        background: #fef2f2;
-        border: 1px solid #fca5a5;
-        border-radius: 4px;
-      }
-      .hint { color: #6b7280; font-size: 12px; }
-      /* #418: declared, but this browser cannot serve it — shown, never granted. */
-      li.cap-unavailable { color: #9ca3af; }
-      .btn-row {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-top: 12px;
-      }
-      button { padding: 8px 16px; cursor: pointer; border-radius: 4px; font-size: 14px; }
-      button[data-action="cancel"] { background: #eee; border: 1px solid #ccc; }
-      button[data-action="approve"] { background: #2563eb; color: white; border: 1px solid #2563eb; }
-      dl { margin: 0; }
-      dt { font-weight: bold; color: #374151; }
-      dd { margin: 0 0 8px 12px; color: #111; }
-      ul { padding-left: 20px; margin: 8px 0; }
-      li { padding: 2px 0; }
-      /* 0.4.2: trusted-MCPs list with inline revoke button. */
-      /* Bound the height so a long registry scrolls inside the popup (which has
-         a hard ~600px max) instead of being clipped with no scrollbar. */
-      ul.trusted-list {
-        list-style: none;
-        padding-left: 0;
-        max-height: 320px;
+        width: 380px;
+        max-height: 600px;
         overflow-y: auto;
         overscroll-behavior: contain;
+        margin: 0;
+        background: var(--ground);
+        color: var(--text-primary);
+        font-family: var(--font-text);
+        font-size: var(--t-row-detail);
+        line-height: var(--lh-row-detail);
+        -webkit-font-smoothing: antialiased;
       }
-      li.trusted-entry {
+      :focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+      .popup-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 6px 0;
-        border-bottom: 1px solid #f3f4f6;
+        gap: 10px;
+        padding: var(--space-3) var(--space-4);
+        background: var(--ground);
+        border-bottom: 1px solid var(--border-rail);
       }
-      li.trusted-entry:last-child { border-bottom: none; }
-      .trusted-label { flex: 1; }
-      /* 0.4.x: Active / Inactive section headers within the trusted list.
-         The Active header is an <h4>; the Inactive header is a <summary>
-         inside a <details> (collapsed by default), so style by class. */
-      .trusted-section {
-        margin: 10px 0 2px;
-        font-size: 11px;
+      .popup-mark { width: 28px; height: 28px; flex: none; display: block; }
+      /* The mark is always on its ink tile; on the dark ground the tile is the
+         ground, so a 1px border keeps its edge. */
+      .popup-mark { border-radius: 22%; box-shadow: 0 0 0 1px var(--border); }
+      .popup-name {
+        margin: 0;
+        font-size: var(--t-subhead);
+        line-height: var(--lh-subhead);
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: #6b7280;
+        letter-spacing: var(--tracking-tight);
       }
-      summary.trusted-section { cursor: pointer; }
-      details.trusted-inactive { margin-top: 4px; }
-      button[data-action="revoke"] {
-        background: transparent;
-        border: 1px solid #e5e7eb;
-        color: #6b7280;
-        padding: 2px 8px;
-        font-size: 14px;
-        line-height: 1;
-        cursor: pointer;
-        border-radius: 4px;
+      .popup-name span { color: var(--text-secondary); font-weight: 500; }
+      #root { display: block; padding: var(--space-1) var(--space-4) var(--space-4); }
+
+      /* ---------- Type ---------- */
+      h3.screen-title {
+        margin: var(--space-3) 0 var(--space-2);
+        font-size: var(--t-headline);
+        line-height: var(--lh-headline);
+        font-weight: 600;
+        letter-spacing: var(--tracking-tight);
+        overflow-wrap: anywhere;
       }
-      button[data-action="revoke"]:hover {
-        background: #fef2f2;
-        color: #b91c1c;
-        border-color: #fca5a5;
+      h3.section-title {
+        margin: var(--space-5) 0 var(--space-2);
+        font-size: var(--t-subhead);
+        line-height: var(--lh-subhead);
+        font-weight: 600;
       }
-      /* Part 3: per-entry connection-status dot */
-      .status-dot {
-        display: inline-block;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        margin-right: 6px;
-        vertical-align: middle;
+      #root > h3.section-title:first-child,
+      #root > .vault-loss:first-child { margin-top: var(--space-3); }
+      p { margin: var(--space-2) 0; color: var(--text-secondary); font-size: var(--t-footnote); line-height: var(--lh-footnote); }
+      .hint { color: var(--text-tertiary); font-size: var(--t-caption); line-height: var(--lh-caption); }
+      .mono, .trusted-label, .bridge-url { font-family: var(--font-mono); }
+      .sep { color: var(--text-quaternary); }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border-radius: var(--r-pill);
+        padding: 1px 8px;
+        background: var(--surface-variant);
+        color: var(--text-tertiary);
+        font-family: var(--font-text);
+        font-size: var(--t-caption2);
+        line-height: var(--lh-caption2);
+        font-weight: 600;
+        white-space: nowrap;
+        flex: none;
       }
-      .status-dot.connected { background: #2ecc71; }
-      .status-dot.offline { background: #bbb; }
-      /* 2.1.0: the bridges section — loopback plus configured remote targets. */
-      ul.bridge-list { list-style: none; padding: 0; margin: 4px 0 8px; }
-      li.bridge {
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-xl);
+      }
+
+      /* ---------- Buttons (Button: primary · secondary · ghost) ---------- */
+      button { font: inherit; cursor: pointer; }
+      .btn-primary, .btn-secondary {
+        min-height: var(--hit-min);
+        padding: 0 var(--space-4);
+        border: 0;
+        border-radius: var(--r-lg);
+        font-size: var(--t-subhead);
+        line-height: var(--lh-subhead);
+      }
+      .btn-primary { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+      .btn-primary:hover { filter: brightness(1.07); }
+      .btn-primary:disabled { background: var(--border); color: var(--text-tertiary); filter: none; cursor: progress; }
+      .btn-secondary { background: var(--surface-variant); color: var(--text-primary); font-weight: 500; }
+      .btn-secondary:hover { background: var(--border); }
+      .btn-ghost {
+        min-height: 32px;
+        padding: 0 var(--space-2);
+        border: 0;
+        border-radius: var(--r-md);
+        background: none;
+        color: var(--text-tertiary);
+        font-size: var(--t-footnote);
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      /* Sentence case for the action labels the DOM keeps lowercase. */
+      .btn-ghost::first-letter { text-transform: uppercase; }
+      .btn-ghost:hover { background: var(--surface-variant); color: var(--text-primary); }
+      .btn-ghost.is-destructive:hover { background: var(--error-tint); color: var(--status-error); }
+      .btn-ghost[aria-pressed="true"] { color: var(--accent-text); }
+      .btn-icon { width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+      .btn-icon svg { display: block; }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      .btn-row, .account-card-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--space-2);
+        margin-top: var(--space-4);
+      }
+
+      /* ---------- Lists & rows ---------- */
+      ul { margin: 0; padding: 0; list-style: none; }
+      ul.trusted-list, ul.bridge-list {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-xl);
+        overflow: hidden;
+      }
+      li.trusted-entry, li.bridge {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 4px 0;
-        border-bottom: 1px solid #f3f4f6;
+        gap: 10px;
+        min-height: var(--row-min);
+        padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+        border-bottom: 1px solid var(--border-rail);
       }
-      li.bridge:last-child { border-bottom: none; }
-      li.bridge.disabled .bridge-url { color: #9ca3af; text-decoration: line-through; }
-      .bridge-url { flex: 1; word-break: break-all; }
-      button.bridge-remove {
-        background: transparent;
-        border: 1px solid #e5e7eb;
-        color: #6b7280;
-        padding: 2px 8px;
-        font-size: 14px;
-        line-height: 1;
+      li.trusted-entry:last-child, li.bridge:last-child { border-bottom: 0; }
+      .trusted-body, .bridge-body { flex: 1; min-width: 0; }
+      .trusted-line, .bridge-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .trusted-label, .bridge-name {
+        font-size: var(--t-footnote);
+        line-height: var(--lh-footnote);
+        font-weight: 500;
+        color: var(--text-primary);
+        overflow-wrap: anywhere;
+      }
+      .bridge-name { font-size: var(--t-row-detail); }
+      .trusted-meta, .bridge-meta {
+        margin-top: 1px;
+        color: var(--text-tertiary);
+        font-size: var(--t-caption);
+        line-height: var(--lh-caption);
+        overflow-wrap: anywhere;
+      }
+      .bridge-url { font-size: var(--t-caption2); }
+      /* Short and the same on every local row: never split across lines. */
+      .trusted-source.is-local { white-space: nowrap; }
+      li.bridge.disabled .bridge-name { color: var(--text-tertiary); }
+      .bridge-refusal { display: block; margin-top: 2px; color: var(--status-error); }
+      .row-actions { display: flex; align-items: center; gap: var(--space-1); flex: none; }
+      /* Two actions on a trusted row stack, so the name keeps the width. */
+      li.trusted-entry .row-actions { flex-direction: column; align-items: flex-end; gap: 0; }
+      .action-error { margin: 4px 0 0; color: var(--status-error); font-size: var(--t-caption); line-height: var(--lh-caption); }
+      .status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+      .status-dot.connected { background: var(--status-ok); }
+      .status-dot.offline { background: var(--status-off); }
+
+      /* Active / Inactive group labels: the eyebrow. The Inactive one is the
+         <summary> of a closed <details> (Disclosure), with a drawn chevron. */
+      .trusted-section {
+        margin: var(--space-3) 0 6px;
+        color: var(--text-quaternary);
+        font-size: var(--t-caption2);
+        line-height: var(--lh-caption2);
+        font-weight: 600;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+      details.trusted-inactive { margin-top: var(--space-1); }
+      summary.trusted-section {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        min-height: 32px;
+        margin: 0;
         cursor: pointer;
-        border-radius: 4px;
+        list-style: none;
+        border-radius: var(--r-md);
       }
-      button.bridge-remove:hover { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; }
-      li.bridge { flex-wrap: wrap; }
-      .bridge-refusal { flex-basis: 100%; }
-      .bridge-add { display: flex; flex-direction: column; gap: 4px; }
-      .bridge-add input {
-        padding: 4px 6px;
-        border: 1px solid #e5e7eb;
-        border-radius: 4px;
+      summary.trusted-section::-webkit-details-marker { display: none; }
+      summary.trusted-section::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        margin-left: 2px;
+        border-right: 1.5px solid currentColor;
+        border-bottom: 1.5px solid currentColor;
+        transform: rotate(-45deg);
+        transition: transform var(--dur-rise) ease-out;
+      }
+      summary.trusted-section:hover { color: var(--text-secondary); }
+      details[open] > summary.trusted-section::before { transform: rotate(45deg); }
+      details[open] > ul.trusted-list { animation: popup-rise var(--dur-rise) ease-out; }
+      @keyframes popup-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+      /* ---------- Accounts ---------- */
+      .trusted-account {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-1);
+        padding: var(--space-3);
+        margin-bottom: var(--space-2);
+      }
+      .account-name { font-size: var(--t-footnote); line-height: var(--lh-footnote); font-weight: 500; overflow-wrap: anywhere; }
+      .trusted-account label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--t-caption); }
+      .trusted-account .btn-ghost { margin-left: calc(-1 * var(--space-2)); }
+      input[type="checkbox"] { accent-color: var(--accent-text); }
+
+      /* ---------- Connect (PasteField-styled name field) ---------- */
+      .bridge-connect {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: var(--space-3);
+        margin-bottom: var(--space-2);
+      }
+      .bridge-connect > p { margin: 0; }
+      .bridge-connect > p.hint:first-child { color: var(--text-secondary); font-size: var(--t-footnote); line-height: var(--lh-footnote); }
+      .field { display: flex; flex-direction: column; gap: 6px; }
+      .field-label {
+        color: var(--text-quaternary);
+        font-size: var(--t-caption2);
+        line-height: var(--lh-caption2);
+        font-weight: 600;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+      input[type="text"] {
+        min-height: var(--hit-min);
+        padding: 0 var(--space-3);
+        border: 1px solid var(--border);
+        border-radius: var(--r-lg);
+        background: var(--ground);
+        color: var(--text-primary);
         font: inherit;
       }
-      .bridge-error:empty { display: none; }
-      .bridge-error { color: #b91c1c; }
-      /* 3.0.0 (protocol 4): MCPs refused at the hello for speaking protocol 3.
-         Styled as a warning rather than an error: nothing here is broken in
-         this browser, and there is nothing here for the reader to click. */
-      .vault-loss { margin: 0 0 10px; padding: 8px; border: 1px solid #b45309; border-radius: 6px; color: #7c2d12; background: #fff7ed; }
-      .vault-loss p { margin: 4px 0 6px; }
-      .mismatch-heading { margin: 0 0 4px; color: #b45309; }
-      ul.mismatch-list { list-style: none; padding: 0; margin: 0 0 10px; }
-      li.version-mismatch {
-        padding: 6px 8px;
-        margin-bottom: 4px;
-        border-left: 3px solid #f59e0b;
-        background: #fffbeb;
-        color: #78350f;
-        border-radius: 3px;
-        word-break: break-word;
+      input[type="text"]:hover { border-color: var(--border-hover); }
+      input[type="text"]:focus-visible { border-color: var(--accent-text); outline-offset: 1px; }
+      .bridge-connect-error:empty { display: none; }
+      .bridge-connect-error { color: var(--text-secondary); font-size: var(--t-footnote); line-height: var(--lh-footnote); }
+
+      /* The enable box, drawn as the Toggle (44x27, status-ok when on). */
+      input.bridge-enabled {
+        appearance: none;
+        position: relative;
+        width: 44px;
+        height: 27px;
+        margin: 0;
+        border-radius: 14px;
+        background: var(--border);
+        cursor: pointer;
+        flex: none;
+      }
+      input.bridge-enabled::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 21px;
+        height: 21px;
+        border-radius: 50%;
+        background: var(--nn-paper);
+        transition: transform var(--dur-rise) ease-out;
+      }
+      input.bridge-enabled:checked { background: var(--status-ok); }
+      input.bridge-enabled:checked::after { transform: translateX(17px); }
+
+      /* ---------- Decision views (pair, scope update, account cards) ---------- */
+      dl {
+        margin: var(--space-2) 0 0;
+        padding: var(--space-3);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-xl);
+      }
+      dl + dl { margin-top: var(--space-2); }
+      dt {
+        margin-top: 10px;
+        color: var(--text-quaternary);
+        font-size: var(--t-caption2);
+        line-height: var(--lh-caption2);
+        font-weight: 600;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+      dt:first-child { margin-top: 0; }
+      dd { margin: 3px 0 0; font-size: var(--t-footnote); line-height: var(--lh-footnote); overflow-wrap: anywhere; }
+      dd li { padding: 1px 0; }
+      ul.domains li, ul.scope-keys li, ul.capture-headers li, ul.indexed-db-scopes li,
+      ul.dom-selectors li, ul.dom-list-selectors li, ul.graphql-ops li {
+        font-family: var(--font-mono);
+        font-size: var(--t-caption);
+        line-height: var(--lh-caption);
+      }
+      li.cap-unavailable { color: var(--text-tertiary); }
+      .pair-code {
+        margin: var(--space-3) 0 var(--space-1);
+        padding: var(--space-3);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-xl);
+        color: var(--accent-text);
+        font-family: var(--font-mono);
+        font-size: 30px;
+        line-height: 38px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-align: center;
+      }
+      p.empty-state {
+        margin-top: var(--space-3);
+        padding: var(--space-4);
+        border: 1px dashed var(--border);
+        border-radius: var(--r-xl);
+        text-align: center;
+      }
+
+      /* ---------- Warnings: degraded tone, never colour alone ---------- */
+      .warn, dd.cookie-session-warning, li.version-mismatch, .vault-loss {
+        background: var(--degraded-tint);
+        border-left: 3px solid var(--status-degraded);
+        border-radius: var(--r-md);
+        color: var(--text-primary);
+        font-size: var(--t-footnote);
+        line-height: var(--lh-footnote);
+        overflow-wrap: anywhere;
+      }
+      .warn { padding: var(--space-2) var(--space-3); }
+      dd.cookie-session-warning { margin-top: var(--space-2); padding: var(--space-2) 10px; }
+      h3.mismatch-heading { color: var(--status-degraded); }
+      li.version-mismatch { padding: var(--space-2) var(--space-3); margin-bottom: 6px; }
+      .vault-loss { padding: var(--space-3); margin-top: var(--space-3); }
+      .vault-loss strong { display: block; color: var(--status-degraded); font-size: var(--t-row-detail); }
+      .vault-loss p { margin: var(--space-1) 0 10px; color: var(--text-primary); }
+      .vault-loss .btn-secondary { min-height: 36px; font-size: var(--t-footnote); background: var(--surface); }
+
+      @media (prefers-reduced-motion: reduce) {
+        details[open] > ul.trusted-list { animation: none; }
+        summary.trusted-section::before, input.bridge-enabled::after { transition: none; }
+      }
+
+      /* Windows High Contrast and friends: the system palette replaces ours, so
+         every edge a fill used to carry gets a real border, and the dots keep
+         a shape that reads without colour. */
+      @media (forced-colors: active) {
+        .status-dot { forced-color-adjust: none; background: CanvasText; border: 1px solid CanvasText; }
+        .status-dot.offline { background: Canvas; }
+        .card, ul.trusted-list, ul.bridge-list, dl, .pair-code, .warn, dd.cookie-session-warning,
+        li.version-mismatch, .vault-loss, .btn-primary, .btn-secondary, .btn-ghost, p.empty-state {
+          border: 1px solid CanvasText;
+        }
+        input.bridge-enabled { appearance: auto; width: auto; height: auto; }
+        input.bridge-enabled::after { display: none; }
       }
     </style>
   </head>
   <body>
-    <div id="root">Loading…</div>
+    <header class="popup-head">
+      <img class="popup-mark" src="icons/icon.svg" alt="" width="28" height="28">
+      <h1 class="popup-name">ContextMint <span>Bridge</span></h1>
+    </header>
+    <main id="root">Loading…</main>
     <script type="module" src="popup.js"></script>
   </body>
 </html>
