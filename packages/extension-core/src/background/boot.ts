@@ -28,20 +28,8 @@ declare const chrome: ChromeApi;
 import { setPairPendingBadge, clearPairPendingBadge } from './badge.js';
 import type { AnyPendingRecord } from './pending-records.js';
 import { state } from './state.js';
-import {
-  connect,
-  handoffLinkLive,
-  handoffLinkOpen,
-  loadRemoteLinks,
-  onHandoffLinkState,
-  setHandoffTarget,
-  decideAccountCard,
-} from './socket.js';
-import {
-  nativeMessagingRuntime,
-  startNativeHandoff,
-  type NativeHandoff,
-} from '../native-handoff.js';
+import { connect, loadRemoteLinks, decideAccountCard } from './socket.js';
+import { clearRetiredAlarms } from '../retired-alarms.js';
 import { connectedIdentityHashes } from './session-scope.js';
 import { linkStatuses } from './links.js';
 import {
@@ -87,7 +75,11 @@ export function maybeBoot(): void {
     | {
         runtime?: { getManifest?: () => { version: string } };
         storage?: { local?: { onChanged?: { addListener?: unknown } } };
-        alarms?: { create?: unknown; onAlarm?: { addListener?: unknown } };
+        alarms?: {
+          create?: unknown;
+          clear?: (name: string) => unknown;
+          onAlarm?: { addListener?: unknown };
+        };
       }
     | undefined;
   if (
@@ -103,17 +95,15 @@ export function maybeBoot(): void {
   state.trust = new TrustStore(chrome.runtime.getManifest().version);
   state.sessions = new SessionKeys();
   // What every wake runs, once (`page-load-wake.ts`): boot's own run below,
-  // and a page load on an approved site. `handoff` is assigned further down,
-  // before either can call this.
-  let handoff: NativeHandoff | null = null;
+  // and a page load on an approved site. The lift is only `connect()`, which
+  // the keepalive repeats anyway, so one run per worker is plenty: what a
+  // page-load wake buys is the wake itself (Safari's event page restarting
+  // and running this boot, which dials every link).
   const wakeLift = createWakeLift({
     lift: async () => {
       connect();
-      await handoff?.refresh();
     },
-    // Chrome has no hand-off: its lift is only `connect()`, which the
-    // keepalive repeats anyway, so one run per worker is plenty.
-    linkLive: () => (handoff ? handoffLinkLive() : true),
+    linkLive: () => true,
   });
   // Settles once, when the identity boot below does: true with an identity,
   // false when it failed — then a wake has nothing to lift with and gives up
@@ -384,26 +374,10 @@ export function maybeBoot(): void {
       ensureConnected: connect,
     });
   }
-  // Safari inside ContextMint: the app hands over the bridge target the
-  // person set up there (`native-handoff.ts`, mcp-host-app
-  // docs/BRIDGE-HANDOFF.md). Present only where `sendNativeMessage` exists —
-  // Safari, whose manifest asks for `nativeMessaging`. Chrome's does not, so
-  // there this is skipped entirely. The heartbeat alarm is registered now; the
-  // first ask waits for the identity below, since the link it yields cannot
-  // say hello without it.
-  const nativeRuntime = nativeMessagingRuntime();
-  if (nativeRuntime) {
-    handoff = startNativeHandoff({
-      runtime: nativeRuntime,
-      ...(typeof c?.alarms?.create === 'function' &&
-      typeof c?.alarms?.onAlarm?.addListener === 'function'
-        ? { alarms: chrome.alarms }
-        : {}),
-      setTarget: setHandoffTarget,
-      linkConnected: handoffLinkOpen,
-    });
-    onHandoffLinkState(handoff.onLinkState);
-  }
+  // Up to 1.5.0 Safari asked the ContextMint app for a bridge target on a
+  // 5-minute alarm. Nothing listens for it now; clear it so an upgraded
+  // install stops being woken for nothing (`retired-alarms.ts`).
+  void clearRetiredAlarms(c?.alarms);
   // 0.4.0: load (or generate) the extension's long-term identity
   // before connecting. The identity is required to construct the
   // extension hello on WS open.

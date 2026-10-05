@@ -184,7 +184,7 @@ vi.stubGlobal('chrome', {
 
 // Imported after the globals exist — `socket.ts` reads `WebSocket` at module
 // scope only through functions, but `badge.ts` and friends read `chrome`.
-const { connect, reconcileRemoteLinks, decideAccountCard, setHandoffTarget } =
+const { connect, reconcileRemoteLinks, decideAccountCard } =
   await import('../src/background/socket.js');
 const { AccountTrustStore } = await import('../src/account-trust-store.js');
 const { saveRemoteTargets, loadRemoteTargets } = await import('../src/vault-records.js');
@@ -309,8 +309,6 @@ const REMOTE = {
 describe('two bridges at once', () => {
   let localWs: FakeSocket;
   let remoteWs: FakeSocket;
-
-  afterEach(() => setHandoffTarget(null));
 
   beforeEach(async () => {
     FakeSocket.opened = [];
@@ -535,7 +533,7 @@ describe('two bridges at once', () => {
     expect(await trust.get(base.origin, 'acc_abcdef0123456789abcdef01')).not.toBeNull();
   });
 
-  it('does not inherit account trust when a handoff credential id changes', async () => {
+  it('does not inherit account trust when a credential id changes', async () => {
     const trust = new AccountTrustStore();
     const pair = await generateEd25519();
     const record = {
@@ -544,10 +542,10 @@ describe('two bridges at once', () => {
       publicKey: toB64(pair.publicKey), generation: 2, generationHighWater: 2, approvedAt: Date.now(),
     };
     await trust.put(record);
-    setHandoffTarget({ id: 'brt_new', url: REMOTE.url, token: REMOTE.token, name: 'Safari' });
-    const handoffWs = FakeSocket.opened.at(-1)!;
-    handoffWs.open();
-    handoffWs.message({
+    reconcileRemoteLinks([{ ...REMOTE, id: 'host2', tokenId: 'brt_new' }]);
+    const newWs = FakeSocket.opened.at(-1)!;
+    newWs.open();
+    newWs.message({
       type: 'account-key', accountId: record.accountId, slug: record.slug, displayName: record.displayName,
       confirmedBy: 'c•••@gmail.com', tokenId: 'brt_new', kid: record.kid, publicKey: record.publicKey,
       generation: record.generation, bridgedRegistrations: 4,

@@ -14,8 +14,8 @@ import {
 
 // contextmint-bridge#32: a page load on a site the person already approved
 // wakes the background (Safari's event page sleeps otherwise), so opening the
-// site from ContextMint runs the hand-off in one tap. Unapproved sites carry
-// no wake script at all, and the background re-checks the sender anyway.
+// site brings the bridge's links back up. Unapproved sites carry no wake
+// script at all, and the background re-checks the sender anyway.
 
 describe('sendPageLoadWake (the content side)', () => {
   it('sends exactly one wake from the top frame', () => {

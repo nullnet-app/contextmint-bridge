@@ -48,7 +48,7 @@ class FakeSocket {
 
 vi.stubGlobal('WebSocket', FakeSocket);
 
-const { reconcileRemoteLinks, setHandoffTarget, connect } =
+const { reconcileRemoteLinks, connect } =
   await import('../src/background/socket.js');
 const { state } = await import('../src/background/state.js');
 const { links, linkStatuses, unbindAll } = await import('../src/background/links.js');
@@ -57,12 +57,16 @@ const { SessionKeys } = await import('../src/session-keys.js');
 const { EXTENSION_MISMATCH_MESSAGE } = await import('../src/bridge-gateway.js');
 
 const CREDENTIAL = 'mcpb_' + 'B'.repeat(43);
-const HANDOFF = {
+const TARGET = {
   id: 'brt_one',
   url: 'wss://mcp.nullnet.app/bridge',
   token: CREDENTIAL,
-  name: 'Safari',
+  tokenId: 'brt_one',
+  label: 'Safari',
+  enabled: true,
 };
+/** Hold exactly this one configured target (what Connect saves). */
+const useTarget = (t: typeof TARGET) => reconcileRemoteLinks([t]);
 
 type Call = { url: string; init: RequestInit };
 let calls: Call[];
@@ -100,14 +104,13 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  setHandoffTarget(null);
   reconcileRemoteLinks([]);
 });
 
 describe('retired browser-side credential binding', () => {
   it('does not call /bridge/bind when a remote socket opens', async () => {
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
+    useTarget(TARGET);
+    lastSocket(TARGET.url).open();
     await quiet();
     expect(bindCalls()).toHaveLength(0);
   });
@@ -115,43 +118,43 @@ describe('retired browser-side credential binding', () => {
 
 describe('the room’s close codes', () => {
   it('4004 stops reconnecting that target and says why', async () => {
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).open();
+    useTarget(TARGET);
+    lastSocket(TARGET.url).open();
     await quiet();
-    const before = socketsFor(HANDOFF.url).length;
-    lastSocket(HANDOFF.url).remoteClose(4004, 'EXTENSION_MISMATCH');
+    const before = socketsFor(TARGET.url).length;
+    lastSocket(TARGET.url).remoteClose(4004, 'EXTENSION_MISMATCH');
     // No reconnect is even scheduled (the open reset the backoff to zero)...
-    const refused = [...links.values()].find((l) => l.url === HANDOFF.url)!;
+    const refused = [...links.values()].find((l) => l.url === TARGET.url)!;
     expect(refused.nextAttemptAt).toBe(0);
     expect(refused.reconnectAttempt).toBe(0);
     // ...and the keepalive's connect() does not re-dial it either.
     for (const link of links.values()) link.nextAttemptAt = 0;
     connect(); // the keepalive tick
     await new Promise((r) => setTimeout(r, 1100)); // past the first backoff step
-    expect(socketsFor(HANDOFF.url)).toHaveLength(before);
-    const status = linkStatuses().find((l) => l.url === HANDOFF.url)!;
+    expect(socketsFor(TARGET.url)).toHaveLength(before);
+    const status = linkStatuses().find((l) => l.url === TARGET.url)!;
     expect(status.connected).toBe(false);
     expect(status.refusal).toBe(EXTENSION_MISMATCH_MESSAGE);
     expect(EXTENSION_MISMATCH_MESSAGE).toBe('This bridge is paired with a different browser');
   });
 
   it('a new credential for the target is a new link, and dials again', () => {
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).remoteClose(4004);
-    const before = socketsFor(HANDOFF.url).length;
-    setHandoffTarget({ ...HANDOFF, id: 'brt_two', token: 'mcpb_' + 'N'.repeat(43) });
-    expect(socketsFor(HANDOFF.url)).toHaveLength(before + 1);
-    expect(linkStatuses().find((l) => l.url === HANDOFF.url)!.refusal).toBeUndefined();
+    useTarget(TARGET);
+    lastSocket(TARGET.url).remoteClose(4004);
+    const before = socketsFor(TARGET.url).length;
+    useTarget({ ...TARGET, id: 'brt_two', tokenId: 'brt_two', token: 'mcpb_' + 'N'.repeat(43) });
+    expect(socketsFor(TARGET.url)).toHaveLength(before + 1);
+    expect(linkStatuses().find((l) => l.url === TARGET.url)!.refusal).toBeUndefined();
   });
 
   it('4003 (revoked) keeps today’s behaviour: it reconnects', () => {
-    setHandoffTarget(HANDOFF);
-    lastSocket(HANDOFF.url).remoteClose(4003, 'REVOKED');
-    const before = socketsFor(HANDOFF.url).length;
+    useTarget(TARGET);
+    lastSocket(TARGET.url).remoteClose(4003, 'REVOKED');
+    const before = socketsFor(TARGET.url).length;
     for (const link of links.values()) link.nextAttemptAt = 0;
     connect();
-    expect(socketsFor(HANDOFF.url)).toHaveLength(before + 1);
-    expect(linkStatuses().find((l) => l.url === HANDOFF.url)!.refusal).toBeUndefined();
+    expect(socketsFor(TARGET.url)).toHaveLength(before + 1);
+    expect(linkStatuses().find((l) => l.url === TARGET.url)!.refusal).toBeUndefined();
   });
 
   it('4004 on the loopback link is not a bridge refusal', () => {
@@ -164,11 +167,11 @@ describe('the room’s close codes', () => {
 
   it('4005 and 4006 immediately redial remote links without confirmation UI state', () => {
     for (const code of [4005, 4006]) {
-      setHandoffTarget({ ...HANDOFF, id: `brt_${code}` });
-      const before = socketsFor(HANDOFF.url).length;
-      lastSocket(HANDOFF.url).remoteClose(code);
-      expect(socketsFor(HANDOFF.url)).toHaveLength(before + 1);
-      expect(linkStatuses().find((l) => l.url === HANDOFF.url)).not.toHaveProperty('confirm');
+      useTarget({ ...TARGET, id: `brt_${code}`, tokenId: `brt_${code}` });
+      const before = socketsFor(TARGET.url).length;
+      lastSocket(TARGET.url).remoteClose(code);
+      expect(socketsFor(TARGET.url)).toHaveLength(before + 1);
+      expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('confirm');
     }
   });
 });

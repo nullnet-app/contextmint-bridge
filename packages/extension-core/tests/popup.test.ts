@@ -3,7 +3,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
-  handoffBridgeView,
   mergeTrustedSummaries,
   renderPopup,
   type BridgesView,
@@ -1676,83 +1675,26 @@ describe('renderPopup — bridges', () => {
     expect(container.textContent).not.toContain('can ask this browser to pair');
   });
 
-  // Safari inside ContextMint: the app hands the target over (native-handoff.ts).
-  it('shows a handed-off bridge as from ContextMint, with no way to edit it', () => {
+  // The extension stands alone (plan 2026-10-05, T2): a fresh install with no
+  // account shows its own loopback row and the Connect call to action, and
+  // nothing that sends the person to the ContextMint app.
+  it('a fresh install with no account: the loopback row, Connect, and no ContextMint app', () => {
     withBridges({
       targets: [],
-      handoff: { name: 'Safari on the Mac', url: 'wss://mcp.nullnet.app/bridge', connected: true },
-      onRemove: vi.fn(),
-      onToggle: vi.fn(),
+      localConnected: false,
+      connectOrigins: ['https://mcp.nullnet.app'],
+      onConnect: async () => null,
     });
-    const row = container.querySelector('.bridge.handoff')!;
-    expect(row).not.toBeNull();
-    expect(row.textContent).toContain('from ContextMint');
-    expect(row.textContent).toContain('Safari on the Mac');
-    expect(row.textContent).toContain('wss://mcp.nullnet.app/bridge');
-    expect(row.querySelector('.status-dot.connected')).not.toBeNull();
-    expect(row.querySelector('button')).toBeNull();
-    expect(row.querySelector('input')).toBeNull();
+    const rows = [...container.querySelectorAll('.bridge-list > li')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.classList.contains('local')).toBe(true);
+    expect(container.querySelector('button.bridge-connect-start')?.textContent).toBe('Connect to mcp.nullnet.app');
+    expect(container.textContent).not.toMatch(/ContextMint/);
   });
 
-  it('shows no hand-off row when there is none', () => {
-    withBridges({ targets: [] });
-    expect(container.querySelector('.bridge.handoff')).toBeNull();
-  });
-});
-
-// The popup's bootstrap reads the background's link statuses and picks out
-// the ContextMint hand-off row from them (background/links.ts `linkStatuses`).
-describe('handoffBridgeView — the hand-off row from the link statuses', () => {
-  const LOCAL = { id: 'local', connected: true, url: 'ws://127.0.0.1:37149' };
-  const USER = {
-    id: 'remote:b1',
-    connected: true,
-    label: 'Mine',
-    url: 'wss://other.example/bridge',
-  };
-  const HANDOFF = {
-    id: 'contextmint:brt_one',
-    connected: false,
-    label: 'Safari on the Mac',
-    url: 'wss://mcp.nullnet.app/bridge',
-    handoff: true,
-  };
-
-  it('is the link marked handoff, named by its label, with its state', () => {
-    expect(handoffBridgeView([LOCAL, USER, HANDOFF])).toEqual({
-      name: 'Safari on the Mac',
-      url: 'wss://mcp.nullnet.app/bridge',
-      connected: false,
-    });
-    expect(handoffBridgeView([{ ...HANDOFF, connected: true }])?.connected).toBe(true);
-  });
-
-  it('is none when no link is marked handoff — a user-configured remote is never it', () => {
-    expect(handoffBridgeView([])).toBeUndefined();
-    expect(handoffBridgeView([LOCAL, USER])).toBeUndefined();
-    expect(handoffBridgeView([{ ...HANDOFF, handoff: false }])).toBeUndefined();
-  });
-
-  it('falls back to the URL when the link carries no label', () => {
-    const { label: _label, ...unlabelled } = HANDOFF;
-    expect(handoffBridgeView([unlabelled])?.name).toBe(HANDOFF.url);
-  });
-
-  it('is none when the hand-off link carries no URL to show', () => {
-    const { url: _url, ...urlless } = HANDOFF;
-    expect(handoffBridgeView([urlless])).toBeUndefined();
-  });
-
-  it('copies only the name, URL and state — nothing else a status might carry', () => {
-    const view = handoffBridgeView([{ ...HANDOFF, token: 'mcpb_secret' } as typeof HANDOFF]);
-    expect(Object.keys(view!).sort()).toEqual(['connected', 'name', 'url']);
-  });
-
-  it('carries a 4004 refusal through, and only a string one', () => {
-    const why = 'This bridge is paired with a different browser';
-    expect(handoffBridgeView([{ ...HANDOFF, refusal: why }])?.refusal).toBe(why);
-    const odd = handoffBridgeView([{ ...HANDOFF, refusal: 7 } as unknown as typeof HANDOFF]);
-    expect(Object.keys(odd!).sort()).toEqual(['connected', 'name', 'url']);
+  it('never renders a row for a link status it was not given as a target', () => {
+    withBridges({ targets: [], localConnected: true });
+    expect(container.querySelectorAll('.bridge.remote')).toHaveLength(0);
   });
 });
 
@@ -1793,12 +1735,10 @@ describe('renderPopup — bridge status dots', () => {
         { id: 'b1', url: 'wss://h/b', enabled: true, connected: false, refusal: why },
         { id: 'b2', url: 'wss://h2/b', enabled: true, connected: false },
       ],
-      handoff: { name: 'Safari', url: 'wss://mcp.nullnet.app/bridge', connected: false, refusal: why },
     });
     const refused = container.querySelector('[data-target-id="b1"] .bridge-refusal');
     expect(refused?.textContent).toBe(why);
     expect(container.querySelector('[data-target-id="b2"] .bridge-refusal')).toBeNull();
-    expect(container.querySelector('.bridge.handoff .bridge-refusal')?.textContent).toBe(why);
   });
 });
 

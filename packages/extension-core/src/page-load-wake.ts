@@ -5,16 +5,16 @@
  * Safari runs the background as a non-persistent event page, and a page load
  * alone never woke it: the manifest's `content.js` only listens, and the
  * background registers no `tabs`/`webNavigation` listener. So opening an MCP's
- * site from ContextMint ("Refresh from Safari", nullnet-app/mcp-host-app iOS
- * plan T8) did not run the hand-off the contract runs "at every wake" until
- * the person opened the popup.
+ * site left a suspended event page asleep — no loopback link, no account
+ * link — until an alarm or the popup woke it.
  *
  * Now a small isolated-world script sends ONE runtime message when a page
  * finishes loading (`document_idle`, top frame only). A runtime message is a
- * wake event for the event page, and it needs no permission.
+ * wake event for the event page, and it needs no permission; waking it runs
+ * boot, which dials every link.
  *
- * It is not in the manifest. Waking Safari's event page runs boot, and boot
- * runs the hand-off, so a wake from EVERY site would be a lift on every site.
+ * It is not in the manifest: a wake from EVERY site would be a boot on every
+ * site.
  * Like the MAIN-world bridge (`main-world-bridge.ts`), it is registered at
  * runtime with `chrome.scripting` (already granted) on the hosts some
  * approved MCP may reach, and nowhere else: an unapproved site carries no

@@ -265,29 +265,12 @@ export interface RemoteTargetView {
   refusal?: string;
 }
 
-/**
- * The bridge ContextMint handed over (Safari inside the ContextMint app,
- * `native-handoff.ts`). Read from the background's live link statuses — it is
- * held in memory there and nowhere the popup could read it from — and shown
- * as "from ContextMint", not editable: the app owns it, and a disconnect in
- * the app is what removes it. Never the credential.
- */
-export interface HandoffBridgeView {
-  name: string;
-  url: string;
-  connected?: boolean;
-  /** As {@link RemoteTargetView.refusal}. */
-  refusal?: string;
-}
-
 export interface BridgesView {
   targets: RemoteTargetView[];
   connectOrigins?: string[];
   connectName?: string;
   connectStatus?: string;
   onConnect?: (origin: string, name: string) => Promise<string | null>;
-  /** The ContextMint hand-off, when the background holds one. */
-  handoff?: HandoffBridgeView;
   /** Whether the loopback link — the one every local MCP needs — is up. */
   localConnected?: boolean;
   onRemove?: (id: string) => void;
@@ -943,12 +926,11 @@ function breakableUrl(url: string): HTMLElement {
  */
 function bridgeBody(
   name: string,
-  { connected, url, source, refusal }: { connected?: boolean; url?: string; source?: string; refusal?: string },
+  { connected, url, refusal }: { connected?: boolean; url?: string; refusal?: string },
 ): HTMLElement {
   const body = elem('div', { class: 'bridge-body' });
   const line = elem('div', { class: 'bridge-line' });
   line.appendChild(elem('span', { class: 'bridge-name' }, name));
-  if (source) line.appendChild(elem('span', { class: 'bridge-source pill' }, source));
   body.appendChild(line);
   const parts: HTMLElement[] = [];
   if (connected !== undefined) parts.push(elem('span', { class: 'bridge-state' }, connected ? 'Connected' : 'Offline'));
@@ -1082,21 +1064,6 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
     bridgeBody('localhost (always on)', bridges.localConnected === undefined ? {} : { connected: bridges.localConnected }),
   );
   ul.appendChild(local);
-
-  if (bridges.handoff) {
-    const h = bridges.handoff;
-    const li = elem('li', { class: 'bridge remote handoff' });
-    if (h.connected !== undefined) li.appendChild(statusDot(h.connected));
-    li.appendChild(
-      bridgeBody(h.name, {
-        url: h.url,
-        source: 'from ContextMint',
-        ...(h.connected === undefined ? {} : { connected: h.connected }),
-        ...(h.refusal === undefined ? {} : { refusal: h.refusal }),
-      }),
-    );
-    ul.appendChild(li);
-  }
 
   for (const t of bridges.targets) {
     const li = elem('li', { class: t.enabled ? 'bridge remote' : 'bridge remote disabled' });
@@ -1591,27 +1558,8 @@ export interface LinkStatusMessage {
   connected: boolean;
   label?: string;
   url?: string;
-  /** Only on the link ContextMint handed over. */
-  handoff?: boolean;
   /** Why the bridge refused this browser for good (`4004`), when it did. */
   refusal?: string;
-}
-
-/**
- * The hand-off row, from the background's link statuses: the link marked
- * `handoff`, named by its label (else its URL), with its state — or none when
- * no such link, or it carries no URL to show. Only those three fields are
- * copied, so nothing else a status might carry can reach the popup's DOM.
- */
-export function handoffBridgeView(links: LinkStatusMessage[]): HandoffBridgeView | undefined {
-  const link = links.find((l) => l.handoff === true);
-  if (!link || typeof link.url !== 'string') return undefined;
-  return {
-    name: typeof link.label === 'string' ? link.label : link.url,
-    url: link.url,
-    connected: link.connected,
-    ...(typeof link.refusal === 'string' ? { refusal: link.refusal } : {}),
-  };
 }
 
 declare const chrome: {

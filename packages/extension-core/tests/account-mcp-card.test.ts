@@ -18,7 +18,7 @@ describe('account MCP approval replay guard', () => {
       id: 'remote:target', kind: 'remote', url: 'wss://gateway.example', protocols: [], label: 'gateway',
       ws: { readyState: 1, send: () => { throw new Error('stale approval must not send ready'); } } as never,
       reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: new Uint8Array(32).fill(0xfe),
-      accountAttestations: new Map(), closed: false, handoff: false, targetId: 'target', tokenId: 'token',
+      accountAttestations: new Map(), closed: false, targetId: 'target', tokenId: 'token',
       refusal: null, lastImmediateRedialAt: 0,
     };
     links.set(link.id, link);
@@ -53,7 +53,7 @@ describe('account MCP approval replay guard', () => {
       id: 'remote:forgetting', kind: 'remote', url: 'wss://gateway.example', protocols: [], label: 'gateway',
       ws: { readyState: 1, send: () => { throw new Error('a forgotten card must not send ready'); } } as never,
       reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: new Uint8Array(32).fill(0xfe),
-      accountAttestations: new Map(), closed: false, handoff: false, targetId: 'target', tokenId: 'token',
+      accountAttestations: new Map(), closed: false, targetId: 'target', tokenId: 'token',
       refusal: null, lastImmediateRedialAt: 0,
     };
     links.set(link.id, link);
@@ -96,7 +96,7 @@ describe('account MCP approval replay guard', () => {
     const link: Link = { id: 'remote:forgetting-hello', kind: 'remote', url: 'wss://gateway.example', protocols: [],
       label: 'gateway', ws: ws as never, reconnectAttempt: 0, nextAttemptAt: 0,
       sessionNonce: Uint8Array.from(atob(hello.answersExtNonce), (c) => c.charCodeAt(0)), accountAttestations: new Map(),
-      closed: false, handoff: false, targetId: 'target', tokenId: 'token', refusal: null, lastImmediateRedialAt: 0 };
+      closed: false, targetId: 'target', tokenId: 'token', refusal: null, lastImmediateRedialAt: 0 };
     link.accountAttestations.set(hello.mcpId, { accountId: 'acc' } as never);
     links.set(link.id, link);
     beginAccountForget('https://gateway.example', 'acc');
