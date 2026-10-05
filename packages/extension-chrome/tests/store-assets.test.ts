@@ -4,9 +4,23 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { deflateSync } from 'node:zlib';
-import { POPUP_SHOTS, SCENES, SCREENSHOTS } from '../store-assets/scenes.js';
+import {
+  APP_STORE_DEVICES,
+  APP_STORE_SCREENSHOTS,
+  APP_STORE_SIZES,
+  POPUP_SHOTS,
+  SCENES,
+  SCREENSHOTS,
+  type PopupScene,
+} from '../store-assets/scenes.js';
 import { chromeStubSource } from '../store-assets/chrome-stub.js';
-import { BRAND, promoTileHtml, screenshotHtml } from '../store-assets/canvas.js';
+import {
+  BRAND,
+  appStoreScreenshotHtml,
+  portraitLayout,
+  promoTileHtml,
+  screenshotHtml,
+} from '../store-assets/canvas.js';
 import { pngInfo, stripAlpha } from '../store-assets/png.js';
 import { normalisePendingPair } from '../../extension-core/src/lib/pending-pair.js';
 import { normaliseRemoteTargets } from '../../extension-core/src/remote-targets.js';
@@ -42,6 +56,33 @@ const CHROME_PROBE = {
     executeScript: () => {},
   },
   cookies: { set: () => {} },
+};
+
+/** The capabilities a scene's MCPs declare, trusted and pending alike. */
+function sceneCapabilities(scene: PopupScene): string[] {
+  return [
+    ...scene.trusted.flatMap((t) => t.input.capabilities),
+    ...(scene.derived ?? []).flatMap((d) => d.mcp.scope.capabilities),
+    ...Object.values(
+      (scene.pendingPair ?? {}) as Record<
+        string,
+        { capabilities: string[]; previousScope?: { capabilities: string[] } }
+      >,
+    ).flatMap((p) => [...p.capabilities, ...(p.previousScope?.capabilities ?? [])]),
+  ];
+}
+
+/**
+ * What Safari 27 is PROVEN to serve: webRequest header capture was checked
+ * live (capabilities.ts); downloads is known absent; scripting and
+ * cookies.set are not proven, so a Safari screenshot does not show what they
+ * gate.
+ */
+const SAFARI_PROVEN_PROBE = {
+  webRequest: {
+    onBeforeSendHeaders: { addListener: () => {} },
+    onBeforeRedirect: { addListener: () => {} },
+  },
 };
 
 describe('scenes', () => {
@@ -264,6 +305,99 @@ describe('png', () => {
   });
 });
 
+describe('App Store screenshots', () => {
+  it('uses the sizes App Store Connect takes: Mac 1280x800, iPhone 6.9-inch, iPad 13-inch', () => {
+    expect(APP_STORE_SIZES).toEqual({
+      mac: { width: 1280, height: 800 },
+      iphone: { width: 1320, height: 2868 },
+      ipad: { width: 2064, height: 2752 },
+    });
+    expect([...APP_STORE_DEVICES]).toEqual(['mac', 'iphone', 'ipad']);
+  });
+
+  it('gives every device at least three shots, each of a real scene, named by its size', () => {
+    for (const device of APP_STORE_DEVICES) {
+      const shots = APP_STORE_SCREENSHOTS.filter((s) => s.device === device);
+      expect(shots.length, device).toBeGreaterThanOrEqual(3);
+      const { width, height } = APP_STORE_SIZES[device];
+      for (const s of shots) {
+        expect(SCENES[s.scene], s.file).toBeDefined();
+        expect(s.file).toMatch(
+          new RegExp(`^app-store/screenshots/${device}/\\d-[a-z-]+-${width}x${height}\\.png$`),
+        );
+      }
+    }
+  });
+
+  it('shows only capabilities Safari is proven to serve', () => {
+    const missing = unavailableCapabilities(SAFARI_PROVEN_PROBE);
+    for (const s of APP_STORE_SCREENSHOTS) {
+      for (const c of sceneCapabilities(SCENES[s.scene])) {
+        expect(missing.has(c as never), `${s.file}: ${c}`).toBe(false);
+      }
+    }
+  });
+
+  it('never names another browser or platform (App Review 2.3.10)', () => {
+    for (const s of APP_STORE_SCREENSHOTS) {
+      const text = JSON.stringify([s.headline, s.sub, SCENES[s.scene]]);
+      expect(text, s.file).not.toMatch(/chrome|chromium|android|google|firefox|\bedge\b/i);
+    }
+  });
+
+  it('shows no loopback MCP on iPhone or iPad, where nothing local can dial the extension', () => {
+    for (const s of APP_STORE_SCREENSHOTS.filter((x) => x.device !== 'mac')) {
+      const scene = SCENES[s.scene];
+      expect(scene.links.find((l) => l.id === 'local')?.connected ?? false, s.file).toBe(false);
+      // Every MCP shown arrived through the account, not over loopback.
+      expect(scene.trusted, s.file).toEqual([]);
+      expect(s.sub + s.headline, s.file).not.toMatch(/\bfpx\b|your machine|this Mac/i);
+    }
+  });
+
+  it('a Mac shot is the 1280x800 landscape canvas', () => {
+    const html = appStoreScreenshotHtml({
+      device: 'mac',
+      headline: 'h',
+      sub: 's',
+      popupPng: 'data:image/png;base64,AAAA',
+      popupWidth: 380,
+      popupHeight: 500,
+    });
+    expect(html).toContain('width: 1280px');
+    expect(html).toContain('height: 800px');
+  });
+
+  it.each(['iphone', 'ipad'] as const)(
+    'a %s shot is a portrait canvas of its size, popup below the copy and inside the edges',
+    (device) => {
+      const { width, height } = APP_STORE_SIZES[device];
+      for (const popupHeight of [300, 600]) {
+        const html = appStoreScreenshotHtml({
+          device,
+          headline: 'Your <AI>',
+          sub: 'a & b',
+          popupPng: 'data:image/png;base64,AAAA',
+          popupWidth: 380,
+          popupHeight,
+        });
+        expect(html).toContain(`width: ${width}px`);
+        expect(html).toContain(`height: ${height}px`);
+        expect(html).toContain('Your &lt;AI&gt;');
+        expect(html).toContain('a &amp; b');
+        expect(html).not.toMatch(/\bfpx\b/);
+        const l = portraitLayout(device, 380, popupHeight);
+        expect(l.popupTop).toBeGreaterThanOrEqual(l.copyHeight);
+        expect(l.popupTop + l.popupHeight).toBeLessThanOrEqual(height);
+        expect(l.popupWidth).toBeLessThanOrEqual(width);
+        // Big enough to read on the device: the 380px popup at 2.5x or more.
+        expect(l.scale).toBeGreaterThanOrEqual(2.5);
+        expect(html).toContain(`width: ${l.popupWidth}px`);
+      }
+    },
+  );
+});
+
 describe('committed store assets', () => {
   const read = (p: string): Buffer => readFileSync(join(ASSETS, p));
 
@@ -304,6 +438,23 @@ describe('committed store assets', () => {
       expect(onDisk).toContain(`popup/${scene}-light.png`);
       expect(onDisk).toContain(`popup/${scene}-dark.png`);
     }
+  });
+
+  it.each(APP_STORE_SCREENSHOTS.map((s) => [s.file, s.device] as const))(
+    '%s is a 24-bit PNG of its device size',
+    (file, device) => {
+      expect(pngInfo(read(file))).toEqual({ ...APP_STORE_SIZES[device], colorType: 2, bitDepth: 8 });
+    },
+  );
+
+  it('holds no stray App Store screenshots the generator no longer makes', () => {
+    const onDisk = APP_STORE_DEVICES.flatMap((device) => {
+      const dir = join(ASSETS, 'app-store', 'screenshots', device);
+      return existsSync(dir)
+        ? readdirSync(dir).map((f) => `app-store/screenshots/${device}/${f}`)
+        : [];
+    });
+    expect(onDisk.sort()).toEqual(APP_STORE_SCREENSHOTS.map((s) => s.file).sort());
   });
 
   it('the store-assets README says how to regenerate them', () => {

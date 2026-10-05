@@ -1,7 +1,13 @@
 /**
- * Regenerate the Chrome Web Store listing images in docs/store-assets/:
+ * Regenerate the Chrome Web Store listing images in docs/store-assets/, and
+ * the App Store's in docs/store-assets/app-store/screenshots/:
  *
  *   npm run store-assets --workspace=@fetchproxy/extension-chrome
+ *
+ * `-- --only=chrome` or `-- --only=app-store` renders just one set. The App
+ * Store set is captured from the SAFARI build's popup
+ * (packages/extension-safari/dist/, which the npm script builds too), so it
+ * shows what Safari shows ("Safari on iPhone", not "Chrome on MacIntel").
  *
  * For each screenshot scene it serves the BUILT popup (`dist/popup.html` +
  * `popup.js`, rebuilt by the npm script first) from a loopback HTTP server,
@@ -23,14 +29,25 @@ import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import puppeteer, { type Browser } from 'puppeteer-core';
 import { CHROME_TARGET } from '../build.js';
-import { POPUP_SHOTS, SCENES, SCREENSHOTS, type PopupScene, type SceneName } from './scenes.js';
+import {
+  APP_STORE_SCREENSHOTS,
+  APP_STORE_SIZES,
+  POPUP_SHOTS,
+  SCENES,
+  SCREENSHOTS,
+  type AppStoreDevice,
+  type PopupScene,
+  type SceneName,
+} from './scenes.js';
 import { chromeStubSource } from './chrome-stub.js';
-import { promoTileHtml, screenshotHtml } from './canvas.js';
+import { appStoreScreenshotHtml, promoTileHtml, screenshotHtml } from './canvas.js';
 import { stripAlpha } from './png.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..');
 const DIST = CHROME_TARGET.outdir;
+/** extension-safari's SAFARI_TARGET.outdir, built by the npm script first. */
+const SAFARI_DIST = join(ROOT, 'packages', 'extension-safari', 'dist');
 const OUT = join(ROOT, 'docs', 'store-assets');
 
 /** Chrome's popup never grows past 600px tall; neither does ours. */
@@ -39,6 +56,14 @@ const POPUP_MAX_HEIGHT = 600;
 const POPUP_WIDTH = 380;
 /** Captured at 2x so the enlarged popup on the canvas stays sharp. */
 const POPUP_SCALE = 2;
+/** The portrait App Store canvases enlarge the popup up to ~4.7x. */
+const APP_STORE_CAPTURE_SCALE: Record<AppStoreDevice, number> = { mac: 2, iphone: 5, ipad: 5 };
+/** What `navigator.platform` says on each device: the popup names this browser by it. */
+const APP_STORE_NAVIGATOR_PLATFORM: Record<AppStoreDevice, string> = {
+  mac: 'MacIntel',
+  iphone: 'iPhone',
+  ipad: 'iPad',
+};
 
 function chromePath(): string {
   const candidates = [
@@ -72,8 +97,13 @@ interface Routes {
   [path: string]: { type: string; body: string | Buffer };
 }
 
-async function routesFor(scene: PopupScene, version: string, seedJs: string): Promise<Routes> {
-  const popupHtml = await readFile(join(DIST, 'popup.html'), 'utf8');
+async function routesFor(
+  scene: PopupScene,
+  version: string,
+  seedJs: string,
+  dist: string = DIST,
+): Promise<Routes> {
+  const popupHtml = await readFile(join(dist, 'popup.html'), 'utf8');
   const stub = '<script src="stub.js"></script>';
   if (!popupHtml.includes('<script type="module" src="popup.js">')) {
     throw new Error('dist/popup.html no longer loads popup.js the way this generator expects');
@@ -91,9 +121,9 @@ async function routesFor(scene: PopupScene, version: string, seedJs: string): Pr
       type: 'text/html',
       body: popupHtml.replace('</head>', `  ${stub}\n  </head>`),
     },
-    '/popup.js': { type: 'text/javascript', body: await readFile(join(DIST, 'popup.js')) },
+    '/popup.js': { type: 'text/javascript', body: await readFile(join(dist, 'popup.js')) },
     // The header's mark, as the extension serves it from dist/icons/.
-    '/icons/icon.svg': { type: 'image/svg+xml', body: await readFile(join(DIST, 'icons', 'icon.svg')) },
+    '/icons/icon.svg': { type: 'image/svg+xml', body: await readFile(join(dist, 'icons', 'icon.svg')) },
     '/stub.js': { type: 'text/javascript', body: chromeStubSource(scene, version) },
     '/seed.js': { type: 'text/javascript', body: seedJs },
     '/seed.html': {
@@ -127,6 +157,7 @@ async function capturePopup(
   origin: string,
   scene: PopupScene,
   scheme: 'light' | 'dark' = 'light',
+  { scale = POPUP_SCALE, navigatorPlatform }: { scale?: number; navigatorPlatform?: string } = {},
 ): Promise<{ png: Buffer; width: number; height: number; end?: Buffer }> {
   // A fresh profile per scene: the vault is per-origin IndexedDB, and every
   // scene is served from the same origin.
@@ -138,8 +169,14 @@ async function capturePopup(
     await page.setViewport({
       width: POPUP_WIDTH,
       height: POPUP_MAX_HEIGHT,
-      deviceScaleFactor: POPUP_SCALE,
+      deviceScaleFactor: scale,
     });
+    if (navigatorPlatform) {
+      // A source string, not a function: tsx's __name helper does not exist in the page.
+      await page.evaluateOnNewDocument(
+        `Object.defineProperty(Navigator.prototype, 'platform', { get: () => ${JSON.stringify(navigatorPlatform)} });`,
+      );
+    }
 
     await page.goto(`${origin}/seed.html`);
     await page.waitForFunction(
@@ -230,10 +267,46 @@ async function main(): Promise<void> {
   };
   const seedJs = await seedBundle();
 
+  const only = process.argv.find((a) => a.startsWith('--only='))?.slice('--only='.length);
+  if (only !== undefined && only !== 'chrome' && only !== 'app-store') {
+    throw new Error(`--only=${only}: expected chrome or app-store`);
+  }
+  if (only !== 'chrome' && !existsSync(join(SAFARI_DIST, 'popup.js'))) {
+    throw new Error(`${relative(ROOT, SAFARI_DIST)}/popup.js is missing — build extension-safari first`);
+  }
+
   let routes: Routes = {};
   const { server, origin } = await serve(() => routes);
   const browser = await puppeteer.launch({ executablePath: chromePath(), headless: true });
   try {
+    if (only !== 'app-store') await renderChrome();
+    if (only !== 'chrome') await renderAppStore();
+  } finally {
+    await browser.close();
+    server.close();
+  }
+
+  async function renderAppStore(): Promise<void> {
+    for (const shot of APP_STORE_SCREENSHOTS) {
+      routes = await routesFor(SCENES[shot.scene], manifest.version, seedJs, SAFARI_DIST);
+      const popup = await capturePopup(browser, origin, SCENES[shot.scene], 'light', {
+        scale: APP_STORE_CAPTURE_SCALE[shot.device],
+        navigatorPlatform: APP_STORE_NAVIGATOR_PLATFORM[shot.device],
+      });
+      const { width, height } = APP_STORE_SIZES[shot.device];
+      const html = appStoreScreenshotHtml({
+        device: shot.device,
+        headline: shot.headline,
+        sub: shot.sub,
+        popupPng: `data:image/png;base64,${popup.png.toString('base64')}`,
+        popupWidth: popup.width,
+        popupHeight: popup.height,
+      });
+      await write(shot.file, await renderHtml(browser, html, width, height));
+    }
+  }
+
+  async function renderChrome(): Promise<void> {
     const popups = new Map<SceneName, { png: Buffer; width: number; height: number }>();
     for (const shot of SCREENSHOTS) {
       if (!popups.has(shot.scene)) {
@@ -257,9 +330,6 @@ async function main(): Promise<void> {
       await write(shot.file, stripAlpha(popup.png));
       if (popup.end) await write(shot.file.replace(/\.png$/, '-end.png'), stripAlpha(popup.end));
     }
-  } finally {
-    await browser.close();
-    server.close();
   }
 }
 
