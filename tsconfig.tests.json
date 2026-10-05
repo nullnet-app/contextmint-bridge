@@ -14,6 +14,7 @@
     "packages/extension-chrome/store-assets/**/*.ts",
     "packages/extension-safari/build.ts",
     "packages/extension-safari/manifest.ts",
+    "apple/tools/*.ts",
     "vitest.config.ts"
   ]
 }

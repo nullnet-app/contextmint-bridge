@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The container app's privacy manifest, in both ContextMintBridgeMac and
+  ContextMintBridgeIOS (the App/ directory is each target's source).
+
+  What the app does: it shows how to turn the extension on and asks Safari
+  whether it is on. It opens no connection, stores nothing (no UserDefaults,
+  no files), collects nothing and tracks nothing, so it declares no data types
+  and no required-reason APIs. tests/apple-project.test.ts holds the Swift
+  under apple/ to that: a required-reason API there fails it until this file
+  declares it.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

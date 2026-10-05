@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Safari appex's own privacy manifest, in both ContextMintBridgeExtensionMac
+  and ContextMintBridgeExtensionIOS. The appex is a separate binary in the
+  upload and ITMS-91053 names binaries one by one, so the app's manifest does
+  not cover it. The resources phase copies it into the appex AFTER
+  tools/stage-extension.sh has staged the web resources, which may never bring
+  a file of this name.
+
+  What the appex's native code does: nothing. Its handler completes every
+  request with no reply (the manifest asks for no nativeMessaging). The
+  extension's web code runs in Safari, under Safari's own storage; what it
+  reads and sends is docs/PRIVACY.md's subject.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>
