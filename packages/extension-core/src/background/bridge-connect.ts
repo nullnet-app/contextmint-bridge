@@ -73,6 +73,14 @@ export async function connectPopupOptions(): Promise<{ origins: string[]; status
   return { origins, ...(typeof saved === 'string' ? { status: saved } : {}) };
 }
 
+/**
+ * What the popup reads while the gateway's Connect tab is open. The copy is the
+ * design handoff's (nullnet-design-system HANDOFF.md, Part 2 → "What the
+ * extension says"), the same in Chrome and Safari: the person's next step is
+ * the Confirm button in the tab Connect just opened.
+ */
+export const CONNECT_CONFIRM_STATUS = 'Confirm in the tab that opened';
+
 async function setConnectStatus(status: string): Promise<void> {
   try { await runtime().storage?.session?.set({ [BRIDGE_CONNECT_STATUS_KEY]: status.slice(0, 160) }); } catch { /* status is best effort; credential flow is independent */ }
 }
@@ -147,7 +155,7 @@ export async function beginBridgeConnect(originValue: unknown, nameValue: unknow
   for (const [key, request] of Object.entries(pending)) if (request.expiresAt <= now || request.origin === origin) delete pending[key];
   pending[String(tabId)] = { tabId, origin, requestId: started.requestId, nonce: started.nonce, expiresAt: now + BRIDGE_CONNECT_TTL_MS };
   await area.set({ [PENDING_BRIDGE_CONNECT_KEY]: pending });
-  await setConnectStatus('Waiting for account approval…');
+  await setConnectStatus(CONNECT_CONFIRM_STATUS);
   return { ok: true };
 }
 
