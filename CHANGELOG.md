@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.7.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.0...v1.7.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **extension-core:** revive a restored tab that has no content script instead of failing ([#92](https://github.com/nullnet-app/contextmint-bridge/issues/92)) ([c361f92](https://github.com/nullnet-app/contextmint-bridge/commit/c361f922db12315caf773998391d1840862f6e63))
+* **extension-core:** revive a script-less restored tab in Safari too ([#96](https://github.com/nullnet-app/contextmint-bridge/issues/96)) ([265e986](https://github.com/nullnet-app/contextmint-bridge/commit/265e986cfcf5a6a800d1d5205ed3dc930c53f3e0))
+
+
+### Documentation
+
+* **extension-chrome:** note the tab revive's reload and script injection ([#95](https://github.com/nullnet-app/contextmint-bridge/issues/95)) ([b9303ff](https://github.com/nullnet-app/contextmint-bridge/commit/b9303ffd262cd40b22bd4b17a100707b25d0c9d7))
+* **store-assets:** add the Chrome Web Store marquee promo tile ([#98](https://github.com/nullnet-app/contextmint-bridge/issues/98)) ([cf22d65](https://github.com/nullnet-app/contextmint-bridge/commit/cf22d651e1004ec63a6784a85112e93b404d2b0c))
+* **store-assets:** justify scripting for reviving a restored tab ([#97](https://github.com/nullnet-app/contextmint-bridge/issues/97)) ([479d9fd](https://github.com/nullnet-app/contextmint-bridge/commit/479d9fde64c66927bc103ae95fbaa9730a152d2a))
+
 ## [1.7.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.6.1...v1.7.0) (2026-10-06)
 
 
