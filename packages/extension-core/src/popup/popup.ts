@@ -34,7 +34,13 @@ import { currentPlatform } from '../platform.js';
 import { DEFAULT_BRIDGE_ORIGIN } from '../bridge-connect-contract.js';
 import { gatewayOriginFor } from '../bridge-gateway.js';
 import { HIGH_RISK_KEYWORDS } from '../lib/scope.js';
-import { LinkStatusWatch, type LinkStatusMessage, type StatusAnswer } from './link-status-watch.js';
+import {
+  LinkStatusWatch,
+  parseLinkRole,
+  type LinkRoleView,
+  type LinkStatusMessage,
+  type StatusAnswer,
+} from './link-status-watch.js';
 export type { LinkStatusMessage } from './link-status-watch.js';
 
 /**
@@ -271,6 +277,13 @@ export interface RemoteTargetView {
    * notice rather than a refusal.
    */
   notice?: string;
+  /**
+   * What the account's room says this browser is (`bridge-role`, mcp-host
+   * plan task X1): serving, standby, or not confirmed. Shown only while the
+   * link is up; absent (an older gateway, or one that has not said) leaves
+   * the row reading "Connected" as before.
+   */
+  role?: LinkRoleView;
 }
 
 export interface BridgesView {
@@ -889,6 +902,22 @@ function noticeLine(notice: string | undefined): HTMLElement | null {
   return notice ? elem('span', { class: 'bridge-notice hint' }, notice) : null;
 }
 
+/**
+ * The line under a connected bridge row saying whether this browser serves
+ * the account (spec §5.9). `canServe: false` wins over the role: a browser
+ * that is not confirmed for the account is not a candidate, whatever the room
+ * calls it. The serving browser's label goes in through `textContent` only.
+ */
+export function roleText(role: LinkRoleView): string {
+  if (!role.canServe) return 'Connected, but this browser is not confirmed for the account';
+  if (role.role === 'serving') return 'Serving this account';
+  return `Standby \u2014 ${role.serving.label} is serving. This browser takes over if it disconnects.`;
+}
+
+function roleLine(role: LinkRoleView | undefined, connected: boolean | undefined): HTMLElement | null {
+  return role && connected === true ? elem('span', { class: 'bridge-role hint' }, roleText(role)) : null;
+}
+
 /** The green/grey dot a bridge row carries, with the state named for a11y. */
 function statusDot(connected: boolean): HTMLElement {
   return elem('span', {
@@ -939,7 +968,13 @@ function breakableUrl(url: string): HTMLElement {
  */
 function bridgeBody(
   name: string,
-  { connected, url, refusal, notice }: { connected?: boolean; url?: string; refusal?: string; notice?: string },
+  {
+    connected,
+    url,
+    refusal,
+    notice,
+    role,
+  }: { connected?: boolean; url?: string; refusal?: string; notice?: string; role?: LinkRoleView },
 ): HTMLElement {
   const body = elem('div', { class: 'bridge-body' });
   const line = elem('div', { class: 'bridge-line' });
@@ -956,6 +991,8 @@ function bridgeBody(
     });
     body.appendChild(meta);
   }
+  const roled = roleLine(role, connected);
+  if (roled) body.appendChild(roled);
   const refused = refusalLine(refusal);
   if (refused) body.appendChild(refused);
   const noticed = refused ? null : noticeLine(notice);
@@ -1090,6 +1127,7 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
         ...(t.connected === undefined ? {} : { connected: t.connected }),
         ...(t.refusal === undefined ? {} : { refusal: t.refusal }),
         ...(t.notice === undefined ? {} : { notice: t.notice }),
+        ...(t.role === undefined ? {} : { role: t.role }),
       }),
     );
     const pairedOrigin = pairedOrigins.get(t.id);
@@ -1842,6 +1880,8 @@ async function bootstrap(): Promise<void> {
       const notice = links.find((link) => link.id === id)?.notice;
       return typeof notice === 'string' ? notice : undefined;
     };
+    const roleFor = (id: string): LinkRoleView | undefined =>
+      parseLinkRole(links.find((link) => link.id === id)?.role);
     const write = async (next: RemoteTarget[]): Promise<void> => {
       await saveRemoteTargets(next);
       try {
@@ -1869,6 +1909,7 @@ async function bootstrap(): Promise<void> {
         const connected = statusFor(`remote:${t.id}`);
         const refusal = refusalFor(`remote:${t.id}`);
         const notice = noticeFor(`remote:${t.id}`);
+        const role = roleFor(`remote:${t.id}`);
         return {
           id: t.id,
           url: t.url,
@@ -1877,6 +1918,7 @@ async function bootstrap(): Promise<void> {
           ...(connected === undefined ? {} : { connected }),
           ...(refusal === undefined ? {} : { refusal }),
           ...(notice === undefined ? {} : { notice }),
+          ...(role === undefined ? {} : { role }),
         };
       }),
       onConnect: async (origin, name) => {

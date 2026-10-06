@@ -79,7 +79,7 @@ describe('account MCP one-tap approval', () => {
     const link: Link = { id: 'remote:race', kind: 'remote', url: 'wss://gateway.example/bridge', protocols: [], label: 'race',
       ws: new OpenSocket() as never, reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: fromB64(hello.answersExtNonce),
       accountAttestations: new Map([[hello.mcpId, attestation]]), closed: false, targetId: 'race',
-      tokenId: attestation.tokenId, refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      tokenId: attestation.tokenId, refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(link.id, link);
     const originalGet = AccountTrustStore.prototype.get;
     let accountRead!: () => void; let resume!: () => void;
@@ -134,7 +134,7 @@ describe('account MCP one-tap approval', () => {
     const link: Link = { id: 'remote:paired-race', kind: 'remote', url: 'wss://gateway.example/bridge', protocols: [], label: 'paired-race',
       ws: new OpenSocket() as never, reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: fromB64(hello.answersExtNonce),
       accountAttestations: new Map([[hello.mcpId, attestation]]), closed: false, targetId: 'paired-race',
-      tokenId: attestation.tokenId, refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      tokenId: attestation.tokenId, refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(link.id, link);
     const original = trust.setAttestedBy.bind(trust);
     let writeDone!: () => void; let resume!: () => void;
@@ -172,7 +172,7 @@ describe('account MCP one-tap approval', () => {
     const link: Link = { id: 'remote:approval-race', kind: 'remote', url: 'wss://gateway.example/bridge', protocols: [], label: 'approval-race',
       ws: new OpenSocket() as never, reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: fromB64(hello.answersExtNonce),
       accountAttestations: new Map([[hello.mcpId, attestation]]), closed: false, targetId: 'approval-race',
-      tokenId: attestation.tokenId, refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      tokenId: attestation.tokenId, refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(link.id, link); bindMcpToLink(hello.mcpId, link);
     const scope = { domains: hello.domains, capabilities: hello.capabilities ?? [], cookieKeys: [], localStorageKeys: [],
       sessionStorageKeys: [], captureHeaders: [], indexedDbScopes: [], domSelectors: [], domListSelectors: [], graphqlOps: [],
@@ -223,7 +223,7 @@ describe('account MCP one-tap approval', () => {
     const link: Link = { id: 'remote:session-approval-race', kind: 'remote', url: 'wss://gateway.example/bridge', protocols: [], label: 'session-approval-race',
       ws: new OpenSocket() as never, reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: fromB64(hello.answersExtNonce),
       accountAttestations: new Map([[hello.mcpId, attestation]]), closed: false, targetId: 'session-approval-race',
-      tokenId: attestation.tokenId, refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      tokenId: attestation.tokenId, refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(link.id, link); bindMcpToLink(hello.mcpId, link);
     const scope = { domains: hello.domains, capabilities: hello.capabilities ?? [], cookieKeys: [], localStorageKeys: [],
       sessionStorageKeys: [], captureHeaders: [], indexedDbScopes: [], domSelectors: [], domListSelectors: [], graphqlOps: [],
@@ -281,7 +281,7 @@ describe('account MCP one-tap approval', () => {
     const link: Link = { id: 'remote:target', kind: 'remote', url: 'wss://gateway.example/bridge',
       protocols: [], label: 'gateway', ws: ws as never, reconnectAttempt: 0, nextAttemptAt: 0,
       sessionNonce: fromB64(hello.answersExtNonce), accountAttestations: new Map([[hello.mcpId, attestation]]),
-      closed: false, targetId: 'target', tokenId: 'token_test', refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      closed: false, targetId: 'target', tokenId: 'token_test', refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(link.id, link);
     const trustedMcpWrite = vi.spyOn(state.trust, 'put');
 
@@ -396,7 +396,7 @@ describe('account MCP one-tap approval', () => {
     const link: Link = { id: 'remote:expand', kind: 'remote', url: 'wss://gateway.example/bridge',
       protocols: [], label: 'gateway', ws: ws as never, reconnectAttempt: 0, nextAttemptAt: 0,
       sessionNonce: fromB64(hello.answersExtNonce), accountAttestations: new Map([[hello.mcpId, attestation]]),
-      closed: false, targetId: 'expand', tokenId: 'token_test', refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      closed: false, targetId: 'expand', tokenId: 'token_test', refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(link.id, link);
 
     await onServerHello(link, hello);
@@ -465,7 +465,7 @@ describe('account MCP one-tap approval', () => {
     const link: Link = { id: 'remote:target', kind: 'remote', url: 'wss://gateway.example/bridge',
       protocols: [], label: 'gateway', ws: ws as never, reconnectAttempt: 0, nextAttemptAt: 0,
       sessionNonce: fromB64(hello.answersExtNonce), accountAttestations: new Map([[hello.mcpId, attestation]]),
-      closed: false, targetId: 'target', tokenId: 'token_test', refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      closed: false, targetId: 'target', tokenId: 'token_test', refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(link.id, link);
 
     await onServerHello(link, hello);
@@ -521,7 +521,7 @@ describe('account MCP one-tap approval', () => {
     const linkB: Link = { id: 'remote:target-b', kind: 'remote', url: 'wss://gateway.example/bridge',
       protocols: [], label: 'gateway B', ws: new OpenSocket() as never, reconnectAttempt: 0, nextAttemptAt: 0,
       sessionNonce: fromB64(helloB.answersExtNonce), accountAttestations: new Map([[helloB.mcpId, attestationB]]),
-      closed: false, targetId: 'target-b', tokenId: 'token_other', refusal: null, notice: null, lastImmediateRedialAt: 0 };
+      closed: false, targetId: 'target-b', tokenId: 'token_other', refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
     links.set(linkB.id, linkB);
     await onServerHello(linkB, helloB);
     expect(state.sessions.get(helloB.mcpId)).not.toBeNull();

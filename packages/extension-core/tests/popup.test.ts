@@ -1780,6 +1780,87 @@ describe('renderPopup — bridge status dots', () => {
     expect(container.querySelector('[data-target-id="b2"] .bridge-notice b')).toBeNull();
     expect(container.querySelector('[data-target-id="b3"] .bridge-notice')).toBeNull();
   });
+
+  // mcp-host plan task X1: the account room says whether THIS browser serves.
+  describe('whether this browser serves the account (bridge-role)', () => {
+    const row = (id: string) => container.querySelector(`[data-target-id="${id}"]`)!;
+    const roleText = (id: string) => row(id).querySelector('.bridge-role')?.textContent;
+
+    it('serving', () => {
+      withBridges({
+        targets: [{ id: 'b1', url: 'wss://h/b', enabled: true, connected: true, role: { role: 'serving', canServe: true } }],
+      });
+      expect(roleText('b1')).toBe('Serving this account');
+    });
+
+    it('standby names who serves', () => {
+      withBridges({
+        targets: [
+          {
+            id: 'b1',
+            url: 'wss://h/b',
+            enabled: true,
+            connected: true,
+            role: { role: 'standby', canServe: true, serving: { label: 'Chrome on Mac' } },
+          },
+        ],
+      });
+      expect(roleText('b1')).toBe(
+        'Standby \u2014 Chrome on Mac is serving. This browser takes over if it disconnects.',
+      );
+    });
+
+    it('not confirmed for the account (canServe false), whatever the role', () => {
+      withBridges({
+        targets: [
+          {
+            id: 'b1',
+            url: 'wss://h/b',
+            enabled: true,
+            connected: true,
+            role: { role: 'standby', canServe: false, serving: { label: 'Chrome on Mac' } },
+          },
+          { id: 'b2', url: 'wss://h2/b', enabled: true, connected: true, role: { role: 'serving', canServe: false } },
+        ],
+      });
+      const unconfirmed = 'Connected, but this browser is not confirmed for the account';
+      expect(roleText('b1')).toBe(unconfirmed);
+      expect(roleText('b2')).toBe(unconfirmed);
+      expect(row('b1').textContent).not.toContain('Chrome on Mac');
+    });
+
+    it('renders the label as text, never HTML', () => {
+      const label = '<img src=x onerror="alert(1)"><b>x</b>';
+      withBridges({
+        targets: [
+          {
+            id: 'b1',
+            url: 'wss://h/b',
+            enabled: true,
+            connected: true,
+            role: { role: 'standby', canServe: true, serving: { label } },
+          },
+        ],
+      });
+      expect(roleText('b1')).toContain(label);
+      expect(row('b1').querySelector('img')).toBeNull();
+      expect(row('b1').querySelector('.bridge-role b')).toBeNull();
+    });
+
+    it('with no bridge-role, the row reads Connected as today', () => {
+      withBridges({ targets: [{ id: 'b1', url: 'wss://h/b', enabled: true, connected: true }] });
+      expect(row('b1').querySelector('.bridge-role')).toBeNull();
+      expect(row('b1').querySelector('.bridge-state')?.textContent).toBe('Connected');
+    });
+
+    it('says nothing about a role while the link is down', () => {
+      withBridges({
+        targets: [{ id: 'b1', url: 'wss://h/b', enabled: true, connected: false, role: { role: 'serving', canServe: true } }],
+      });
+      expect(row('b1').querySelector('.bridge-role')).toBeNull();
+      expect(row('b1').querySelector('.bridge-state')?.textContent).toBe('Offline');
+    });
+  });
 });
 
 /**
