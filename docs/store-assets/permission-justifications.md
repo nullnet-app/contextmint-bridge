@@ -39,7 +39,10 @@ approved MCP servers only — never on every site — plus, on those same hosts
 only, a tiny script that tells the extension a page finished loading so it can
 reconnect promptly, and, after an extension
 update, to put the extension's own declared content scripts back into tabs that
-were already open. The injected code performs only the operation requested and
+were already open — and, when a request's own tab on an approved domain does
+not answer (for example a tab the browser restored after a restart), to put
+those same declared scripts back into that one tab, once, without reloading a
+page the user has open. The injected code performs only the operation requested and
 returns the result; it does not modify the page.
 
 ---
