@@ -42,11 +42,14 @@ import {
   ACCOUNT_ATTEST_FRAME,
   ROOM_PING_FRAME,
   ROOM_PONG_FRAME,
+  BRIDGE_ROLE_FRAME,
+  roomFrameAccepted,
   roomFrameText,
   accountKeyId,
   fromB64,
   type AccountKeyFrame,
   type AccountAttestFrame,
+  type BridgeRoleFrame,
 } from '@fetchproxy/protocol';
 
 import type { ChromeApi } from '../chrome-api.js';
@@ -96,6 +99,7 @@ import {
   storeAccountAttestation,
   clearAccountAttestations,
   type Link,
+  type LinkRole,
 } from './links.js';
 
 declare const chrome: ChromeApi;
@@ -117,8 +121,9 @@ const REMOTE_RECONNECT_BACKOFF_MS = [1000, 2000, 5000, 15_000, 30_000, 60_000];
  * can never disagree.
  *
  * B-BUG-9: host → extension notices this build understands. A host sends
- * `peer-gone` only to an extension that lists it. Account identity frames and
- * the account-room heartbeat (`room-ping`, X3) are meaningful only on
+ * `peer-gone` only to an extension that lists it. Account identity frames,
+ * the account-room heartbeat (`room-ping`, X3) and the room's word on whether
+ * this browser serves the account (`bridge-role`, X1) are meaningful only on
  * configured remote credentials; loopback's advertised contract stays
  * unchanged.
  */
@@ -129,6 +134,7 @@ const REMOTE_HELLO_ACCEPTS: readonly string[] = Object.freeze([
   ACCOUNT_KEY_FRAME,
   ACCOUNT_ATTEST_FRAME,
   ROOM_PING_FRAME,
+  BRIDGE_ROLE_FRAME,
 ]);
 
 function helloAccepts(link: Link): readonly string[] {
@@ -221,6 +227,9 @@ function teardownLink(link: Link): void {
     if (state.trust) void syncMainWorldBridgeForActiveTrust(state.trust);
   }
   link.sessionNonce = null;
+  // The role described the connection that just ended; the next one is told
+  // afresh on its hello.
+  link.role = null;
   if (dropped.length > 0) broadcastConnectionsChanged();
 }
 
@@ -278,6 +287,9 @@ function connectLink(link: Link): void {
     (globalThis.crypto as Crypto).getRandomValues(sessionNonce);
     link.sessionNonce = sessionNonce;
     clearAccountAttestations(link);
+    // A fresh hello: whatever a room said about the previous connection no
+    // longer describes this one.
+    link.role = null;
     const extHello: HelloFrameFromExtension = {
       type: 'hello',
       protocolVersion: PROTOCOL_VERSION,
@@ -512,7 +524,13 @@ async function onMessage(link: Link, data: string): Promise<void> {
   // before validation so loopback never parses or acts on them.
   if (link.kind === 'local' && raw !== null && typeof raw === 'object') {
     const type = (raw as { type?: unknown }).type;
-    if (type === ACCOUNT_KEY_FRAME || type === ACCOUNT_ATTEST_FRAME || type === ROOM_PONG_FRAME) return;
+    if (
+      type === ACCOUNT_KEY_FRAME ||
+      type === ACCOUNT_ATTEST_FRAME ||
+      type === ROOM_PONG_FRAME ||
+      type === BRIDGE_ROLE_FRAME
+    )
+      return;
   }
   let frame: Frame;
   try {
@@ -541,12 +559,47 @@ async function onMessage(link: Link, data: string): Promise<void> {
     await onAccountKey(link, frame);
   } else if (frame.type === ACCOUNT_ATTEST_FRAME) {
     storeAccountAttestation(link, frame as AccountAttestFrame);
+  } else if (frame.type === BRIDGE_ROLE_FRAME) {
+    onBridgeRole(link, frame);
   } else if (frame.type === ROOM_PONG_FRAME) {
     // X3: the relay's answer to `room-ping`. Its liveness value is on the
     // relay's side (the room records when it auto-responded); there is
     // nothing for this side to do but accept it quietly.
   }
   // ready frames from the host shouldn't reach us; ignore.
+}
+
+/**
+ * X1: the account room says whether THIS browser serves the account's bridged
+ * MCPs or stands by (mcp-host multi-browser spec §5.8, decision M8).
+ *
+ * Display only. A relay can lie about the role, and nothing here enforces or
+ * grants anything on its word: which browser serves a call is decided by the
+ * room before any MCP's hello reaches this extension, and the pins and
+ * attestations every session is checked against are unchanged. So the frame
+ * is kept for the popup and for nothing else.
+ *
+ * - **Only where advertised.** Accepted on a link whose hello listed
+ *   `bridge-role` (`roomFrameAccepted` over the same list the hello sent),
+ *   which is never loopback; loopback drops the frame before validation, as
+ *   it does every account-room frame.
+ * - **Already validated.** `validateFrame` (the published protocol) refused
+ *   anything malformed: an extra member such as a token id, a standby that
+ *   does not say who serves, an over-long label or one with control or bidi
+ *   characters. A refused frame leaves the last good role in place.
+ * - **Session state.** Kept on the link object, never in `storage.local` or
+ *   the vault; cleared on the next hello and on close.
+ * - **The label only.** `since` is dropped; nothing shows it.
+ */
+function onBridgeRole(link: Link, frame: BridgeRoleFrame): void {
+  if (link.kind !== 'remote' || !roomFrameAccepted(helloAccepts(link), BRIDGE_ROLE_FRAME)) return;
+  const next: LinkRole =
+    frame.role === 'serving'
+      ? { role: 'serving', canServe: frame.canServe }
+      : { role: 'standby', canServe: frame.canServe, serving: { label: frame.serving.label } };
+  if (JSON.stringify(next) === JSON.stringify(link.role)) return;
+  link.role = next;
+  broadcastConnectionsChanged();
 }
 
 const accountTrust = new AccountTrustStore();

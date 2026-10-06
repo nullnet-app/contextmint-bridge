@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
   LinkStatusWatch,
+  parseLinkRole,
   statusSignature,
   type StatusAnswer,
 } from '../src/popup/link-status-watch.js';
@@ -45,6 +46,19 @@ describe('statusSignature', () => {
     expect(statusSignature(offline)).not.toBe(
       statusSignature({ links: [{ id: ROW, connected: false, refusal: 'nope' }] }),
     );
+  });
+
+  // mcp-host plan task X1: a failover or switch moves the role without the
+  // link going up or down, and an open popup must redraw for it.
+  it('changes when the room changes what this browser is (bridge-role)', () => {
+    const serving = { role: 'serving', canServe: true };
+    const standby = { role: 'standby', canServe: true, serving: { label: 'Chrome on Mac' } };
+    const other = { role: 'standby', canServe: true, serving: { label: 'Safari on iPhone' } };
+    const unconfirmed = { role: 'standby', canServe: false, serving: { label: 'Chrome on Mac' } };
+    const sig = (role?: unknown) =>
+      statusSignature({ links: [{ id: ROW, connected: true, ...(role ? { role } : {}) }] } as StatusAnswer);
+    const all = [sig(), sig(serving), sig(standby), sig(other), sig(unconfirmed)];
+    expect(new Set(all).size).toBe(all.length);
   });
 
   it('changes when the account turns this browser away (4001)', () => {
@@ -112,6 +126,41 @@ describe('LinkStatusWatch (Safari: the link opens after the popup asked, no broa
       expect(rerender).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('parseLinkRole (the background answer, read defensively)', () => {
+  it('reads serving, standby and unconfirmed', () => {
+    expect(parseLinkRole({ role: 'serving', canServe: true })).toEqual({ role: 'serving', canServe: true });
+    expect(parseLinkRole({ role: 'standby', canServe: false, serving: { label: 'Chrome on Mac' } })).toEqual({
+      role: 'standby',
+      canServe: false,
+      serving: { label: 'Chrome on Mac' },
+    });
+  });
+
+  it('keeps nothing but the fields it shows', () => {
+    expect(
+      parseLinkRole({ role: 'standby', canServe: true, serving: { label: 'x', since: 5, tokenId: 't' }, extra: 1 }),
+    ).toEqual({ role: 'standby', canServe: true, serving: { label: 'x' } });
+  });
+
+  it('refuses anything malformed, so the row reads as plain Connected', () => {
+    for (const bad of [
+      undefined,
+      null,
+      'serving',
+      {},
+      { role: 'leader', canServe: true },
+      { role: 'serving' },
+      { role: 'serving', canServe: 'yes' },
+      { role: 'standby', canServe: true },
+      { role: 'standby', canServe: true, serving: {} },
+      { role: 'standby', canServe: true, serving: { label: '' } },
+      { role: 'standby', canServe: true, serving: { label: 7 } },
+    ]) {
+      expect(parseLinkRole(bad)).toBeUndefined();
     }
   });
 });

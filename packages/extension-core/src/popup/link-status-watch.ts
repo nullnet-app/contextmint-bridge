@@ -24,6 +24,34 @@ export interface LinkStatusMessage {
   refusal?: string;
   /** Why the account's room turned this browser away for now (`4001`). */
   notice?: string;
+  /**
+   * What the account's room says this browser is (`bridge-role`, mcp-host plan
+   * task X1), while the link is up. `unknown` here because the popup reads it
+   * only through {@link parseLinkRole}.
+   */
+  role?: unknown;
+}
+
+/** A link's role as the popup shows it. See `background/links.ts` `LinkRole`. */
+export type LinkRoleView =
+  | { role: 'serving'; canServe: boolean }
+  | { role: 'standby'; canServe: boolean; serving: { label: string } };
+
+/**
+ * A link's `role` from the background's answer, or undefined when it is
+ * absent or not the shape the popup draws — the row then reads plain
+ * "Connected", exactly as before any room said anything. Keeps only the
+ * fields the popup shows, as fresh values.
+ */
+export function parseLinkRole(raw: unknown): LinkRoleView | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const { role, canServe, serving } = raw as { role?: unknown; canServe?: unknown; serving?: unknown };
+  if (typeof canServe !== 'boolean') return undefined;
+  if (role === 'serving') return { role, canServe };
+  if (role !== 'standby' || serving === null || typeof serving !== 'object') return undefined;
+  const label = (serving as { label?: unknown }).label;
+  if (typeof label !== 'string' || label === '') return undefined;
+  return { role, canServe, serving: { label } };
 }
 
 /** The background's answer to `get-connected-identities` (background/boot.ts). */
@@ -37,7 +65,7 @@ export const LINK_STATUS_POLL_MS = 1500;
 
 /**
  * What the popup draws from an answer, as a comparable string: the connected
- * MCP identities and each link's state, refusal and notice, order-insensitive.
+ * MCP identities and each link's state, refusal, notice and role, order-insensitive.
  * `undefined` (nobody answered) has its own signature, so a popup whose first
  * query went unanswered still re-renders once one is.
  */
@@ -52,6 +80,7 @@ export function statusSignature(answer: StatusAnswer | undefined): string {
           l.connected === true,
           typeof l.refusal === 'string' ? l.refusal : null,
           typeof l.notice === 'string' ? l.notice : null,
+          parseLinkRole(l.role) ?? null,
         ] as const,
     )
     .sort((a, b) => a[0].localeCompare(b[0]));

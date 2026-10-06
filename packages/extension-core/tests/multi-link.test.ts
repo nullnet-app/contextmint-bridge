@@ -352,7 +352,7 @@ describe('two bridges at once', () => {
     expect(remote).toHaveLength(1);
     expect(local[0]!.role).toBe('extension');
     expect(local[0]!.accepts).toEqual(['peer-gone']);
-    expect(remote[0]!.accepts).toEqual(['peer-gone', 'hello-rejected', 'account-key', 'account-attest', 'room-ping']);
+    expect(remote[0]!.accepts).toEqual(['peer-gone', 'hello-rejected', 'account-key', 'account-attest', 'room-ping', 'bridge-role']);
     expect(local[0]!.sessionNonce).not.toBe(remote[0]!.sessionNonce);
   });
 

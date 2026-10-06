@@ -80,6 +80,17 @@ export interface Link {
    */
   notice: string | null;
   /**
+   * What the account's room last said about THIS browser on this link's
+   * current connection (`bridge-role`, mcp-host plan task X1): whether it
+   * serves the account's bridged MCPs or stands by, and who serves if not.
+   * Session state only — never `storage.local`, never the vault — cleared
+   * when a hello goes out and when the socket closes, so a role always
+   * describes the connection that is up. Display only: the room can say
+   * anything here and it grants this browser nothing. `null` until a room
+   * says, and always on loopback (no room).
+   */
+  role: LinkRole | null;
+  /**
    * Epoch ms of this link's last IMMEDIATE re-dial (after `4005` / `4006`).
    * Those closes are not errors, so they skip the backoff — but only once per
    * {@link IMMEDIATE_REDIAL_SPACING_MS}, so a room that kept closing would
@@ -87,6 +98,15 @@ export interface Link {
    */
   lastImmediateRedialAt: number;
 }
+
+/**
+ * The popup's view of a `bridge-role` frame: the role, whether this browser
+ * may serve (`canServe`, its eligibility), and for a standby the serving
+ * browser's LABEL. `since` is not kept — nothing shows it.
+ */
+export type LinkRole =
+  | { role: 'serving'; canServe: boolean }
+  | { role: 'standby'; canServe: boolean; serving: { label: string } };
 
 /** See {@link Link.lastImmediateRedialAt}. */
 export const IMMEDIATE_REDIAL_SPACING_MS = 5000;
@@ -114,6 +134,7 @@ export function localLink(): Link {
     tokenId: undefined,
     refusal: null,
     notice: null,
+    role: null,
     lastImmediateRedialAt: 0,
   };
 }
@@ -137,6 +158,7 @@ export function remoteLink(target: RemoteTarget, protocols: string[]): Link {
     ...(target.connectAccount ? { connectAccount: target.connectAccount } : {}),
     refusal: null,
     notice: null,
+    role: null,
     lastImmediateRedialAt: 0,
   };
 }
@@ -221,6 +243,8 @@ export interface LinkStatus {
   refusal?: string;
   /** Why the account's room turned this browser away for now (`4001`), while the link is down. */
   notice?: string;
+  /** What the account's room says this browser is (`bridge-role`), while the link is up. */
+  role?: LinkRole;
 }
 
 /**
@@ -244,6 +268,7 @@ export function linkStatuses(): LinkStatus[] {
       sessions: mcpIdsForLink(link).length,
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
       ...(link.notice !== null && !connected ? { notice: link.notice } : {}),
+      ...(link.role !== null && connected ? { role: link.role } : {}),
     });
   }
   return out.sort((a, b) =>
