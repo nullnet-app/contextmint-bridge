@@ -10,7 +10,8 @@
  * live one gets the content script injected (never reloaded — that could lose
  * unsaved input). Only tabs that already matched the request are touched, at
  * most once per request, inside a bounded wait; where the browser lacks the
- * APIs (Safari without `tabs.reload` / `scripting`) behaviour is unchanged.
+ * APIs (`tabs.reload` / `scripting`) behaviour is unchanged. Safari has both
+ * but differs in every signal; `revive-restored-tab-safari.test.ts` covers it.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -237,7 +238,29 @@ describe('reviving a matched tab with no content script', () => {
     expect(fake.injections).toEqual([]);
   });
 
-  it('falls back to today’s behaviour where tabs.reload and scripting are missing (Safari)', async () => {
+  it('injects into a live tab but cannot reload a discarded one when tabs.reload is missing', async () => {
+    const expected = await baselineError();
+    const fake = installFakeChrome(
+      [
+        { id: 1, url: COMPASS, status: 'unloaded', discarded: true },
+        { id: 2, url: COMPASS, status: 'complete', discarded: false },
+      ],
+      { noReload: true },
+    );
+    const r = await send();
+    expect(r).toEqual({ kind: 'response', response: { ok: true, from: 2 }, tabUrl: COMPASS });
+    expect(fake.reloads).toEqual([]);
+    expect(fake.injections.map((i) => i.tabId)).toEqual([2]);
+
+    const lone = installFakeChrome([{ id: 1, url: COMPASS, status: 'unloaded', discarded: true }], {
+      noReload: true,
+    });
+    const miss = await send();
+    expect(miss).toEqual({ kind: 'no-tab', error: expected });
+    expect(lone.injections).toEqual([]);
+  });
+
+  it('falls back to today’s behaviour where tabs.reload and scripting are both missing', async () => {
     const expected = await baselineError();
     const fake = installFakeChrome(
       [

@@ -36,7 +36,10 @@ function delay(ms: number): Promise<void> {
 interface Attempt {
   result: SendToFirstResponsiveTabResult;
   urlMatches: number;
-  /** Matched tabs that threw "Receiving end does not exist" — revive candidates. */
+  /**
+   * Matched tabs that threw "Receiving end does not exist" (Chrome) or
+   * answered `undefined` (Safari) — revive candidates.
+   */
   noListener: ReviveCandidate[];
 }
 
@@ -181,6 +184,17 @@ function isWrongOrigin(response: unknown): boolean {
 }
 
 /**
+ * The "Last error" a silent (Safari) tab contributes to the miss. It names the
+ * same cause as Chrome's rejection and keeps its phrase, `Receiving end does
+ * not exist`, because that phrase is what `@fetchproxy/server` routes to
+ * `content_script_unreachable` (and its lazy-revive retry); without it a
+ * Safari miss would be read as a plain `no_tab`.
+ */
+const SILENT_TAB_ERROR =
+  'Receiving end does not exist: tabs.sendMessage resolved with no response ' +
+  '(how Safari reports a tab with no content script listening)';
+
+/**
  * One pass over the currently open tabs. The retry above calls it repeatedly.
  * `onlyTabIds` narrows the pass to those tabs (the post-revive retry).
  */
@@ -234,6 +248,17 @@ async function attemptSend(
     const tabUrl = match.url ?? tabUrlForError;
     try {
       const response = await chrome.tabs.sendMessage(id, stampOrigin(buildMessage(tabUrl), tabUrl));
+      // Safari's "Receiving end does not exist". WebKit RESOLVES
+      // `tabs.sendMessage` with `undefined` when the tab has no page loaded
+      // or no `runtime.onMessage` listener, where Chrome rejects. Every
+      // message this helper sends is one `content.ts` answers with an object,
+      // so `undefined` is never a real answer: it is the same miss, and is
+      // handled exactly like the Chrome rejection (skip, revive candidate).
+      if (response === undefined) {
+        lastNoListener = SILENT_TAB_ERROR;
+        noListener.push({ id, url: match.url, status: match.status, discarded: match.discarded });
+        continue;
+      }
       if (isWrongOrigin(response)) {
         lastWrongOrigin = { response, tabUrl };
         continue;

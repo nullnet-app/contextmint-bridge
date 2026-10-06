@@ -68,6 +68,18 @@ _Spike results — macOS_):
   size-keyed map: Safari 27 silently drops the whole extension — it vanishes
   from Settings → Extensions with no log line (live check, 2026-09-27).
   `tests/manifest-parity.test.ts` pins the PNGs.
+- **A script-less tab is recognised and revived Safari's way** (runtime, not
+  manifest; read from WebKit's source rather than the spike). Safari injects
+  manifest content scripts into pages already open when the extension loads,
+  but a tab it restored at relaunch and has not loaded has no page at all.
+  WebKit answers `tabs.sendMessage` to such a tab (or any tab with no
+  listener) with `undefined` instead of rejecting "Receiving end does not
+  exist", reports it `status: 'complete'` with no `discarded`, and rejects
+  `scripting.executeScript` on it with "Could not execute script on this tab".
+  extension-core reads the `undefined` as the missing listener, and reloads
+  the tab only on that executeScript rejection (it means no page is loaded,
+  so nothing can be lost); a loaded tab gets the script injected, never a
+  reload. See `extension-core/src/lib/revive-tab.ts`.
 
 The manifest is **generated** from Chrome's (`manifest.ts`), so name, version,
 icons, popup, content scripts and host permissions cannot drift;
