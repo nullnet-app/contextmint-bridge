@@ -43,7 +43,7 @@ import type { ChromeApi } from '../chrome-api.js';
 
 declare const chrome: ChromeApi;
 
-import { clearPairPendingBadge } from './badge.js';
+import { syncPendingBadge } from './badge.js';
 import type { AnyPendingRecord } from './pending-records.js';
 import { state } from './state.js';
 import { linkForMcp, sendOnLink } from './links.js';
@@ -283,9 +283,9 @@ async function clearApprovedEntry(
     delete remaining[key];
     if (Object.keys(remaining).length === 0) {
       await area.remove(PENDING_PAIR_KEY);
-      // Badge clears only when the queue is fully drained — other queued
-      // identities still need a visible "!" so the user knows to come back.
-      clearPairPendingBadge();
+      // The badge clears only when EVERY queue is drained — other queued
+      // identities, or an account card, still need a visible "!".
+      void syncPendingBadge();
     } else {
       await area.set({ [PENDING_PAIR_KEY]: remaining });
     }
@@ -309,7 +309,7 @@ export async function onScopeUpdateDismiss(key: string, identityHash: string, di
     delete remaining[key];
     if (Object.keys(remaining).length === 0) {
       await area.remove(PENDING_PAIR_KEY);
-      clearPairPendingBadge();
+      void syncPendingBadge();
     } else {
       await area.set({ [PENDING_PAIR_KEY]: remaining });
     }

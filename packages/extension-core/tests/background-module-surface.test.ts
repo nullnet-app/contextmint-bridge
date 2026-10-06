@@ -43,11 +43,13 @@ describe('background module surfaces', () => {
 
   it('badge.ts exports only the four badge transitions its callers import', () => {
     // syncBadge is the internal repaint that the four transitions delegate to.
+    // syncPendingBadge replaced clearPairPendingBadge: the "!" is re-derived
+    // from every pending queue, never cleared blind.
     expect(Object.keys(badge).sort()).toEqual([
-      'clearPairPendingBadge',
       'flashActivity',
       'setConnectionStatus',
       'setPairPendingBadge',
+      'syncPendingBadge',
     ]);
   });
 

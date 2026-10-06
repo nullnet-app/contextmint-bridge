@@ -193,7 +193,8 @@ const { links, linkForMcp, unbindAll } = await import('../src/background/links.j
 const { TrustStore } = await import('../src/trust-store.js');
 const { SessionKeys } = await import('../src/session-keys.js');
 const { mcpDomains, mcpCapabilities } = await import('../src/background/session-scope.js');
-const { onApproval } = await import('../src/background/approval.js');
+const { onApproval, onScopeUpdateDismiss } = await import('../src/background/approval.js');
+const { syncPendingBadge } = await import('../src/background/badge.js');
 const { VERSION_MISMATCH_KEY, normaliseVersionMismatches } =
   await import('../src/lib/version-mismatch.js');
 type VersionMismatch = import('../src/lib/version-mismatch.js').VersionMismatch;
@@ -1719,5 +1720,97 @@ describe('approving a pending pair (v4)', () => {
     expect(localWs.frames('ready')).toHaveLength(0);
     expect(warns.mock.calls.flat().join(' ')).toMatch(/no live bridge/);
     warns.mockRestore();
+  });
+});
+
+/**
+ * The toolbar "!" means a card is waiting in the popup, and only that.
+ *
+ * Driven through the real socket path, because the two bugs here lived in
+ * the glue: an account-key card queued with no "!" at all, and a scope-update
+ * offer the person had already dismissed re-lit "!" on every hello from that
+ * MCP — over a popup with nothing in it.
+ */
+describe('the toolbar badge', () => {
+  let localWs: FakeSocket;
+  let remoteWs: FakeSocket;
+  let badgeText: string[];
+  const chromeGlobal = (globalThis as unknown as { chrome: Record<string, unknown> }).chrome;
+  const lit = (): boolean => badgeText.at(-1) === '!';
+
+  beforeEach(async () => {
+    badgeText = [];
+    chromeGlobal.action = {
+      setBadgeText: ({ text }: { text: string }) => void badgeText.push(text),
+      setBadgeBackgroundColor: () => undefined,
+    };
+    FakeSocket.opened = [];
+    storage.clear();
+    sessionStorage.clear();
+    freshVault();
+    unbindAll();
+    links.clear();
+    mcpDomains.clear();
+    mcpCapabilities.clear();
+    state.trust = new TrustStore('2.1.0');
+    state.sessions = new SessionKeys();
+    state.extIdentity = await loadOrCreateExtensionIdentity();
+    reconcileRemoteLinks([REMOTE]);
+    localWs = FakeSocket.opened.find((s) => s.url.startsWith('ws://127.0.0.1'))!;
+    remoteWs = FakeSocket.opened.find((s) => s.url === REMOTE.url)!;
+    localWs.open();
+    remoteWs.open();
+    await syncPendingBadge();
+    badgeText = [];
+  });
+  afterEach(() => {
+    delete chromeGlobal.action;
+  });
+
+  it('lights for an account card, and clears once it is decided', async () => {
+    const keyPair = await generateEd25519();
+    remoteWs.message({
+      type: 'account-key',
+      accountId: 'acc_0123456789abcdef01234567',
+      slug: 'chris',
+      displayName: 'Chris Hall',
+      confirmedBy: 'c•••@gmail.com',
+      tokenId: REMOTE.tokenId,
+      kid: await accountKeyId(keyPair.publicKey),
+      publicKey: toB64(keyPair.publicKey),
+      generation: 1,
+      bridgedRegistrations: 4,
+    });
+    await vi.waitUntil(() => sessionStorage.has('pendingAccountCards'));
+    expect(lit()).toBe(true);
+    const card = Object.values(sessionStorage.get('pendingAccountCards') as Record<string, { key: string }>)[0]!;
+    await expect(decideAccountCard(card.key, false)).resolves.toBe(true);
+    expect(lit()).toBe(false);
+  });
+
+  it('does not light for a scope update the person already dismissed', async () => {
+    const mcp = await scriptedMcp('alltrails-mcp:2.1.3:5555666677778888');
+    await trustMcp(mcp); // approved for ['fetch'] only
+    const widened = { capabilities: ['fetch', 'read_cookies'], cookieKeys: ['session'] };
+    localWs.message({ ...(await helloFrom(mcp, extNonceOf(localWs))), ...widened });
+    await vi.waitUntil(() => sessionStorage.has('pendingPair'));
+    expect(lit()).toBe(true); // a real offer: "!" is right
+
+    const offer = Object.values(sessionStorage.get('pendingPair') as Record<string, AnyPendingRecord>)[0]!;
+    expect(offer.kind).toBe('scope-update');
+    const [identityHash, scopeHash] = offer.key.split(':') as [string, string];
+    await onScopeUpdateDismiss(offer.key, identityHash, scopeHash);
+    await syncPendingBadge();
+    expect(sessionStorage.has('pendingPair')).toBe(false);
+    expect(lit()).toBe(false);
+
+    // The same MCP says hello again, declaring the scope that was dismissed.
+    const again = await scriptedMcp('alltrails-mcp:2.1.3:9999aaaabbbbcccc');
+    Object.assign(again, { x: mcp.x, ed: mcp.ed });
+    localWs.message({ ...(await helloFrom(again, extNonceOf(localWs))), ...widened });
+    await vi.waitUntil(() => localWs.frames('ready').length === 2);
+    await settleFrames(20);
+    expect(sessionStorage.has('pendingPair')).toBe(false);
+    expect(lit()).toBe(false);
   });
 });
