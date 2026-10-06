@@ -61,6 +61,17 @@ describe('statusSignature', () => {
     expect(new Set(all).size).toBe(all.length);
   });
 
+  // X2: an ask to serve disables the button until the room answers; the
+  // answer may leave the role unchanged, so the pending flag alone must redraw.
+  it('changes when an ask to serve starts or ends (servePending)', () => {
+    const role = { role: 'standby', canServe: true, serving: { label: 'Chrome on Mac' } };
+    const sig = (servePending?: true) =>
+      statusSignature({
+        links: [{ id: ROW, connected: true, role, ...(servePending ? { servePending } : {}) }],
+      } as StatusAnswer);
+    expect(sig(true)).not.toBe(sig());
+  });
+
   it('changes when the account turns this browser away (4001)', () => {
     expect(statusSignature(offline)).not.toBe(
       statusSignature({ links: [{ id: ROW, connected: false, notice: 'full' }] }),

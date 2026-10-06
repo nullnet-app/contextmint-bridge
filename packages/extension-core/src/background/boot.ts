@@ -28,7 +28,8 @@ declare const chrome: ChromeApi;
 import { setPairPendingBadge, clearPairPendingBadge } from './badge.js';
 import type { AnyPendingRecord } from './pending-records.js';
 import { state } from './state.js';
-import { connect, loadRemoteLinks, decideAccountCard, pingRemoteLinks } from './socket.js';
+import { connect, loadRemoteLinks, decideAccountCard, pingRemoteLinks, serveFromLink } from './socket.js';
+import { SERVE_FROM_THIS_BROWSER } from '../bridge-serve-message.js';
 import { clearRetiredAlarms } from '../retired-alarms.js';
 import { connectedIdentityHashes } from './session-scope.js';
 import { linkStatuses } from './links.js';
@@ -252,6 +253,20 @@ export function maybeBoot(): void {
         const m = msg as { key?: unknown; approve?: unknown };
         void decideAccountCard(m.key, m.approve === true).then(sendResponse);
         return true;
+      }
+      // X2: the popup's "Serve from this browser" on one link. Extension
+      // pages only — a content script can reach onMessage too, and must not
+      // be able to make this browser claim the account. The background
+      // re-checks that the room offered it on that link before sending.
+      if (
+        msg !== null &&
+        typeof msg === 'object' &&
+        (msg as { type?: unknown }).type === SERVE_FROM_THIS_BROWSER &&
+        (sender as { tab?: unknown } | undefined)?.tab === undefined
+      ) {
+        const linkId = (msg as { linkId?: unknown }).linkId;
+        sendResponse({ ok: typeof linkId === 'string' && serveFromLink(linkId) });
+        return;
       }
       // 2.1.0: the popup changed the configured remote bridge targets — a
       // target added, removed, disabled or repointed. Reconcile the live links

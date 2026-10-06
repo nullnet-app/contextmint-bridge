@@ -30,6 +30,12 @@ export interface LinkStatusMessage {
    * only through {@link parseLinkRole}.
    */
   role?: unknown;
+  /**
+   * This browser asked the room to serve on this link and has had no answer
+   * yet (`bridge-serve`, mcp-host plan task X2): the Serve button stays
+   * disabled. Only the literal `true` counts.
+   */
+  servePending?: unknown;
 }
 
 /** A link's role as the popup shows it. See `background/links.ts` `LinkRole`. */
@@ -65,7 +71,8 @@ export const LINK_STATUS_POLL_MS = 1500;
 
 /**
  * What the popup draws from an answer, as a comparable string: the connected
- * MCP identities and each link's state, refusal, notice and role, order-insensitive.
+ * MCP identities and each link's state, refusal, notice, role and pending
+ * ask to serve, order-insensitive.
  * `undefined` (nobody answered) has its own signature, so a popup whose first
  * query went unanswered still re-renders once one is.
  */
@@ -81,6 +88,7 @@ export function statusSignature(answer: StatusAnswer | undefined): string {
           typeof l.refusal === 'string' ? l.refusal : null,
           typeof l.notice === 'string' ? l.notice : null,
           parseLinkRole(l.role) ?? null,
+          l.servePending === true,
         ] as const,
     )
     .sort((a, b) => a[0].localeCompare(b[0]));

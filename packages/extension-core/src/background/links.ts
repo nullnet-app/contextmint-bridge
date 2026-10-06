@@ -91,6 +91,14 @@ export interface Link {
    */
   role: LinkRole | null;
   /**
+   * Whether this browser asked the room to serve on this link's current
+   * connection (`bridge-serve`, mcp-host plan task X2) and has not heard the
+   * room's answering `bridge-role` yet. The popup's Serve button stays
+   * disabled while it is set. Cleared by the next `bridge-role`, a hello and
+   * a close, exactly as {@link Link.role} is. Session state only.
+   */
+  servePending: boolean;
+  /**
    * Epoch ms of this link's last IMMEDIATE re-dial (after `4005` / `4006`).
    * Those closes are not errors, so they skip the backoff — but only once per
    * {@link IMMEDIATE_REDIAL_SPACING_MS}, so a room that kept closing would
@@ -135,6 +143,7 @@ export function localLink(): Link {
     refusal: null,
     notice: null,
     role: null,
+    servePending: false,
     lastImmediateRedialAt: 0,
   };
 }
@@ -159,6 +168,7 @@ export function remoteLink(target: RemoteTarget, protocols: string[]): Link {
     refusal: null,
     notice: null,
     role: null,
+    servePending: false,
     lastImmediateRedialAt: 0,
   };
 }
@@ -245,6 +255,8 @@ export interface LinkStatus {
   notice?: string;
   /** What the account's room says this browser is (`bridge-role`), while the link is up. */
   role?: LinkRole;
+  /** This browser asked to serve and the room has not answered (`bridge-serve`, X2), while the link is up. */
+  servePending?: true;
 }
 
 /**
@@ -269,6 +281,7 @@ export function linkStatuses(): LinkStatus[] {
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
       ...(link.notice !== null && !connected ? { notice: link.notice } : {}),
       ...(link.role !== null && connected ? { role: link.role } : {}),
+      ...(link.servePending && connected ? { servePending: true as const } : {}),
     });
   }
   return out.sort((a, b) =>

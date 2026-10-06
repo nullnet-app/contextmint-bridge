@@ -42,6 +42,7 @@ import {
   type StatusAnswer,
 } from './link-status-watch.js';
 export type { LinkStatusMessage } from './link-status-watch.js';
+import { SERVE_FROM_THIS_BROWSER } from '../bridge-serve-message.js';
 
 /**
  * UI labels for the inner-verb capabilities surfaced in the pair popup.
@@ -284,6 +285,11 @@ export interface RemoteTargetView {
    * the row reading "Connected" as before.
    */
   role?: LinkRoleView;
+  /**
+   * This browser asked to serve on this bridge and the room has not answered
+   * (`bridge-serve`, X2): the Serve button shows, disabled.
+   */
+  servePending?: boolean;
 }
 
 export interface BridgesView {
@@ -296,6 +302,12 @@ export interface BridgesView {
   localConnected?: boolean;
   onRemove?: (id: string) => void;
   onToggle?: (id: string, enabled: boolean) => void;
+  /**
+   * "Serve from this browser" on target `id` (mcp-host plan task X2): asks the
+   * background to send `bridge-serve` on that one link. Without it no row
+   * offers the button.
+   */
+  onServe?: (id: string) => Promise<void>;
 }
 
 export type PopupState =
@@ -1045,6 +1057,41 @@ function appendReconnect(body: HTMLElement, origin: string, t: RemoteTargetView,
 }
 
 /**
+ * Whether a bridge row offers "Serve from this browser" (mcp-host plan task
+ * X2, spec §5.7): only while the link is up AND the room's last word on this
+ * connection (`bridge-role`) was standby with `canServe: true`. A serving
+ * link, an unconfirmed browser, an offline row and a gateway that never said
+ * anything (today's) get no button, so nothing is ever sent to a room that
+ * did not offer it.
+ */
+export function offersServe(t: RemoteTargetView): boolean {
+  return t.connected === true && t.role?.role === 'standby' && t.role.canServe === true;
+}
+
+/**
+ * The "Serve from this browser" button under an eligible standby row. One
+ * click asks once: the button disables at once and stays disabled while the
+ * background reports the ask pending, i.e. until the room's next
+ * `bridge-role` redraws the row.
+ */
+function appendServe(body: HTMLElement, t: RemoteTargetView, bridges: BridgesView): void {
+  const button = elem(
+    'button',
+    { class: 'bridge-serve btn-ghost', 'aria-label': `Serve from this browser through ${t.label ?? t.url}` },
+    'Serve from this browser',
+  ) as HTMLButtonElement;
+  button.disabled = t.servePending === true;
+  button.addEventListener('click', () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    void bridges.onServe!(t.id).catch(() => {
+      /* the next status redraw tells the truth either way */
+    });
+  });
+  body.appendChild(button);
+}
+
+/**
  * The bridges section: where this browser is willing to answer MCPs from.
  *
  * Loopback is rendered as a fixed row rather than an entry, because it is not
@@ -1131,6 +1178,7 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
       }),
     );
     const pairedOrigin = pairedOrigins.get(t.id);
+    if (bridges.onServe && offersServe(t)) appendServe(li.lastElementChild as HTMLElement, t, bridges);
     if (pairedOrigin !== undefined) appendReconnect(li.lastElementChild as HTMLElement, pairedOrigin, t, bridges);
     const actions = elem('div', { class: 'row-actions' });
     if (bridges.onRemove) {
@@ -1882,6 +1930,8 @@ async function bootstrap(): Promise<void> {
     };
     const roleFor = (id: string): LinkRoleView | undefined =>
       parseLinkRole(links.find((link) => link.id === id)?.role);
+    const servePendingFor = (id: string): boolean =>
+      links.find((link) => link.id === id)?.servePending === true;
     const write = async (next: RemoteTarget[]): Promise<void> => {
       await saveRemoteTargets(next);
       try {
@@ -1910,6 +1960,7 @@ async function bootstrap(): Promise<void> {
         const refusal = refusalFor(`remote:${t.id}`);
         const notice = noticeFor(`remote:${t.id}`);
         const role = roleFor(`remote:${t.id}`);
+        const servePending = servePendingFor(`remote:${t.id}`);
         return {
           id: t.id,
           url: t.url,
@@ -1919,6 +1970,7 @@ async function bootstrap(): Promise<void> {
           ...(refusal === undefined ? {} : { refusal }),
           ...(notice === undefined ? {} : { notice }),
           ...(role === undefined ? {} : { role }),
+          ...(servePending ? { servePending } : {}),
         };
       }),
       onConnect: async (origin, name) => {
@@ -1930,6 +1982,14 @@ async function bootstrap(): Promise<void> {
         } catch {
           return 'The extension did not answer; try again.';
         }
+      },
+      onServe: async (id) => {
+        try {
+          await chrome.runtime?.sendMessage?.({ type: SERVE_FROM_THIS_BROWSER, linkId: `remote:${id}` });
+        } catch {
+          // No background answered; the redraw below shows the button again.
+        }
+        await renderTrustedStatus();
       },
       onRemove: (id) => {
         void write(targets.filter((t) => t.id !== id)).then(() => renderTrustedStatus());
