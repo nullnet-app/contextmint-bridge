@@ -265,6 +265,12 @@ export interface RemoteTargetView {
    * the row says so rather than showing a plain grey dot.
    */
   refusal?: string;
+  /**
+   * Why the account's room turned this browser away for now (a `4001` close:
+   * the account is at its browser limit). Still dialled, slowly, so it is a
+   * notice rather than a refusal.
+   */
+  notice?: string;
 }
 
 export interface BridgesView {
@@ -878,6 +884,11 @@ function refusalLine(refusal: string | undefined): HTMLElement | null {
   return refusal ? elem('span', { class: 'bridge-refusal hint' }, refusal) : null;
 }
 
+/** The line under a bridge row whose account has no place for this browser right now. */
+function noticeLine(notice: string | undefined): HTMLElement | null {
+  return notice ? elem('span', { class: 'bridge-notice hint' }, notice) : null;
+}
+
 /** The green/grey dot a bridge row carries, with the state named for a11y. */
 function statusDot(connected: boolean): HTMLElement {
   return elem('span', {
@@ -928,7 +939,7 @@ function breakableUrl(url: string): HTMLElement {
  */
 function bridgeBody(
   name: string,
-  { connected, url, refusal }: { connected?: boolean; url?: string; refusal?: string },
+  { connected, url, refusal, notice }: { connected?: boolean; url?: string; refusal?: string; notice?: string },
 ): HTMLElement {
   const body = elem('div', { class: 'bridge-body' });
   const line = elem('div', { class: 'bridge-line' });
@@ -947,6 +958,8 @@ function bridgeBody(
   }
   const refused = refusalLine(refusal);
   if (refused) body.appendChild(refused);
+  const noticed = refused ? null : noticeLine(notice);
+  if (noticed) body.appendChild(noticed);
   return body;
 }
 
@@ -1076,6 +1089,7 @@ function appendBridges(root: HTMLElement, bridges: BridgesView): void {
         url: t.url,
         ...(t.connected === undefined ? {} : { connected: t.connected }),
         ...(t.refusal === undefined ? {} : { refusal: t.refusal }),
+        ...(t.notice === undefined ? {} : { notice: t.notice }),
       }),
     );
     const pairedOrigin = pairedOrigins.get(t.id);
@@ -1824,6 +1838,10 @@ async function bootstrap(): Promise<void> {
       const refusal = links.find((link) => link.id === id)?.refusal;
       return typeof refusal === 'string' ? refusal : undefined;
     };
+    const noticeFor = (id: string): string | undefined => {
+      const notice = links.find((link) => link.id === id)?.notice;
+      return typeof notice === 'string' ? notice : undefined;
+    };
     const write = async (next: RemoteTarget[]): Promise<void> => {
       await saveRemoteTargets(next);
       try {
@@ -1850,6 +1868,7 @@ async function bootstrap(): Promise<void> {
       targets: targets.map((t) => {
         const connected = statusFor(`remote:${t.id}`);
         const refusal = refusalFor(`remote:${t.id}`);
+        const notice = noticeFor(`remote:${t.id}`);
         return {
           id: t.id,
           url: t.url,
@@ -1857,6 +1876,7 @@ async function bootstrap(): Promise<void> {
           enabled: t.enabled,
           ...(connected === undefined ? {} : { connected }),
           ...(refusal === undefined ? {} : { refusal }),
+          ...(notice === undefined ? {} : { notice }),
         };
       }),
       onConnect: async (origin, name) => {

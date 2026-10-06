@@ -4,6 +4,7 @@ import { signWithExtensionIdentity, type ExtensionIdentity } from './extension-i
 import { post, gatewayOriginFor } from './bridge-gateway.js';
 import { validateRemoteTargetToken, validateRemoteTargetUrl } from './remote-targets.js';
 import { BRIDGE_CONNECT_MESSAGE_TYPE, DEFAULT_BRIDGE_ORIGIN, isAllowedGatewayOrigin } from './bridge-connect-contract.js';
+import type { FormFactor } from './platform.js';
 
 export const BRIDGE_CONNECT_START_CONTEXT = 'mcp-host/bridge-connect-start/v1';
 export const BRIDGE_CONNECT_FINISH_CONTEXT = 'mcp-host/bridge-connect-finish/v1';
@@ -69,7 +70,21 @@ export async function startBridgeConnect(identity: ExtensionIdentity, origin: st
 }
 
 export type ConnectCredential = { token: string; tokenId: string; name: string; bridgeUrl: string; account: { slug: string; displayName: string } };
-export async function finishBridgeConnect(identity: ExtensionIdentity, origin: string, requestId: string, nonce: string, approval: string): Promise<{ ok: true; credential: ConnectCredential } | { ok: false; reason: string }> {
+/**
+ * Finish a Connect. `platform` (mcp-host plan task X4) says whether this
+ * browser is desktop or mobile. It is sent beside the signed members, never
+ * inside `mcp-host/bridge-connect-finish/v1`, so the signature is the same
+ * with or without it.
+ *
+ * A gateway before mcp-host task G7 holds this body to a strict schema that
+ * does not know `platform` and answers it with its one `403` refusal, which
+ * cannot be told apart from any other. So a `403` to a finish that carried the
+ * hint is retried ONCE without it: the same signed request (the gateway
+ * refused it before reading the request row, so nothing was consumed), minus a
+ * hint that gateway would not have stored anyway. A browser that connects that
+ * way ranks as desktop, which is what that gateway does for every browser.
+ */
+export async function finishBridgeConnect(identity: ExtensionIdentity, origin: string, requestId: string, nonce: string, approval: string, platform?: FormFactor): Promise<{ ok: true; credential: ConnectCredential } | { ok: false; reason: string }> {
   if (!isAllowedGatewayOrigin(origin) || !/^bcr_[0-9a-f]{32}$/.test(requestId) || !isConnectSecret(nonce) || !isConnectSecret(approval)) {
     return { ok: false, reason: 'This Connect approval is invalid or expired.' };
   }
@@ -77,7 +92,11 @@ export async function finishBridgeConnect(identity: ExtensionIdentity, origin: s
   const ed25519Pub = toB64(identity.ed25519Pub);
   try {
     const sig = await signWithExtensionIdentity(identity, bridgeConnectFinishMessage(origin, requestId, nonce, approval, x25519Pub, ed25519Pub));
-    const response = await post(`${origin}/bridge/connect/finish`, { requestId, nonce, approval, sig: toB64(sig) });
+    const signed = { requestId, nonce, approval, sig: toB64(sig) };
+    let response = await post(`${origin}/bridge/connect/finish`, platform === undefined ? signed : { ...signed, platform });
+    if (platform !== undefined && response.status === 403) {
+      response = await post(`${origin}/bridge/connect/finish`, signed);
+    }
     const body = await readJson(response);
     if (!response.ok) return { ok: false, reason: typeof body?.error === 'string' ? body.error : `Gateway returned HTTP ${response.status}.` };
     const account = jsonObject(body?.account);

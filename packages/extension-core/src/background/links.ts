@@ -72,6 +72,14 @@ export interface Link {
    */
   refusal: string | null;
   /**
+   * Why the account's room last turned this browser away for now — set on a
+   * `4001 BROWSER_TAKEN` close (the account is at its browser limit, or holds
+   * its one slot elsewhere). Unlike {@link refusal} the link is still dialled,
+   * at the slowest backoff step. Cleared when a socket opens. Shown in the
+   * popup while the link is down.
+   */
+  notice?: string;
+  /**
    * Epoch ms of this link's last IMMEDIATE re-dial (after `4005` / `4006`).
    * Those closes are not errors, so they skip the backoff — but only once per
    * {@link IMMEDIATE_REDIAL_SPACING_MS}, so a room that kept closing would
@@ -209,6 +217,8 @@ export interface LinkStatus {
   sessions: number;
   /** Why the bridge refused this browser for good (`4004`), when it did. */
   refusal?: string;
+  /** Why the account's room turned this browser away for now (`4001`), while the link is down. */
+  notice?: string;
 }
 
 /**
@@ -222,14 +232,16 @@ export interface LinkStatus {
 export function linkStatuses(): LinkStatus[] {
   const out: LinkStatus[] = [];
   for (const link of links.values()) {
+    const connected = link.ws?.readyState === WebSocket.OPEN;
     out.push({
       id: link.id,
       kind: link.kind,
       label: link.label,
       url: link.url,
-      connected: link.ws?.readyState === WebSocket.OPEN,
+      connected,
       sessions: mcpIdsForLink(link).length,
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
+      ...(link.notice !== undefined && !connected ? { notice: link.notice } : {}),
     });
   }
   return out.sort((a, b) =>

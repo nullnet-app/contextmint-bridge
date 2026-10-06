@@ -142,6 +142,8 @@ describe('docs/store-assets/app-store/app-privacy.md (owner step O5)', () => {
     expect(md).toMatch(/mcp\.nullnet\.app/);
     expect(md).toMatch(/public identity key/i);
     expect(md).toMatch(/browser name/i);
+    // mcp-host plan task X4: Connect also says desktop or mobile.
+    expect(md).toMatch(/desktop or mobile/i);
   });
 });
 

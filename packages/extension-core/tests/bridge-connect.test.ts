@@ -116,6 +116,26 @@ describe('Connect approval handler boundary', () => {
     expect(finishCalls).toBe(0);
   });
 
+  // mcp-host plan task X4: Connect declares this browser desktop or mobile.
+  it('passes this browser’s form factor to finish', async () => {
+    const seen: unknown[] = [];
+    const inner = finish;
+    finish = async (...args) => { seen.push(args[5]); return inner(...args); };
+    const chromeGlobal = (globalThis as { chrome: { runtime?: Record<string, unknown> } }).chrome;
+    const runtime = chromeGlobal.runtime;
+    try {
+      chromeGlobal.runtime = { ...runtime, getPlatformInfo: async () => ({ os: 'ios' }) };
+      expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(true);
+      chromeSession().data[PENDING_BRIDGE_CONNECT_KEY] = { '9': pending };
+      await saveRemoteTargets([]);
+      chromeGlobal.runtime = { ...runtime, getPlatformInfo: async () => ({ os: 'mac' }) };
+      expect((await onBridgeConnectApproval(msg, sender, Date.now(), deps())).ok).toBe(true);
+    } finally {
+      chromeGlobal.runtime = runtime;
+    }
+    expect(seen).toEqual(['mobile', 'desktop']);
+  });
+
   it('fixture is a valid sender/request tuple', () => {
     expect(validConnectApproval(msg, sender, pending)).toBe(true);
   });

@@ -165,6 +165,83 @@ describe('the room’s close codes', () => {
     expect(socketsFor('ws://127.0.0.1:37149')).toHaveLength(before + 1);
   });
 
+  // mcp-host plan task X4: 4001 BROWSER_TAKEN means the account's room has no
+  // place for this browser (its cap, or the single slot). Re-dialling at the
+  // floor only knocks on a full room; back off to the slowest step and say why.
+  it('4001 says the account is full and backs off to the slowest step', () => {
+    useTarget(TARGET);
+    const sock = lastSocket(TARGET.url);
+    sock.open(); // the room accepts the socket, then closes it: the open reset the backoff
+    const before = Date.now();
+    sock.remoteClose(4001, 'this account already has 4 browsers attached');
+    const link = [...links.values()].find((l) => l.url === TARGET.url)!;
+    expect(link.nextAttemptAt - before).toBeGreaterThanOrEqual(60_000);
+    // The keepalive tick inside that minute does not re-dial it.
+    const count = socketsFor(TARGET.url).length;
+    connect();
+    expect(socketsFor(TARGET.url)).toHaveLength(count);
+    const status = linkStatuses().find((l) => l.url === TARGET.url)!;
+    expect(status.connected).toBe(false);
+    expect(status.notice).toBe('This account already has 4 browsers connected; disconnect one in Settings');
+    // Not a final refusal: once the backoff passes it dials again.
+    expect(status.refusal).toBeUndefined();
+    link.nextAttemptAt = 0;
+    connect();
+    expect(socketsFor(TARGET.url)).toHaveLength(count + 1);
+  });
+
+  it('4001 against a single-slot room names one other browser, not four', () => {
+    useTarget(TARGET);
+    lastSocket(TARGET.url).remoteClose(4001, 'another browser is attached to this account');
+    expect(linkStatuses().find((l) => l.url === TARGET.url)!.notice).toBe(
+      'Another browser is connected to this account; disconnect it in Settings',
+    );
+  });
+
+  it('the 4001 line goes once the link is up, and on any other close', () => {
+    useTarget(TARGET);
+    lastSocket(TARGET.url).remoteClose(4001, 'this account already has 4 browsers attached');
+    const link = [...links.values()].find((l) => l.url === TARGET.url)!;
+    link.nextAttemptAt = 0;
+    connect();
+    lastSocket(TARGET.url).open();
+    expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
+    lastSocket(TARGET.url).remoteClose(1006);
+    expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
+    // A different close without an open (a dial that failed) clears it too:
+    // the room did not say it is full this time.
+    lastSocket(TARGET.url).remoteClose(4001, 'this account already has 4 browsers attached');
+    expect(linkStatuses().find((l) => l.url === TARGET.url)!.notice).toBeDefined();
+    link.nextAttemptAt = 0;
+    connect();
+    lastSocket(TARGET.url).remoteClose(1006);
+    expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
+  });
+
+  it('4004 and 4003 keep their own handling and carry no 4001 line', () => {
+    useTarget(TARGET);
+    lastSocket(TARGET.url).open();
+    lastSocket(TARGET.url).remoteClose(4003, 'REVOKED');
+    const link = [...links.values()].find((l) => l.url === TARGET.url)!;
+    // 4003 still climbs from the floor: the open reset it, so one step (1 s).
+    expect(link.reconnectAttempt).toBe(1);
+    expect(link.nextAttemptAt - Date.now()).toBeLessThanOrEqual(1000);
+    expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
+    link.nextAttemptAt = 0;
+    connect();
+    lastSocket(TARGET.url).remoteClose(4004, 'EXTENSION_MISMATCH');
+    const status = linkStatuses().find((l) => l.url === TARGET.url)!;
+    expect(status.refusal).toBe(EXTENSION_MISMATCH_MESSAGE);
+    expect(status).not.toHaveProperty('notice');
+  });
+
+  it('4001 on the loopback link is not a full account', () => {
+    lastSocket('ws://127.0.0.1:37149').remoteClose(4001, 'this account already has 4 browsers attached');
+    const local = [...links.values()].find((l) => l.kind === 'local')!;
+    expect(local.nextAttemptAt - Date.now()).toBeLessThanOrEqual(10_000);
+    expect(linkStatuses().find((l) => l.kind === 'local')).not.toHaveProperty('notice');
+  });
+
   it('4005 and 4006 immediately redial remote links without confirmation UI state', () => {
     for (const code of [4005, 4006]) {
       useTarget({ ...TARGET, id: `brt_${code}`, tokenId: `brt_${code}` });
