@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.1...v1.7.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* **extension-core:** clear the toolbar badge once nothing needs attention ([#99](https://github.com/nullnet-app/contextmint-bridge/issues/99)) ([8112db2](https://github.com/nullnet-app/contextmint-bridge/commit/8112db29f707c6f85d339090857b2b9cbda2c24f))
+
 ## [1.7.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.0...v1.7.1) (2026-10-06)
 
 

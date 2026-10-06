@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ContextMint Bridge",
   "short_name": "Bridge",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "minimum_chrome_version": "102",
   "description": "Lets ContextMint and local MCP tools use your signed-in browser tabs, without copying credentials.",
   "icons": {
