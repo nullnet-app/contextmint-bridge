@@ -140,14 +140,22 @@ export function isInjectableUrl(url: string | undefined): boolean {
  */
 export type ExtraContentScripts = () => Promise<ManifestContentScript[]>;
 
-/** Re-inject every declared content script into every injectable open tab. */
-export async function reinjectContentScripts(
-  extraScripts?: ExtraContentScripts,
-): Promise<ReinjectResult> {
-  // Older Chrome, or a build without the `scripting` permission. Nothing to do
-  // and nothing to complain about: the manifest still covers new navigations.
-  if (typeof chrome?.scripting?.executeScript !== 'function') return { tabs: 0, failed: 0 };
+/** True where this browser lets the background inject a script file at all. */
+export function canInjectContentScripts(): boolean {
+  return typeof chrome?.scripting?.executeScript === 'function';
+}
 
+/** A declared script that actually names files to inject. */
+export type DeclaredContentScript = ManifestContentScript & { js: string[] };
+
+/**
+ * The manifest's content scripts plus the runtime-registered ones, read fresh
+ * so this cannot drift from what ships. A failing `extraScripts` costs only
+ * its own entries.
+ */
+export async function declaredContentScripts(
+  extraScripts?: ExtraContentScripts,
+): Promise<DeclaredContentScript[]> {
   let extra: ManifestContentScript[] = [];
   if (extraScripts) {
     try {
@@ -157,9 +165,63 @@ export async function reinjectContentScripts(
       console.error('[fetchproxy] could not list runtime content scripts to restore:', e);
     }
   }
-  const declared = [...(chrome.runtime.getManifest().content_scripts ?? []), ...extra].filter(
-    (cs): cs is ManifestContentScript & { js: string[] } => Array.isArray(cs.js) && cs.js.length > 0,
+  return [...(chrome.runtime.getManifest().content_scripts ?? []), ...extra].filter(
+    (cs): cs is DeclaredContentScript => Array.isArray(cs.js) && cs.js.length > 0,
   );
+}
+
+/**
+ * Inject into ONE tab every declared script whose `matches` cover its URL.
+ *
+ * `'none'` — nothing was owed to this tab (not injectable, or no script claims
+ * it); `'landed'` — at least one script went in; `'failed'` — every attempt
+ * threw (restricted page, tab gone, navigation in flight). Never throws.
+ *
+ * Injecting into a tab that already runs `content.js` is safe: the script
+ * refuses a second live install (`content-once.ts`), as the MAIN-world bridge
+ * does (`installMainWorldBridges`).
+ */
+export async function injectDeclaredScriptsIntoTab(
+  tab: { id: number; url?: string },
+  declared: readonly DeclaredContentScript[],
+): Promise<'none' | 'landed' | 'failed'> {
+  if (!canInjectContentScripts() || !isInjectableUrl(tab.url)) return 'none';
+  // Only the scripts whose `matches` cover this tab. A tab no script claims
+  // is skipped entirely rather than counted as a failure — nothing was owed
+  // to it, and calling that a failure would make a narrowed manifest look
+  // broken.
+  const applicable = declared.filter((cs) => matchesAnyPattern(tab.url ?? '', cs.matches ?? []));
+  if (applicable.length === 0) return 'none';
+  let anyLanded = false;
+  for (const cs of applicable) {
+    try {
+      await chrome.scripting!.executeScript({
+        target: { tabId: tab.id },
+        files: cs.js,
+        ...(cs.world ? { world: cs.world } : {}),
+        // `document_start` scripts exist to beat page JS to a global; on a
+        // page that has already loaded there is nothing left to beat, but
+        // injecting immediately still matches the declared intent.
+        ...(cs.run_at === 'document_start' ? { injectImmediately: true } : {}),
+      });
+      anyLanded = true;
+    } catch {
+      // Restricted page, tab closed mid-sweep, or a navigation in flight.
+      // Best-effort by design — see the module docblock.
+    }
+  }
+  return anyLanded ? 'landed' : 'failed';
+}
+
+/** Re-inject every declared content script into every injectable open tab. */
+export async function reinjectContentScripts(
+  extraScripts?: ExtraContentScripts,
+): Promise<ReinjectResult> {
+  // Older Chrome, or a build without the `scripting` permission. Nothing to do
+  // and nothing to complain about: the manifest still covers new navigations.
+  if (!canInjectContentScripts()) return { tabs: 0, failed: 0 };
+
+  const declared = await declaredContentScripts(extraScripts);
   if (declared.length === 0) return { tabs: 0, failed: 0 };
 
   const tabs = (await chrome.tabs.query({})).filter(
@@ -169,33 +231,9 @@ export async function reinjectContentScripts(
   let injected = 0;
   let failed = 0;
   for (const tab of tabs) {
-    const tabId = tab.id as number;
-    // Only the scripts whose `matches` cover this tab. A tab no script claims
-    // is skipped entirely rather than counted as a failure — nothing was owed
-    // to it, and calling that a failure would make a narrowed manifest look
-    // broken.
-    const applicable = declared.filter((cs) => matchesAnyPattern(tab.url ?? '', cs.matches ?? []));
-    if (applicable.length === 0) continue;
-    let anyLanded = false;
-    for (const cs of applicable) {
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          files: cs.js,
-          ...(cs.world ? { world: cs.world } : {}),
-          // `document_start` scripts exist to beat page JS to a global; on a
-          // page that has already loaded there is nothing left to beat, but
-          // injecting immediately still matches the declared intent.
-          ...(cs.run_at === 'document_start' ? { injectImmediately: true } : {}),
-        });
-        anyLanded = true;
-      } catch {
-        // Restricted page, tab closed mid-sweep, or a navigation in flight.
-        // Best-effort by design — see the module docblock.
-      }
-    }
-    if (anyLanded) injected++;
-    else failed++;
+    const outcome = await injectDeclaredScriptsIntoTab({ id: tab.id as number, url: tab.url }, declared);
+    if (outcome === 'landed') injected++;
+    else if (outcome === 'failed') failed++;
   }
   return { tabs: injected, failed };
 }

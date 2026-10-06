@@ -95,7 +95,14 @@ export interface ChromeApi {
     };
   };
   tabs: {
-    query: (q: { url?: string | string[] }) => Promise<{ id?: number; url?: string }[]>;
+    /**
+     * `status` and `discarded` are read only to revive a matched tab that has
+     * no content script (`lib/revive-tab.ts`); a browser that omits them
+     * (Safari has no `discarded`) is simply never reloaded.
+     */
+    query: (q: {
+      url?: string | string[];
+    }) => Promise<{ id?: number; url?: string; status?: string; discarded?: boolean }[]>;
     create: (props: { url: string }) => Promise<{ id?: number; url?: string }>;
     sendMessage: (tabId: number, message: unknown) => Promise<unknown>;
     /**
@@ -105,6 +112,11 @@ export interface ChromeApi {
      * where it is absent (`lib/cold-open.ts`).
      */
     get?: (tabId: number) => Promise<{ status?: string } | undefined>;
+    /**
+     * Optional for the same reason: only `lib/revive-tab.ts` uses it, to
+     * reload a discarded/unloaded tab, and it falls back to doing nothing.
+     */
+    reload?: (tabId: number) => Promise<void>;
   };
   cookies?: {
     get: (details: { url: string; name: string }) => Promise<ChromeCookie | null>;
