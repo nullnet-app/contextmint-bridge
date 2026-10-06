@@ -40,7 +40,7 @@ import {
   type SceneName,
 } from './scenes.js';
 import { chromeStubSource } from './chrome-stub.js';
-import { appStoreScreenshotHtml, promoTileHtml, screenshotHtml } from './canvas.js';
+import { appStoreScreenshotHtml, marqueeTileHtml, promoTileHtml, screenshotHtml } from './canvas.js';
 import { stripAlpha } from './png.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -324,6 +324,21 @@ async function main(): Promise<void> {
       await write(shot.file, await renderHtml(browser, html, 1280, 800));
     }
     await write('promo-small-440x280.png', await renderHtml(browser, promoTileHtml(), 440, 280));
+    // The marquee carries the first screenshot's popup (the trusted-MCPs scene).
+    const marqueePopup = popups.get(SCREENSHOTS[0]!.scene)!;
+    await write(
+      'promo-marquee-1400x560.png',
+      await renderHtml(
+        browser,
+        marqueeTileHtml({
+          popupPng: `data:image/png;base64,${marqueePopup.png.toString('base64')}`,
+          popupWidth: marqueePopup.width,
+          popupHeight: marqueePopup.height,
+        }),
+        1400,
+        560,
+      ),
+    );
     for (const shot of POPUP_SHOTS) {
       routes = await routesFor(SCENES[shot.scene], manifest.version, seedJs);
       const popup = await capturePopup(browser, origin, SCENES[shot.scene], shot.scheme);

@@ -7,6 +7,7 @@ What to put where in the Chrome Web Store developer console.
 | [`listing-description.md`](listing-description.md)                                   | Store listing → Description                          |
 | [`permission-justifications.md`](permission-justifications.md)                       | Privacy practices → single purpose + each permission |
 | [`promo-small-440x280.png`](promo-small-440x280.png)                                 | Store listing → Small promo tile (440x280)           |
+| [`promo-marquee-1400x560.png`](promo-marquee-1400x560.png)                           | Store listing → Marquee promo tile (1400x560)        |
 | [`screenshots/1-trusted-mcps-1280x800.png`](screenshots/1-trusted-mcps-1280x800.png) | Store listing → Screenshots (1280x800), first        |
 | [`screenshots/2-pair-prompt-1280x800.png`](screenshots/2-pair-prompt-1280x800.png)   | Screenshots, second                                  |
 | [`screenshots/3-scope-update-1280x800.png`](screenshots/3-scope-update-1280x800.png) | Screenshots, third                                   |
@@ -15,7 +16,7 @@ The Safari app's App Store listing (copy, review notes, privacy answers and
 its Mac, iPhone and iPad screenshots) is in [`app-store/`](app-store/README.md).
 
 The store icon (128x128) is `packages/extension-chrome/icons/128.png`, which is
-already in the uploaded zip. The privacy policy URL is `docs/PRIVACY.md`.
+already in the uploaded zip; the console's Store icon field takes the same file. The privacy policy URL is `docs/PRIVACY.md`.
 
 Every image is a 24-bit PNG with no alpha channel, as the store requires
 (`packages/extension-chrome/tests/store-assets.test.ts` checks the sizes and
