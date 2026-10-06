@@ -14,6 +14,7 @@
 
 import type { ChromeApi } from '../chrome-api.js';
 import { coldOpenInFlight, coldOpenTiming } from './cold-open.js';
+import { reviveTabs, type ReviveCandidate } from './revive-tab.js';
 
 declare const chrome: ChromeApi;
 
@@ -35,6 +36,8 @@ function delay(ms: number): Promise<void> {
 interface Attempt {
   result: SendToFirstResponsiveTabResult;
   urlMatches: number;
+  /** Matched tabs that threw "Receiving end does not exist" — revive candidates. */
+  noListener: ReviveCandidate[];
 }
 
 /**
@@ -107,12 +110,27 @@ export async function sendToFirstResponsiveTab(
   isSoftMiss?: (response: unknown) => boolean,
 ): Promise<SendToFirstResponsiveTabResult> {
   let last = await attemptSend(matcher, buildMessage, tabUrlForError, isSoftMiss);
+  if (last.result.kind !== 'no-tab') return last.result;
+
+  // A tab matched but its content script never answered — typically a tab
+  // Chrome restored at startup unloaded or without the script. Revive those
+  // tabs (and only those: they already matched THIS request) once, then retry
+  // the send to them once (`revive-tab.ts`). If that does not produce an
+  // answer, the original miss stands, word for word: its reload advice and the
+  // server-side `content_script_unreachable` routing (#293) are unchanged.
+  if (last.noListener.length > 0) {
+    const revived = await reviveTabs(last.noListener);
+    if (revived.size > 0) {
+      const retry = await attemptSend(matcher, buildMessage, tabUrlForError, isSoftMiss, revived);
+      if (retry.result.kind !== 'no-tab') return retry.result;
+    }
+  }
+
   // Only a miss is worth a second look, and only while a tab that could serve
   // THIS host is still loading. Both guards matter: without the first, every
   // answered request pays a registry check it cannot benefit from; without the
   // second, a request for a host nobody is opening waits out the whole budget
   // to reach the same answer it already had.
-  if (last.result.kind !== 'no-tab') return last.result;
   if (!(await coldOpenInFlight(tabUrlForError))) return last.result;
 
   const { budgetMs, pollMs } = coldOpenTiming();
@@ -162,12 +180,16 @@ function isWrongOrigin(response: unknown): boolean {
   );
 }
 
-/** One pass over the currently open tabs. The retry above calls it repeatedly. */
+/**
+ * One pass over the currently open tabs. The retry above calls it repeatedly.
+ * `onlyTabIds` narrows the pass to those tabs (the post-revive retry).
+ */
 async function attemptSend(
   matcher: (tabUrl: string) => boolean,
   buildMessage: (matchedTabUrl: string) => unknown,
   tabUrlForError: string,
   isSoftMiss?: (response: unknown) => boolean,
+  onlyTabIds?: ReadonlySet<number>,
 ): Promise<Attempt> {
   const tabs = await chrome.tabs.query({});
   // Fold the ID check into the filter so `matches.length` accurately
@@ -176,10 +198,18 @@ async function attemptSend(
   // would claim "N URL matches, none responded" when one of those N
   // was never even attempted.
   const matches = tabs.filter(
-    (t) => typeof t.id === 'number' && t.url && matcher(t.url),
+    (t) =>
+      typeof t.id === 'number' &&
+      (onlyTabIds === undefined || onlyTabIds.has(t.id)) &&
+      t.url &&
+      matcher(t.url),
   );
   if (matches.length === 0) {
-    return { result: { kind: 'no-tab', error: `no tab matching ${tabUrlForError}` }, urlMatches: 0 };
+    return {
+      result: { kind: 'no-tab', error: `no tab matching ${tabUrlForError}` },
+      urlMatches: 0,
+      noListener: [],
+    };
   }
   // "Receiving end does not exist" surfaces when a tab matches the URL
   // but has no content script (typically post-reload pages that pre-date
@@ -187,6 +217,7 @@ async function attemptSend(
   // self-heals the common "extension reloaded, old tabs still open" case
   // without the user having to refresh every pre-reload tab.
   let lastNoListener: string | null = null;
+  const noListener: ReviveCandidate[] = [];
   // First soft miss, kept so it can be returned verbatim if EVERY matching
   // tab misses — the miss carries the actionable "open a page that triggers
   // this operation" hint, which is still the right remedy in that case.
@@ -215,14 +246,15 @@ async function attemptSend(
         if (firstSoftMiss === null) firstSoftMiss = { response, tabUrl };
         continue;
       }
-      return { result: { kind: 'response', response, tabUrl }, urlMatches: matches.length };
+      return { result: { kind: 'response', response, tabUrl }, urlMatches: matches.length, noListener };
     } catch (e) {
       const msg = String(e);
       if (msg.includes('Receiving end does not exist')) {
         lastNoListener = msg;
+        noListener.push({ id, url: match.url, status: match.status, discarded: match.discarded });
         continue;
       }
-      return { result: { kind: 'throw', error: msg }, urlMatches: matches.length };
+      return { result: { kind: 'throw', error: msg }, urlMatches: matches.length, noListener };
     }
   }
   const fallback = firstSoftMiss ?? lastWrongOrigin;
@@ -234,6 +266,7 @@ async function attemptSend(
         tabUrl: fallback.tabUrl,
       },
       urlMatches: matches.length,
+      noListener,
     };
   }
   return {
@@ -248,5 +281,6 @@ async function attemptSend(
         (lastNoListener ? ` Last error: ${lastNoListener}` : ''),
     },
     urlMatches: matches.length,
+    noListener,
   };
 }

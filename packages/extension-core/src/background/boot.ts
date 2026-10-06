@@ -45,6 +45,7 @@ import { decideAccountMcpCard } from './server-hello.js';
 import { forgetAccountInBackground, forgetMcpInBackground } from './account-forget.js';
 import { maybeReinjectOnInstalled } from '../reinject-content-scripts.js';
 import { mainBridgeScriptFor } from '../main-world-bridge.js';
+import { setReviveExtraContentScripts } from '../lib/revive-tab.js';
 import {
   approvedAndAttachedDomains,
   SYNC_MAIN_WORLD_BRIDGE,
@@ -119,6 +120,11 @@ export function maybeBoot(): void {
   // injection here: open tabs either already have it or get it from the
   // update re-injection below.
   void syncMainWorldBridgeForActiveTrust(state.trust);
+  // Reviving a matched tab that has no content script (`lib/revive-tab.ts`)
+  // restores the MAIN-world bridge with it, on the same approved hosts only.
+  setReviveExtraContentScripts(async () =>
+    state.trust ? [mainBridgeScriptFor(await approvedAndAttachedDomains(state.trust))] : [],
+  );
   // An extension UPDATE orphans the content script in every already-open tab
   // (Chrome tears the old ones down and injects no new ones), so every MCP
   // reading from a long-lived tab breaks at once until the person reloads it.

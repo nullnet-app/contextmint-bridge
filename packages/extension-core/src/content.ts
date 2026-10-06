@@ -2,8 +2,14 @@ import { evalJsonPointer } from '@fetchproxy/protocol';
 import { csrfSoftMiss } from './lib/csrf-soft-miss.js';
 import { MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES } from './content-limits.js';
 import { installBridgeConnectRelay } from './bridge-connect-relay.js';
+import { claimContentScriptRun } from './content-once.js';
 
-installBridgeConnectRelay();
+// One live copy per page: the background may inject this script into a tab
+// that already has it (`content-once.ts`), and a second set of listeners would
+// serve every request twice.
+const FIRST_RUN = claimContentScriptRun();
+
+if (FIRST_RUN) installBridgeConnectRelay();
 
 /**
  * Content script (isolated world). Listens for fetch RPC messages
@@ -99,7 +105,7 @@ interface FetchError {
   error: string;
 }
 
-chrome.runtime.onMessage.addListener(
+if (FIRST_RUN) chrome.runtime.onMessage.addListener(
   (
     msg: {
       kind?: string;
