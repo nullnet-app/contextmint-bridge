@@ -65,8 +65,10 @@ import {
 } from '../bridge-gateway.js';
 import {
   ACCOUNT_CONFIRMED_CLOSE,
+  BROWSER_TAKEN_CLOSE,
   CREDENTIAL_REVOKED_CLOSE,
   FACTS_CHANGED_CLOSE,
+  browserTakenMessage,
 } from '../bridge-close-codes.js';
 import { AccountTrustStore, type TrustedAccount } from '../account-trust-store.js';
 
@@ -237,6 +239,7 @@ function connectLink(link: Link): void {
     wasOpen = true;
     link.reconnectAttempt = 0;
     link.nextAttemptAt = 0;
+    delete link.notice;
     setConnectionStatus('connected');
     // Fresh per-LINK, per-connection nonce. The corresponding ready-frame
     // signature commits to (mcpHelloNonce || this nonce || the ephemeral pub),
@@ -292,6 +295,8 @@ function connectLink(link: Link): void {
   });
   ws.addEventListener('close', (ev: CloseEvent) => {
     teardownLink(link);
+    const roomFull = link.kind === 'remote' && ev?.code === BROWSER_TAKEN_CLOSE;
+    if (!roomFull) delete link.notice;
     // A link that was up is down: the popup's row must stop saying Connected.
     // Only after an open, so a target that keeps failing to dial does not
     // re-render an open popup on every retry.
@@ -329,6 +334,20 @@ function connectLink(link: Link): void {
       console.warn(
         `[fetchproxy] ${link.label}: ${EXTENSION_MISMATCH_MESSAGE} — revoke this credential and pair this browser again`,
       );
+      broadcastConnectionsChanged();
+      return;
+    }
+    // 4001 BROWSER_TAKEN: the account's room has no place for this browser
+    // (at its browser limit, or its one slot held elsewhere). Re-dialling at
+    // the floor would only knock on a full room every second, so jump to the
+    // slowest step (the room accepted the socket before closing it, so the
+    // open above reset the backoff), and say why in the popup. Not final like
+    // 4004: a browser disconnecting elsewhere frees a place.
+    if (roomFull) {
+      link.notice = browserTakenMessage(ev.reason);
+      console.warn(`[fetchproxy] ${link.label}: ${link.notice}`);
+      link.reconnectAttempt = REMOTE_RECONNECT_BACKOFF_MS.length - 1;
+      scheduleReconnect(link);
       broadcastConnectionsChanged();
       return;
     }

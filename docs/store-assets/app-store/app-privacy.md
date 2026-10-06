@@ -19,7 +19,7 @@ extension handles:
 | Request and response contents, cookies, storage values an approved MCP reads | Only to the MCP the person paired, end-to-end encrypted (AES-256-GCM, per-session keys); a relay sees ciphertext | No: the relay cannot read them | No |
 | Trust records, identity keys, bridge credential | No: the extension's own storage on the device | — | No |
 | Analytics, crash reports, advertising identifiers | Not gathered at all | — | No |
-| **Connect** (optional): this browser's **public identity key** and its **browser name** (editable; "Safari on iPhone" by default), sent to `https://mcp.nullnet.app` | Yes, when the person chooses Connect | Yes: the gateway keeps them with the bridge credential it issues, under the ContextMint account the person signed into | **Yes** |
+| **Connect** (optional): this browser's **public identity key**, its **browser name** (editable; "Safari on iPhone" by default) and whether it is a **desktop or mobile** browser, sent to `https://mcp.nullnet.app` | Yes, when the person chooses Connect | Yes: the gateway keeps them with the bridge credential it issues, under the ContextMint account the person signed into | **Yes** |
 | Relay metadata on a connected bridge (MCP server names, declared domains and key names, pair codes, timing and sizes; PRIVACY.md §4) | Yes, while a connected bridge carries traffic | Only if the gateway logs it beyond real time (check mcp-host's retention) | Only if kept |
 
 So "Data Not Collected", which the plan expected, is true of the app and of
@@ -31,7 +31,7 @@ Recommended answer (conservative, and the one that matches PRIVACY.md):
 | Data type | Collected for | Linked to the user? | Used for tracking? |
 | --- | --- | --- | --- |
 | Identifiers → **Device ID** (the browser's public identity key, stored by the gateway on Connect) | App Functionality | Yes (kept under the ContextMint account the person connected) | No |
-| Other Data → **Other Data Types** (the browser name chosen at Connect) | App Functionality | Yes | No |
+| Other Data → **Other Data Types** (the browser name chosen at Connect, and whether the browser is desktop or mobile) | App Functionality | Yes | No |
 
 Add **Usage Data → Product Interaction** (App Functionality, linked, not
 tracking) only if mcp-host keeps per-MCP relay metadata beyond real time.

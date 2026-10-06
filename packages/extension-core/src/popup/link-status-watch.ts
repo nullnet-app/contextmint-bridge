@@ -22,6 +22,8 @@ export interface LinkStatusMessage {
   url?: string;
   /** Why the bridge refused this browser for good (`4004`), when it did. */
   refusal?: string;
+  /** Why the account's room turned this browser away for now (`4001`). */
+  notice?: string;
 }
 
 /** The background's answer to `get-connected-identities` (background/boot.ts). */
@@ -35,7 +37,7 @@ export const LINK_STATUS_POLL_MS = 1500;
 
 /**
  * What the popup draws from an answer, as a comparable string: the connected
- * MCP identities and each link's state and refusal, order-insensitive.
+ * MCP identities and each link's state, refusal and notice, order-insensitive.
  * `undefined` (nobody answered) has its own signature, so a popup whose first
  * query went unanswered still re-renders once one is.
  */
@@ -43,7 +45,15 @@ export function statusSignature(answer: StatusAnswer | undefined): string {
   if (answer === undefined) return 'none';
   const hashes = [...(answer.connectedHashes ?? [])].sort();
   const links = (answer.links ?? [])
-    .map((l) => [l.id, l.connected === true, typeof l.refusal === 'string' ? l.refusal : null] as const)
+    .map(
+      (l) =>
+        [
+          l.id,
+          l.connected === true,
+          typeof l.refusal === 'string' ? l.refusal : null,
+          typeof l.notice === 'string' ? l.notice : null,
+        ] as const,
+    )
     .sort((a, b) => a[0].localeCompare(b[0]));
   return JSON.stringify({ hashes, links });
 }

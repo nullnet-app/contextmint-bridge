@@ -32,6 +32,12 @@ export interface ChromeApi {
   runtime: {
     getManifest: () => { version: string };
     /**
+     * Optional: absent under most vitest stubs. Read once per Connect to say
+     * whether this browser is desktop or mobile (`platform.ts`,
+     * `currentFormFactor`). Safari reports `ios` on iPhone and iPad.
+     */
+    getPlatformInfo?: () => Promise<{ os?: string } | undefined>;
+    /**
      * Optional: absent under vitest and on older Chrome. Used to re-inject
      * content scripts after an update, which otherwise leaves every open tab
      * without one until the person reloads it by hand — and, with

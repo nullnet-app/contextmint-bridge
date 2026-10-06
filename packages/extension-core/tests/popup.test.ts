@@ -1761,6 +1761,25 @@ describe('renderPopup — bridge status dots', () => {
     expect(refused?.textContent).toBe(why);
     expect(container.querySelector('[data-target-id="b2"] .bridge-refusal')).toBeNull();
   });
+
+  // mcp-host plan task X4: a 4001 close is not final (the link keeps dialling,
+  // slowly), so it is a notice under the row, not a refusal.
+  it('says the account is at its browser limit (4001), as text', () => {
+    const why = 'This account already has 4 browsers connected; disconnect one in Settings';
+    withBridges({
+      targets: [
+        { id: 'b1', url: 'wss://h/b', enabled: true, connected: false, notice: why },
+        { id: 'b2', url: 'wss://h2/b', enabled: true, connected: false, notice: '<b>x</b>' },
+        { id: 'b3', url: 'wss://h3/b', enabled: true, connected: false },
+      ],
+    });
+    const notice = container.querySelector('[data-target-id="b1"] .bridge-notice');
+    expect(notice?.textContent).toBe(why);
+    expect(container.querySelector('[data-target-id="b1"] .bridge-refusal')).toBeNull();
+    expect(container.querySelector('[data-target-id="b2"] .bridge-notice')?.textContent).toBe('<b>x</b>');
+    expect(container.querySelector('[data-target-id="b2"] .bridge-notice b')).toBeNull();
+    expect(container.querySelector('[data-target-id="b3"] .bridge-notice')).toBeNull();
+  });
 });
 
 /**

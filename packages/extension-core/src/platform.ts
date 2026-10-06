@@ -36,3 +36,35 @@ export function currentPlatform(): Platform {
   }
   return p as Platform;
 }
+
+/**
+ * Whether this browser is a desktop or a mobile one, as Connect declares it to
+ * the gateway (mcp-host plan task X4, spec 2026-10-05 §5.9 "Form factor").
+ *
+ * The gateway ranks a desktop browser before a mobile one when it chooses
+ * which of an account's browsers serves, and a mobile browser never preempts
+ * (decision M10). It is an unsigned, unMACed hint (`platform` on
+ * `/bridge/connect/finish`, outside the signed bytes): it orders confirmed
+ * browsers and grants nothing.
+ *
+ * It cannot be a build-time define like {@link currentPlatform}: one Safari
+ * build ships in both the macOS and the iOS appex (`apple/`). So it is read at
+ * run time from `runtime.getPlatformInfo()`, whose `os` is `ios` for Safari on
+ * iPhone and iPad (`ipados` is accepted too) and `android` for a Chromium on
+ * Android. Anything else — and a browser that cannot say — is `desktop`,
+ * which is also how the gateway ranks a browser that declared nothing.
+ */
+export type FormFactor = 'desktop' | 'mobile';
+
+const MOBILE_OS: ReadonlySet<string> = new Set(['ios', 'ipados', 'android']);
+
+export async function currentFormFactor(): Promise<FormFactor> {
+  const runtime = (globalThis as { chrome?: { runtime?: { getPlatformInfo?: () => unknown } } }).chrome
+    ?.runtime;
+  try {
+    const info = (await runtime?.getPlatformInfo?.()) as { os?: unknown } | undefined;
+    return typeof info?.os === 'string' && MOBILE_OS.has(info.os) ? 'mobile' : 'desktop';
+  } catch {
+    return 'desktop';
+  }
+}

@@ -46,6 +46,12 @@ describe('statusSignature', () => {
       statusSignature({ links: [{ id: ROW, connected: false, refusal: 'nope' }] }),
     );
   });
+
+  it('changes when the account turns this browser away (4001)', () => {
+    expect(statusSignature(offline)).not.toBe(
+      statusSignature({ links: [{ id: ROW, connected: false, notice: 'full' }] }),
+    );
+  });
 });
 
 describe('LinkStatusWatch (Safari: the link opens after the popup asked, no broadcast arrives)', () => {

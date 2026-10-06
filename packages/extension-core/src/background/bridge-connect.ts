@@ -9,6 +9,7 @@ import {
 } from '../bridge-connect.js';
 import { BRIDGE_CONNECT_APPROVAL, isAllowedGatewayOrigin } from '../bridge-connect-contract.js';
 export { BRIDGE_CONNECT_APPROVAL } from '../bridge-connect-contract.js';
+import { currentFormFactor } from '../platform.js';
 import { state } from './state.js';
 import { loadRemoteLinks } from './socket.js';
 import { AccountTrustStore, type TrustedAccount } from '../account-trust-store.js';
@@ -193,7 +194,9 @@ export async function onBridgeConnectApproval(
     // Connect is what decides whether the new credential may replace it.
     const before = await deps.loadTargets();
     const trusted = await (deps.listTrustedAccounts ?? (() => new AccountTrustStore().listAccounts()))();
-    const result = await deps.finish(identity, request.origin, request.requestId, request.nonce, approval);
+    // Desktop or mobile, as an unsigned hint beside the signed finish (mcp-host
+    // plan task X4): the account's room prefers a desktop browser to serve.
+    const result = await deps.finish(identity, request.origin, request.requestId, request.nonce, approval, await currentFormFactor());
     if (!result.ok) {
       await setConnectStatus(`Connect failed: ${result.reason}`);
       return { ok: false, reason: result.reason };
