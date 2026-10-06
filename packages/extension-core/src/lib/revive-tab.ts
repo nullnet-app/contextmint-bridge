@@ -19,9 +19,23 @@
  *     `content.js` refuses a second live install (`content-once.ts`).
  *   - A tab still LOADING is left alone: its manifest script is on the way.
  *
+ * Safari (WebKit) cannot say a tab is unloaded: `tabs.Tab` has no `discarded`
+ * and `status` is only `'loading'` / `'complete'` — a restored tab Safari has
+ * not loaded yet has no web view and reports `'complete'`. So such a tab takes
+ * the live path, and the injection is what tells: WebKit rejects
+ * `scripting.executeScript` with "Could not execute script on this tab" for
+ * exactly one state, the tab has no web view (no page loaded,
+ * `WebExtensionContext::scriptingExecuteScript`). Only that rejection, from a
+ * tab that reports no `discarded` field at all (Chrome always reports one),
+ * makes the tab count as unloaded and earns the reload. Any other failure
+ * leaves the tab alone. Just after `tabs.reload` such a tab can still report
+ * the `'complete'` of a tab with no web view, before the load has begun, so
+ * that reload is waited on until a `'loading'` is seen or a short settle has
+ * passed.
+ *
  * Feature-detected throughout: where `tabs.reload` or `scripting.executeScript`
- * is missing (Safari has no `discarded` either), that path does nothing and
- * the caller keeps today's behaviour. Every wait is bounded by one deadline.
+ * is missing, that path does nothing and the caller keeps today's behaviour.
+ * Every wait is bounded by one deadline.
  */
 
 import type { ChromeApi } from '../chrome-api.js';
@@ -47,9 +61,14 @@ export interface ReviveTiming {
   budgetMs: number;
   /** Gap between `tabs.get` polls while a reloaded tab loads, in ms. */
   pollMs: number;
+  /**
+   * After a reload of a tab Safari never loaded, how long a `'complete'` is
+   * distrusted unless a `'loading'` has been seen first, in ms.
+   */
+  reloadSettleMs: number;
 }
 
-const DEFAULT_TIMING: ReviveTiming = { budgetMs: 8_000, pollMs: 200 };
+const DEFAULT_TIMING: ReviveTiming = { budgetMs: 8_000, pollMs: 200, reloadSettleMs: 1_000 };
 let timing: ReviveTiming = { ...DEFAULT_TIMING };
 
 /**
@@ -72,14 +91,26 @@ function isUnloaded(tab: ReviveCandidate): boolean {
   return tab.discarded === true || tab.status === 'unloaded';
 }
 
-/** Poll until the tab reports `'complete'` or the deadline passes. */
-async function waitForComplete(tabId: number, deadline: number): Promise<boolean> {
+/**
+ * WebKit's rejection of `scripting.executeScript` for a tab with no web view —
+ * the one state in which it says this (`WebExtensionContextAPIScriptingCocoa.mm`).
+ */
+const NO_PAGE_LOADED = /could not execute script on this tab/i;
+
+/**
+ * Poll until the tab reports `'complete'` or the deadline passes. With
+ * `settleUntil`, a `'complete'` before that moment counts only once a
+ * `'loading'` has been seen (the load the reload started has begun).
+ */
+async function waitForComplete(tabId: number, deadline: number, settleUntil = 0): Promise<boolean> {
   const get = chrome.tabs.get;
   if (typeof get !== 'function') return false;
+  let sawLoading = false;
   for (;;) {
     try {
       const t = await chrome.tabs.get!(tabId);
-      if (t?.status === 'complete') return true;
+      if (t?.status === 'loading') sawLoading = true;
+      if (t?.status === 'complete' && (sawLoading || Date.now() >= settleUntil)) return true;
     } catch {
       return false; // the tab is gone
     }
@@ -88,24 +119,38 @@ async function waitForComplete(tabId: number, deadline: number): Promise<boolean
   }
 }
 
-async function reviveOne(tab: ReviveCandidate, deadline: number): Promise<boolean> {
-  if (isUnloaded(tab)) {
-    if (typeof chrome.tabs.reload !== 'function') return false;
-    try {
-      await chrome.tabs.reload!(tab.id);
-    } catch {
-      return false;
-    }
-    if (!(await waitForComplete(tab.id, deadline))) return false;
-    // `'complete'` and the manifest's `document_idle` injection land at about
-    // the same moment; one poll's grace keeps the retry from beating it.
-    await delay(Math.min(timing.pollMs, Math.max(0, deadline - Date.now())));
-    return true;
+/** Reload a tab with no page to lose, and wait for the fresh load. */
+async function reloadAndWait(tabId: number, deadline: number, settleUntil = 0): Promise<boolean> {
+  if (typeof chrome.tabs.reload !== 'function') return false;
+  try {
+    await chrome.tabs.reload!(tabId);
+  } catch {
+    return false;
   }
+  if (!(await waitForComplete(tabId, deadline, settleUntil))) return false;
+  // `'complete'` and the manifest's `document_idle` injection land at about
+  // the same moment; one poll's grace keeps the retry from beating it.
+  await delay(Math.min(timing.pollMs, Math.max(0, deadline - Date.now())));
+  return true;
+}
+
+async function reviveOne(tab: ReviveCandidate, deadline: number): Promise<boolean> {
+  if (isUnloaded(tab)) return reloadAndWait(tab.id, deadline);
   if (tab.status === 'loading') return false;
   if (!canInjectContentScripts()) return false;
   const declared = await declaredContentScripts(extraScripts);
-  return (await injectDeclaredScriptsIntoTab(tab, declared)) === 'landed';
+  let noPageLoaded = false;
+  const outcome = await injectDeclaredScriptsIntoTab(tab, declared, (e) => {
+    if (NO_PAGE_LOADED.test(String(e))) noPageLoaded = true;
+  });
+  if (outcome === 'landed') return true;
+  // Safari's unloaded restored tab (see the module docblock). `discarded`
+  // must be ABSENT, not just false: a browser that reports it has said the
+  // tab is loaded, and a loaded page is never reloaded.
+  if (outcome === 'failed' && noPageLoaded && tab.discarded === undefined) {
+    return reloadAndWait(tab.id, deadline, Date.now() + timing.reloadSettleMs);
+  }
+  return false;
 }
 
 /**

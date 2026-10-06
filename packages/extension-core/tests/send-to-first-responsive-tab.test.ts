@@ -142,6 +142,51 @@ describe('sendToFirstResponsiveTab', () => {
     });
   });
 
+  it('treats an undefined answer as no listener (Safari) and falls through to the next tab', async () => {
+    // WebKit resolves tabs.sendMessage with `undefined` when no content script
+    // listens in the tab, where Chrome rejects "Receiving end does not exist".
+    const { messagesSent } = installFakeChrome(
+      [
+        { id: 50, url: 'https://target.example.com/restored' },
+        { id: 51, url: 'https://target.example.com/live' },
+      ],
+      new Map<number, SendMessageBehavior>([
+        [50, { kind: 'reply', response: undefined }],
+        [51, { kind: 'reply', response: { ok: true, body: 'live' } }],
+      ]),
+    );
+    const result = await sendToFirstResponsiveTab(
+      (url) => url.startsWith('https://target.example.com/'),
+      () => ({ kind: 'noop' }),
+      'https://target.example.com/',
+    );
+    expect(result).toEqual({
+      kind: 'response',
+      response: { ok: true, body: 'live' },
+      tabUrl: 'https://target.example.com/live',
+    });
+    expect(messagesSent.map((m) => m.tabId)).toEqual([50, 51]);
+  });
+
+  it('a Safari-silent miss still carries the content_script_unreachable marker', async () => {
+    installFakeChrome(
+      [{ id: 60, url: 'https://target.example.com/a' }],
+      new Map<number, SendMessageBehavior>([[60, { kind: 'reply', response: undefined }]]),
+    );
+    const result = await sendToFirstResponsiveTab(
+      (url) => url.startsWith('https://target.example.com/'),
+      () => ({ kind: 'noop' }),
+      'https://target.example.com/',
+    );
+    expect(result.kind).toBe('no-tab');
+    if (result.kind === 'no-tab') {
+      expect(result.error).toContain('1 URL match, none responded');
+      expect(result.error).toContain('Reload that tab');
+      // `@fetchproxy/server` routes on this phrase (error-kind.ts).
+      expect(result.error).toContain('Receiving end does not exist');
+    }
+  });
+
   it('returns no-tab with embedded lastNoListener when ALL matched tabs are stale', async () => {
     installFakeChrome(
       [

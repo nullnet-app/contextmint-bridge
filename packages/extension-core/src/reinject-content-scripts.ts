@@ -184,6 +184,8 @@ export async function declaredContentScripts(
 export async function injectDeclaredScriptsIntoTab(
   tab: { id: number; url?: string },
   declared: readonly DeclaredContentScript[],
+  /** Sees each injection's rejection; the revive reads WHY it failed. */
+  onError?: (error: unknown) => void,
 ): Promise<'none' | 'landed' | 'failed'> {
   if (!canInjectContentScripts() || !isInjectableUrl(tab.url)) return 'none';
   // Only the scripts whose `matches` cover this tab. A tab no script claims
@@ -205,9 +207,10 @@ export async function injectDeclaredScriptsIntoTab(
         ...(cs.run_at === 'document_start' ? { injectImmediately: true } : {}),
       });
       anyLanded = true;
-    } catch {
+    } catch (e) {
       // Restricted page, tab closed mid-sweep, or a navigation in flight.
       // Best-effort by design — see the module docblock.
+      onError?.(e);
     }
   }
   return anyLanded ? 'landed' : 'failed';
