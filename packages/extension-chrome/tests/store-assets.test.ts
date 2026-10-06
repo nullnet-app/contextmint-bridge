@@ -18,6 +18,7 @@ import {
   BRAND,
   appStoreScreenshotHtml,
   portraitLayout,
+  marqueeTileHtml,
   promoTileHtml,
   screenshotHtml,
 } from '../store-assets/canvas.js';
@@ -251,6 +252,19 @@ describe('canvases', () => {
     expect(html).toContain('height: 280px');
     expect(html).toContain('ContextMint Bridge');
   });
+
+  it('the marquee tile is 1400x560, names the extension and fits the popup inside it', () => {
+    const html = marqueeTileHtml({ popupPng: 'data:image/png;base64,AAAA', popupWidth: 400, popupHeight: 900 });
+    expect(html).toContain('width: 1400px');
+    expect(html).toContain('height: 560px');
+    expect(html).toContain('ContextMint Bridge');
+    expect(html).toContain('data:image/png;base64,AAAA');
+    const box = html.match(/\.popup \{[^}]*?width: (\d+)px; height: (\d+)px;/);
+    expect(box).not.toBeNull();
+    // A tall popup is scaled down to the tile's height, keeping its aspect.
+    expect(Number(box![2])).toBeLessThanOrEqual(560 - 2 * 48);
+    expect(Number(box![1]) / Number(box![2])).toBeCloseTo(400 / 900, 2);
+  });
 });
 
 /** A minimal PNG: 2x1, colour type 6 (RGBA), filter 0 rows. */
@@ -400,6 +414,15 @@ describe('App Store screenshots', () => {
 
 describe('committed store assets', () => {
   const read = (p: string): Buffer => readFileSync(join(ASSETS, p));
+
+  it('the marquee promo tile is a 1400x560 24-bit PNG', () => {
+    expect(pngInfo(read('promo-marquee-1400x560.png'))).toEqual({
+      width: 1400,
+      height: 560,
+      colorType: 2,
+      bitDepth: 8,
+    });
+  });
 
   it('the small promo tile is a 440x280 24-bit PNG', () => {
     expect(pngInfo(read('promo-small-440x280.png'))).toEqual({

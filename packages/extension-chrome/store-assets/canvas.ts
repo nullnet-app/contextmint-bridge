@@ -1,6 +1,7 @@
 /**
  * The branded pages the store assets are captured from: a 1280x800 canvas
- * with a headline beside the real popup, and the 440x280 small promo tile.
+ * with a headline beside the real popup, the 440x280 small promo tile and
+ * the 1400x560 marquee promo tile.
  *
  * Brand: ContextMint, from chrischall/nullnet-design-system v1.6.1 —
  * `--nn-ink`, `--nn-paper`, `--nn-star`, the system font stacks, the
@@ -226,4 +227,49 @@ export function promoTileHtml(): string {
   </div>
   <div class="tag">Let <b>ContextMint</b> and your local <b>MCP tools</b> work in the tabs you’re already signed into.</div>`;
   return page(440, 280, css, body);
+}
+
+/** The marquee tile's size and inner margin. */
+const MARQUEE = { width: 1400, height: 560, pad: 48 };
+
+/**
+ * The 1400x560 marquee promo tile: the small tile's brand and line on the
+ * left, the real popup (the trusted-MCPs scene) on the right, scaled to fit
+ * the tile's height with its aspect kept.
+ */
+export function marqueeTileHtml(c: {
+  popupPng: string;
+  popupWidth: number;
+  popupHeight: number;
+}): string {
+  const { width, height, pad } = MARQUEE;
+  const scale = Math.min((height - 2 * pad) / c.popupHeight, 520 / c.popupWidth);
+  const w = Math.round(c.popupWidth * scale);
+  const h = Math.round(c.popupHeight * scale);
+  const css = `
+  body { position: relative;
+    background: radial-gradient(ellipse at 78% 30%, ${BRAND.ink3} 0%, ${BRAND.ink} 62%); }
+  .copy { position: absolute; left: ${pad + 32}px; top: 0; bottom: 0; width: ${width - w - 3 * pad - 64}px;
+    display: flex; flex-direction: column; justify-content: center; }
+  .row { display: flex; align-items: center; gap: 26px; }
+  .row img { width: 112px; height: 112px; }
+  .title { white-space: nowrap; font-size: 56px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; }
+  .title .cursor { width: 0.2em; height: 0.85em; margin-left: 0.1em; }
+  .tag { margin-top: 34px; font-size: 30px; line-height: 1.4; color: ${BRAND.mutedOnInk}; max-width: 680px; }
+  .tag b { color: ${BRAND.paper}; font-weight: 600; }
+  .popup { position: absolute; right: ${pad + 32}px; top: ${Math.round((height - h) / 2)}px; width: ${w}px; height: ${h}px;
+    border-radius: 14px; overflow: hidden; background: #fff;
+    box-shadow: 0 0 0 2px rgba(250,250,250,0.10), 0 18px 48px rgba(0,0,0,0.55); }
+  .popup img { display: block; width: 100%; height: 100%; }
+`;
+  const body = `
+  <section class="copy">
+    <div class="row">
+      <img src="${bridgeIcon()}" alt="">
+      <div class="title">ContextMint Bridge<span class="cursor"></span></div>
+    </div>
+    <div class="tag">Let <b>ContextMint</b> and your local <b>MCP tools</b> work in the tabs you’re already signed into.</div>
+  </section>
+  <div class="popup"><img src="${c.popupPng}" alt=""></div>`;
+  return page(width, height, css, body);
 }
