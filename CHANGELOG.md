@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.7.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.6.1...v1.7.0) (2026-10-06)
+
+
+### Features
+
+* **extension-core:** explain the browser limit and say desktop or mobile at Connect ([#87](https://github.com/nullnet-app/contextmint-bridge/issues/87)) ([1578003](https://github.com/nullnet-app/contextmint-bridge/commit/1578003cd98707dc7a2ddd3e36a990a164c3a6e8))
+* **extension-core:** heartbeat each remote bridge link ([#88](https://github.com/nullnet-app/contextmint-bridge/issues/88)) ([c47fbcd](https://github.com/nullnet-app/contextmint-bridge/commit/c47fbcd3b389fa358cb99eba02fef55df369d489))
+* **extension-core:** serve the account from this browser ([#91](https://github.com/nullnet-app/contextmint-bridge/issues/91)) ([775e4dc](https://github.com/nullnet-app/contextmint-bridge/commit/775e4dcbaf9c1bca34f0265d550a510bc956ba19))
+* **extension-core:** show whether this browser serves the account ([#90](https://github.com/nullnet-app/contextmint-bridge/issues/90)) ([92c966e](https://github.com/nullnet-app/contextmint-bridge/commit/92c966e69a14280718c8498942aac3fe82433d2b))
+
+
+### Bug Fixes
+
+* **safari:** show a connected bridge as connected in the popup ([#85](https://github.com/nullnet-app/contextmint-bridge/issues/85)) ([28b2c75](https://github.com/nullnet-app/contextmint-bridge/commit/28b2c75c5121c480404955bf3e4bb8c91b9306db))
+
+
+### Refactor
+
+* **extension-core:** correct the pre-G7 Connect retry's cost and tidy X4's types ([#89](https://github.com/nullnet-app/contextmint-bridge/issues/89)) ([330e46b](https://github.com/nullnet-app/contextmint-bridge/commit/330e46b45726bc0b45993cf6b8c7f61d5aff32f9))
+
 ## [1.6.1](https://github.com/nullnet-app/contextmint-bridge/compare/v1.6.0...v1.6.1) (2026-10-05)
 
 

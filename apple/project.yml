@@ -53,7 +53,7 @@ settings:
     # line after it, CURRENT_PROJECT_VERSION, is the build number: the deploy
     # workflow's to move (run_number*100+run_attempt), never a release bump's.
     # A `yaml` extra-file would reserialise this file and delete every comment.
-    MARKETING_VERSION: "1.6.1" # x-release-please-version
+    MARKETING_VERSION: "1.7.0" # x-release-please-version
     CURRENT_PROJECT_VERSION: "1"
     # The app and its appex sign with DIFFERENT profiles, and a
     # PROVISIONING_PROFILE_SPECIFIER given on the xcodebuild command line
