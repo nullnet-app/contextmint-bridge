@@ -239,7 +239,7 @@ function connectLink(link: Link): void {
     wasOpen = true;
     link.reconnectAttempt = 0;
     link.nextAttemptAt = 0;
-    delete link.notice;
+    link.notice = null;
     setConnectionStatus('connected');
     // Fresh per-LINK, per-connection nonce. The corresponding ready-frame
     // signature commits to (mcpHelloNonce || this nonce || the ephemeral pub),
@@ -296,7 +296,7 @@ function connectLink(link: Link): void {
   ws.addEventListener('close', (ev: CloseEvent) => {
     teardownLink(link);
     const roomFull = link.kind === 'remote' && ev?.code === BROWSER_TAKEN_CLOSE;
-    if (!roomFull) delete link.notice;
+    if (!roomFull) link.notice = null;
     // A link that was up is down: the popup's row must stop saying Connected.
     // Only after an open, so a target that keeps failing to dial does not
     // re-render an open popup on every retry.

@@ -76,9 +76,9 @@ export interface Link {
    * `4001 BROWSER_TAKEN` close (the account is at its browser limit, or holds
    * its one slot elsewhere). Unlike {@link refusal} the link is still dialled,
    * at the slowest backoff step. Cleared when a socket opens. Shown in the
-   * popup while the link is down.
+   * popup while the link is down. `null` when there is none.
    */
-  notice?: string;
+  notice: string | null;
   /**
    * Epoch ms of this link's last IMMEDIATE re-dial (after `4005` / `4006`).
    * Those closes are not errors, so they skip the backoff — but only once per
@@ -113,6 +113,7 @@ export function localLink(): Link {
     targetId: undefined,
     tokenId: undefined,
     refusal: null,
+    notice: null,
     lastImmediateRedialAt: 0,
   };
 }
@@ -135,6 +136,7 @@ export function remoteLink(target: RemoteTarget, protocols: string[]): Link {
     ...(target.connectApproved ? { connectApproved: true as const } : {}),
     ...(target.connectAccount ? { connectAccount: target.connectAccount } : {}),
     refusal: null,
+    notice: null,
     lastImmediateRedialAt: 0,
   };
 }
@@ -241,7 +243,7 @@ export function linkStatuses(): LinkStatus[] {
       connected,
       sessions: mcpIdsForLink(link).length,
       ...(link.refusal !== null ? { refusal: link.refusal } : {}),
-      ...(link.notice !== undefined && !connected ? { notice: link.notice } : {}),
+      ...(link.notice !== null && !connected ? { notice: link.notice } : {}),
     });
   }
   return out.sort((a, b) =>

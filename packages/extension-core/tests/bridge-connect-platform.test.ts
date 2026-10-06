@@ -151,4 +151,11 @@ describe('currentFormFactor: what Connect declares', () => {
       expect(await currentFormFactor()).toBe('desktop');
     }
   });
+
+  it('says desktop when there is no chrome global, or no runtime on it', async () => {
+    vi.stubGlobal('chrome', undefined);
+    expect(await currentFormFactor()).toBe('desktop');
+    vi.stubGlobal('chrome', {});
+    expect(await currentFormFactor()).toBe('desktop');
+  });
 });

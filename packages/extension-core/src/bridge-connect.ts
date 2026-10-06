@@ -79,10 +79,26 @@ export type ConnectCredential = { token: string; tokenId: string; name: string; 
  * A gateway before mcp-host task G7 holds this body to a strict schema that
  * does not know `platform` and answers it with its one `403` refusal, which
  * cannot be told apart from any other. So a `403` to a finish that carried the
- * hint is retried ONCE without it: the same signed request (the gateway
- * refused it before reading the request row, so nothing was consumed), minus a
- * hint that gateway would not have stored anyway. A browser that connects that
- * way ranks as desktop, which is what that gateway does for every browser.
+ * hint is retried ONCE without it: the same signed request, minus a hint that
+ * gateway would not have stored anyway. The request row is untouched (the
+ * schema refusal comes before the gateway reads it), so the retry can still
+ * succeed. A browser that connects that way ranks as desktop, which is what
+ * that gateway does for every browser.
+ *
+ * The retry is NOT free against such a gateway. Its schema refusal goes
+ * through the same `refuse()` as every other finish failure, and that records
+ * a failure on the per-IP attach-failure counter (`ATTACH_FAIL_NAMESPACE`:
+ * 5 per 60 s, never cleared by a success). That counter also gates every
+ * bridge WebSocket attach from the address. So until G7 is deployed, EVERY
+ * Connect from this build costs one attach-failure slot, even a successful
+ * one: a few Connects from one IP inside a minute, or a Connect beside a
+ * browser that keeps re-dialling a revoked credential, can get finish and all
+ * bridge attaches from that address answered `429` for a window. That is why
+ * the plan orders "G1 and G7 deployed → X4": a release carrying this should
+ * wait for the G7 deploy. A self-hosted gateway that never takes G7 pays the
+ * slot on every Connect. After G7 the hint is accepted and only a finish that
+ * is refused anyway (an expired approval, say) costs two slots instead of one.
+ * The retry can go once no supported gateway predates G7.
  */
 export async function finishBridgeConnect(identity: ExtensionIdentity, origin: string, requestId: string, nonce: string, approval: string, platform?: FormFactor): Promise<{ ok: true; credential: ConnectCredential } | { ok: false; reason: string }> {
   if (!isAllowedGatewayOrigin(origin) || !/^bcr_[0-9a-f]{32}$/.test(requestId) || !isConnectSecret(nonce) || !isConnectSecret(approval)) {

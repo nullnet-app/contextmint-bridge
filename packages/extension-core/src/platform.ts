@@ -14,6 +14,9 @@
  */
 import type { Platform } from '@fetchproxy/protocol';
 
+import type { ChromeApi } from './chrome-api.js';
+
+declare const chrome: ChromeApi | undefined;
 declare const __FETCHPROXY_PLATFORM__: Platform | undefined;
 
 const PLATFORMS: readonly Platform[] = ['chrome', 'safari', 'firefox'];
@@ -59,11 +62,12 @@ export type FormFactor = 'desktop' | 'mobile';
 const MOBILE_OS: ReadonlySet<string> = new Set(['ios', 'ipados', 'android']);
 
 export async function currentFormFactor(): Promise<FormFactor> {
-  const runtime = (globalThis as { chrome?: { runtime?: { getPlatformInfo?: () => unknown } } }).chrome
-    ?.runtime;
   try {
-    const info = (await runtime?.getPlatformInfo?.()) as { os?: unknown } | undefined;
-    return typeof info?.os === 'string' && MOBILE_OS.has(info.os) ? 'mobile' : 'desktop';
+    const runtime = typeof chrome === 'undefined' ? undefined : chrome?.runtime;
+    const info = await runtime?.getPlatformInfo?.();
+    // `os` is checked at run time: the type says string, the browser says anything.
+    const os: unknown = info?.os;
+    return typeof os === 'string' && MOBILE_OS.has(os) ? 'mobile' : 'desktop';
   } catch {
     return 'desktop';
   }

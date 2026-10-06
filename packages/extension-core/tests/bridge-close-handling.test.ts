@@ -205,6 +205,8 @@ describe('the room’s close codes', () => {
     link.nextAttemptAt = 0;
     connect();
     lastSocket(TARGET.url).open();
+    // Cleared by the open itself, not merely hidden while connected.
+    expect(link.notice).toBeNull();
     expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
     lastSocket(TARGET.url).remoteClose(1006);
     expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
@@ -215,6 +217,14 @@ describe('the room’s close codes', () => {
     link.nextAttemptAt = 0;
     connect();
     lastSocket(TARGET.url).remoteClose(1006);
+    expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
+  });
+
+  it('a connected link never shows a 4001 line, whatever it holds', () => {
+    useTarget(TARGET);
+    lastSocket(TARGET.url).open();
+    const link = [...links.values()].find((l) => l.url === TARGET.url)!;
+    link.notice = 'This account already has 4 browsers connected; disconnect one in Settings';
     expect(linkStatuses().find((l) => l.url === TARGET.url)).not.toHaveProperty('notice');
   });
 
