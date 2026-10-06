@@ -55,10 +55,9 @@ import { currentPlatform } from '../platform.js';
 import { state } from './state.js';
 import { bindMcpToLink, linkForMcp, links, sendOnLink, takeAccountAttestation, unbindMcp, type Link } from './links.js';
 import { handleServerHello, type PendingAccountScopeUpdate } from './hello.js';
-import { setPairPendingBadge } from './badge.js';
+import { setPairPendingBadge, syncPendingBadge } from './badge.js';
 import { accountForgetActivityVersion, accountInvalidationEpoch, isAccountForgetInProgress } from './account-invalidation.js';
 
-const ACCOUNT_MCP_CARDS_KEY = 'pendingAccountMcpCards';
 const ACCOUNT_MCP_SESSION_APPROVALS_KEY = 'accountMcpSessionApprovals';
 function browserLabel(): string {
   try { const p = currentPlatform(); return p[0]!.toUpperCase() + p.slice(1); }
@@ -131,6 +130,8 @@ export async function decideAccountMcpCard(key: unknown, allow: boolean): Promis
   delete cards[key];
   if (Object.keys(cards).length) await area.set({ [ACCOUNT_MCP_CARDS_KEY]: cards });
   else await area.remove(ACCOUNT_MCP_CARDS_KEY);
+  // The card that lit "!" is gone; repaint from what is still queued.
+  await syncPendingBadge();
   if (!allow) return true;
   const link = links.get(card.linkId);
   if (!link || link.closed || link.kind !== 'remote' || link.ws?.readyState !== WebSocket.OPEN ||
@@ -260,6 +261,7 @@ import {
   type PendingScopeUpdateRecord,
 } from './pending-records.js';
 import {
+  ACCOUNT_MCP_CARDS_KEY,
   PENDING_PAIR_KEY,
   mergePending,
   pendingArea,
@@ -589,6 +591,7 @@ export async function onServerHello(
       };
       const declaredHash = await scopeHash(declaredScopeForHash);
       const suKey = `${su.identityHash}:${declaredHash}`;
+      let offerQueued = false;
       await withPendingPairLock(async () => {
         // Check dismiss suppression: skip queuing if this identity dismissed
         // this exact declared scope hash before.
@@ -674,8 +677,12 @@ export async function onServerHello(
           existing[suKey] = suRecord;
         }
         await area.set({ [PENDING_PAIR_KEY]: existing });
+        offerQueued = true;
       });
-      setPairPendingBadge();
+      // Only when an offer is actually waiting: a dismissed scope is not
+      // re-queued, and lighting "!" for it anyway left a badge over a popup
+      // with nothing in it, re-lit on every hello from that MCP.
+      if (offerQueued) setPairPendingBadge();
     }
     return;
   }
@@ -764,8 +771,9 @@ export async function onServerHello(
   // 0.4.2: surface the pending pair without making the user discover
   // it manually — paint the action-icon badge and best-effort try to
   // open the popup. Both no-op in environments that don't expose
-  // chrome.action (unit tests, older Chrome).
-  setPairPendingBadge();
+  // chrome.action (unit tests, older Chrome). Only for a pair that is
+  // really queued: a "!" with no card behind it never clears.
+  if (pairQueued) setPairPendingBadge();
   // 0.5.2+: notify the MCP-side server (host or peer) that the user has
   // been asked to approve. The MCP can then include `pairCode` in tool
   // errors so the chat shows the same XXXX-XXXX the popup is displaying.

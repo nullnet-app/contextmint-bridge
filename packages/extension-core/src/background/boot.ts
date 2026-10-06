@@ -25,7 +25,7 @@ import type { ChromeApi } from '../chrome-api.js';
 
 declare const chrome: ChromeApi;
 
-import { setPairPendingBadge, clearPairPendingBadge } from './badge.js';
+import { syncPendingBadge } from './badge.js';
 import type { AnyPendingRecord } from './pending-records.js';
 import { state } from './state.js';
 import { connect, loadRemoteLinks, decideAccountCard, pingRemoteLinks, serveFromLink } from './socket.js';
@@ -35,9 +35,9 @@ import { connectedIdentityHashes } from './session-scope.js';
 import { linkStatuses } from './links.js';
 import {
   PENDING_PAIR_KEY,
+  PENDING_QUEUE_KEYS,
   APPROVED_PAIR_KEY,
   DISMISS_SCOPE_UPDATE_KEY,
-  mergePending,
 } from './pending-pair-store.js';
 import { REMOTE_TARGETS_CHANGED } from '../remote-targets.js';
 import { onApproval, onScopeUpdateDismiss } from './approval.js';
@@ -351,26 +351,17 @@ export function maybeBoot(): void {
           console.error('[fetchproxy] dismiss:', e),
         );
       }
-      // 0.4.2: keep the badge in sync with the pending-pair state.
-      // Cancel (popup) and the user-driven X removes the key without
-      // going through onApproval, so this is the catch-all clear point.
-      // 0.5.2+: the value is now a dict — has any non-empty content means
-      // at least one pending entry remains and the badge should stay lit.
-      if (PENDING_PAIR_KEY in changes) {
-        const next = changes[PENDING_PAIR_KEY]?.newValue;
-        const dict = mergePending(next);
-        if (Object.keys(dict).length > 0) setPairPendingBadge();
-        else clearPairPendingBadge();
-      }
+      // Keep the badge in sync with every queue the popup shows a card
+      // for. Cancel (popup), the user-driven X and an account-card decision
+      // all remove entries without going through onApproval, so this is the
+      // catch-all repaint. It used to watch `pendingPair` alone, which left
+      // "!" lit after an account MCP card was decided.
+      if (PENDING_QUEUE_KEYS.some((k) => k in changes)) void syncPendingBadge();
     });
-    // 0.4.2: on SW boot, repaint the badge from current storage so a
-    // pending pair survives a service-worker eviction without losing
-    // its visual indicator.
-    void session.get(PENDING_PAIR_KEY).then((got) => {
-      const dict = mergePending(got[PENDING_PAIR_KEY]);
-      if (Object.keys(dict).length > 0) setPairPendingBadge();
-      else clearPairPendingBadge();
-    });
+    // On boot (an SW eviction, or a Safari event-page wake), repaint the
+    // badge from every queue, so a waiting card keeps its "!" and a "!" whose
+    // card is gone does not outlive it.
+    void syncPendingBadge();
   } else {
     console.error('[fetchproxy] chrome.storage.session unavailable: pairing is disabled');
   }

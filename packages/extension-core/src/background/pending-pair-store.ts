@@ -27,6 +27,16 @@ export const PENDING_PAIR_KEY = 'pendingPair';
 export const APPROVED_PAIR_KEY = 'approvedPair';
 /** The popup's "keep as is" decision on a scope update. */
 export const DISMISS_SCOPE_UPDATE_KEY = 'dismissedScopeUpdate';
+/** Account-key cards (a new or changed account key) waiting in the popup. */
+export const ACCOUNT_CARDS_KEY = 'pendingAccountCards';
+/** Account MCP cards (connect, or widen scope) waiting in the popup. */
+export const ACCOUNT_MCP_CARDS_KEY = 'pendingAccountMcpCards';
+/**
+ * Every `storage.session` queue whose entries the popup shows as a card the
+ * person must act on. The toolbar "!" is lit exactly while one is non-empty
+ * (`syncPendingBadge` in `badge.ts`).
+ */
+export const PENDING_QUEUE_KEYS = [PENDING_PAIR_KEY, ACCOUNT_CARDS_KEY, ACCOUNT_MCP_CARDS_KEY] as const;
 
 /**
  * Where the pairing queue and the popup's decisions live:

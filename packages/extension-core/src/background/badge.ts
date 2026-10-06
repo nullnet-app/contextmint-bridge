@@ -1,7 +1,7 @@
 /**
  * Toolbar action badge state, moved verbatim out of `background.ts`.
  *
- * The three module-level `let`s stay private to this file on purpose:
+ * The module-level `let`s stay private to this file on purpose:
  * `syncBadge` consults `pairPendingActive` first and `flashActivity` bails
  * while it is set, so the pending-pair badge always wins. Splitting that
  * state across modules would break the priority silently.
@@ -9,6 +9,8 @@
  * Reaches chrome through the same `globalThis` cast the original used, so
  * this module needs no chrome declaration at all.
  */
+
+import { PENDING_QUEUE_KEYS } from './pending-pair-store.js';
 
 // -------------------------------------------------------------------
 // 0.4.2: action badge + auto-popup attempt
@@ -25,6 +27,10 @@
 // We swallow exceptions so unsupported environments still get the
 // badge — the badge alone is enough to make the pending pair
 // visible.
+//
+// "Pending" covers every queue the popup shows as a card, not only
+// pending pairs: account-key cards and account MCP cards too
+// (`PENDING_QUEUE_KEYS`). `syncPendingBadge` re-derives it from them.
 // -------------------------------------------------------------------
 
 const BADGE_PAIR_PENDING_TEXT = '!';
@@ -100,6 +106,7 @@ export function flashActivity(): void {
 }
 
 export function setPairPendingBadge(): void {
+  pendingLitGeneration++;
   pairPendingActive = true;
   setBadge(BADGE_PAIR_PENDING_TEXT, BADGE_PAIR_PENDING_COLOR);
   const action = getAction();
@@ -118,7 +125,42 @@ export function setPairPendingBadge(): void {
   }
 }
 
-export function clearPairPendingBadge(): void {
-  pairPendingActive = false;
+/**
+ * Repaint the "!" from what is actually queued, rather than latching it.
+ *
+ * Three `storage.session` queues hold cards the popup asks the person to act
+ * on (`PENDING_QUEUE_KEYS`). Each queue lights the badge when it gains an
+ * entry, but the badge used to be cleared only by a `pendingPair` change — so
+ * deciding an account MCP card left "!" over a popup with nothing waiting in
+ * it until the background restarted (on Safari, the event page can stay up
+ * for as long as a bridge socket is open). Every point that drains a queue,
+ * plus boot, now calls this instead of clearing blind.
+ *
+ * A `setPairPendingBadge()` that lands while this is reading wins: the read
+ * may predate the entry it was lit for, and the storage change that entry
+ * makes will sync again anyway.
+ */
+let pendingLitGeneration = 0;
+export async function syncPendingBadge(): Promise<void> {
+  const area = (globalThis as { chrome?: { storage?: { session?: {
+    get: (k: string[]) => Promise<Record<string, unknown>>;
+  } } } }).chrome?.storage?.session;
+  if (!getAction() || !area) return;
+  const generation = pendingLitGeneration;
+  let waiting = false;
+  try {
+    const got = await area.get([...PENDING_QUEUE_KEYS]);
+    waiting = PENDING_QUEUE_KEYS.some((k) => {
+      const v = got[k];
+      return !!v && typeof v === 'object' && Object.keys(v).length > 0;
+    });
+  } catch (e) {
+    console.warn('[fetchproxy] syncPendingBadge:', e);
+    return;
+  }
+  if (generation !== pendingLitGeneration) return;
+  // Always repaint, even when the flag is unchanged: the browser keeps the
+  // badge across a background restart, but this module's flag starts false.
+  pairPendingActive = waiting;
   syncBadge();
 }

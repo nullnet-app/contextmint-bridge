@@ -80,7 +80,8 @@ import {
 import { AccountTrustStore, type TrustedAccount } from '../account-trust-store.js';
 
 import { state } from './state.js';
-import { setConnectionStatus, flashActivity } from './badge.js';
+import { setConnectionStatus, flashActivity, setPairPendingBadge, syncPendingBadge } from './badge.js';
+import { ACCOUNT_CARDS_KEY } from './pending-pair-store.js';
 import { sendInner } from './send-inner.js';
 import { clearAccountSessionApprovals, onServerHello, sendHelloRejected } from './server-hello.js';
 import { forgetVersionMismatch, noteVersionMismatch } from './version-mismatch-store.js';
@@ -654,7 +655,6 @@ export function serveFromLink(linkId: string): boolean {
 }
 
 const accountTrust = new AccountTrustStore();
-const ACCOUNT_CARDS_KEY = 'pendingAccountCards';
 
 export interface PendingAccountCard {
   key: string;
@@ -760,6 +760,8 @@ async function onAccountKey(link: Link, frame: AccountKeyFrame): Promise<void> {
       : {};
   cards[key] = { key, linkId: link.id, tokenId: link.tokenId, origin, account: frame, keyChanged };
   await area.set({ [ACCOUNT_CARDS_KEY]: cards });
+  // The popup shows this card first; the "!" is what sends the person there.
+  setPairPendingBadge();
   broadcastConnectionsChanged();
 }
 
@@ -789,6 +791,7 @@ export async function decideAccountCard(key: unknown, approve: boolean): Promise
   delete cards[key];
   if (Object.keys(cards).length === 0) await area.remove(ACCOUNT_CARDS_KEY);
   else await area.set({ [ACCOUNT_CARDS_KEY]: cards });
+  await syncPendingBadge();
   if (!approve) return true;
 
   const link = links.get(card.linkId);
