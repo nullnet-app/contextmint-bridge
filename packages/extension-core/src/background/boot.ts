@@ -28,7 +28,7 @@ declare const chrome: ChromeApi;
 import { setPairPendingBadge, clearPairPendingBadge } from './badge.js';
 import type { AnyPendingRecord } from './pending-records.js';
 import { state } from './state.js';
-import { connect, loadRemoteLinks, decideAccountCard } from './socket.js';
+import { connect, loadRemoteLinks, decideAccountCard, pingRemoteLinks } from './socket.js';
 import { clearRetiredAlarms } from '../retired-alarms.js';
 import { connectedIdentityHashes } from './session-scope.js';
 import { linkStatuses } from './links.js';
@@ -372,6 +372,10 @@ export function maybeBoot(): void {
     startKeepalive({
       alarms: chrome.alarms,
       ensureConnected: connect,
+      // X3: the account-room liveness heartbeat rides the same tick, so a
+      // room can tell a browser gone quiet from one merely idle (mcp-host
+      // multi-browser spec §5.3 rule 7). Pings only links already open.
+      heartbeat: pingRemoteLinks,
     });
   }
   // Up to 1.5.0 Safari asked the ContextMint app for a bridge target on a

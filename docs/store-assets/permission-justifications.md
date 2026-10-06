@@ -76,7 +76,10 @@ Used for MV3 service-worker keepalive. Chrome may stop an idle service worker
 after about 30 seconds; a `chrome.alarms` alarm fires every 24 seconds and
 re-establishes the connection to local MCP servers (and any bridge the user
 configured) if it was torn down. Without it, the extension would silently stop
-answering between bursts of MCP traffic. No alarm carries data.
+answering between bursts of MCP traffic. On the same tick the extension sends
+a fixed liveness ping (`{"type":"room-ping"}`, no user data) on each open
+account bridge, so the bridge can tell a browser that has gone quiet from one
+that is merely idle. No alarm carries data.
 
 ---
 

@@ -40,6 +40,9 @@ import {
   unavailableCapabilitiesHelloField,
   ACCOUNT_KEY_FRAME,
   ACCOUNT_ATTEST_FRAME,
+  ROOM_PING_FRAME,
+  ROOM_PONG_FRAME,
+  roomFrameText,
   accountKeyId,
   fromB64,
   type AccountKeyFrame,
@@ -106,6 +109,31 @@ const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 5000, 10_000];
  * service worker that never idles.
  */
 const REMOTE_RECONNECT_BACKOFF_MS = [1000, 2000, 5000, 15_000, 30_000, 60_000];
+
+/**
+ * The `accepts` list each kind of link's extension hello advertises. One
+ * definition, read by the hello AND by every sender that must be gated on it
+ * (`roomFrameText` refuses a room frame the list does not name), so the two
+ * can never disagree.
+ *
+ * B-BUG-9: host → extension notices this build understands. A host sends
+ * `peer-gone` only to an extension that lists it. Account identity frames and
+ * the account-room heartbeat (`room-ping`, X3) are meaningful only on
+ * configured remote credentials; loopback's advertised contract stays
+ * unchanged.
+ */
+const LOCAL_HELLO_ACCEPTS: readonly string[] = Object.freeze(['peer-gone']);
+const REMOTE_HELLO_ACCEPTS: readonly string[] = Object.freeze([
+  'peer-gone',
+  'hello-rejected',
+  ACCOUNT_KEY_FRAME,
+  ACCOUNT_ATTEST_FRAME,
+  ROOM_PING_FRAME,
+]);
+
+function helloAccepts(link: Link): readonly string[] {
+  return link.kind === 'remote' ? REMOTE_HELLO_ACCEPTS : LOCAL_HELLO_ACCEPTS;
+}
 
 /** Ensure the loopback link exists. Called before every connect sweep. */
 function ensureLocalLink(): Link {
@@ -261,14 +289,9 @@ function connectLink(link: Link): void {
       identityX25519Pub: toB64(state.extIdentity.x25519Pub),
       identityEd25519Pub: toB64(state.extIdentity.ed25519Pub),
       sessionNonce: toB64(sessionNonce),
-      // B-BUG-9: host → extension notices this build understands. A host
-      // sends `peer-gone` only to an extension that lists it.
-      // Account identity frames are meaningful only on configured remote
-      // credentials. Loopback's advertised contract stays unchanged.
-      accepts:
-        link.kind === 'remote'
-          ? ['peer-gone', 'hello-rejected', ACCOUNT_KEY_FRAME, ACCOUNT_ATTEST_FRAME]
-          : ['peer-gone'],
+      // Per link kind; see `helloAccepts`. A fresh copy, never the frozen
+      // list itself, so nothing that holds the hello can mutate the gate.
+      accepts: [...helloAccepts(link)],
       // #418: what this browser cannot serve, found by runtime API detection,
       // so an MCP can refuse those verbs locally with a hint that blames the
       // browser. Sent on EVERY link, before any MCP hello: every published
@@ -378,6 +401,40 @@ function connectLink(link: Link): void {
   });
 }
 
+/**
+ * X3: the account-room liveness heartbeat. Sends the literal
+ * `{"type":"room-ping"}` once on every OPEN remote link; called from the
+ * keepalive alarm (about every 30 s) beside `connect`.
+ *
+ * A room that admits several browsers answers it with a fixed auto-response
+ * (`room-pong`) and judges a browser that stops pinging as gone, handing its
+ * MCPs to another (mcp-host multi-browser spec §5.3 rule 7). A relay that
+ * predates the heartbeat reads a frame with no `mcpId` and drops it.
+ *
+ * - **Never loopback.** The concentrator has no room; its hello does not list
+ *   `room-ping`, and `roomFrameText` would refuse it anyway.
+ * - **Never dials or wakes.** A link that is not OPEN is skipped: a closed or
+ *   backing-off link is `connect`'s business on its own schedule, and a
+ *   CONNECTING one has not sent the hello that advertised the heartbeat yet.
+ * - **Gated on what this link's hello advertised.** The text comes from
+ *   `roomFrameText` over the same list the hello sent, so it is the exact
+ *   bytes a relay's auto-response pair compares, and only where advertised.
+ * - **One link's failure is its own.** A send that throws is logged and the
+ *   other links still beat; the socket's close handler does the rest.
+ */
+export function pingRemoteLinks(): void {
+  for (const link of links.values()) {
+    if (link.kind !== 'remote' || link.closed) continue;
+    const ws = link.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+    try {
+      ws.send(roomFrameText(helloAccepts(link), { type: ROOM_PING_FRAME }));
+    } catch (e) {
+      console.warn(`[fetchproxy] room-ping on ${link.label} failed:`, e);
+    }
+  }
+}
+
 function scheduleReconnect(link: Link): void {
   if (link.closed) return;
   const table = link.kind === 'remote' ? REMOTE_RECONNECT_BACKOFF_MS : RECONNECT_BACKOFF_MS;
@@ -455,7 +512,7 @@ async function onMessage(link: Link, data: string): Promise<void> {
   // before validation so loopback never parses or acts on them.
   if (link.kind === 'local' && raw !== null && typeof raw === 'object') {
     const type = (raw as { type?: unknown }).type;
-    if (type === ACCOUNT_KEY_FRAME || type === ACCOUNT_ATTEST_FRAME) return;
+    if (type === ACCOUNT_KEY_FRAME || type === ACCOUNT_ATTEST_FRAME || type === ROOM_PONG_FRAME) return;
   }
   let frame: Frame;
   try {
@@ -484,6 +541,10 @@ async function onMessage(link: Link, data: string): Promise<void> {
     await onAccountKey(link, frame);
   } else if (frame.type === ACCOUNT_ATTEST_FRAME) {
     storeAccountAttestation(link, frame as AccountAttestFrame);
+  } else if (frame.type === ROOM_PONG_FRAME) {
+    // X3: the relay's answer to `room-ping`. Its liveness value is on the
+    // relay's side (the room records when it auto-responded); there is
+    // nothing for this side to do but accept it quietly.
   }
   // ready frames from the host shouldn't reach us; ignore.
 }

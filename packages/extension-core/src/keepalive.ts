@@ -37,6 +37,14 @@ export interface KeepaliveDeps {
    * short-circuits when the WS is already connecting or open.
    */
   ensureConnected: () => void;
+  /**
+   * Run after `ensureConnected` on every tick: the production wiring passes
+   * `pingRemoteLinks`, the account-room heartbeat (`room-ping`) on each OPEN
+   * remote link. It must never dial — a link that is down is
+   * `ensureConnected`'s business, on its own backoff. Optional so a caller
+   * with no remote links needs nothing here.
+   */
+  heartbeat?: () => void;
 }
 
 /**
@@ -57,6 +65,14 @@ export function startKeepalive(deps: KeepaliveDeps): void {
       // Don't let a thrown ensureConnected break the subscription —
       // the next alarm should still fire.
       console.error('[fetchproxy] keepalive ensureConnected:', e);
+    }
+    // Separately guarded: a failed reconnect sweep must not silence the
+    // heartbeat on the links that ARE open, or an account room would judge a
+    // live browser stale and hand its MCPs elsewhere.
+    try {
+      deps.heartbeat?.();
+    } catch (e) {
+      console.error('[fetchproxy] keepalive heartbeat:', e);
     }
   });
 }

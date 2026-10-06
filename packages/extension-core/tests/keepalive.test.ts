@@ -89,4 +89,34 @@ describe('startKeepalive', () => {
     alarms.fire(KEEPALIVE_ALARM_NAME);
     expect(ensureConnected).toHaveBeenCalledTimes(2);
   });
+  it('runs the heartbeat after ensureConnected on each keepalive tick only', () => {
+    const { alarms } = makeAlarmsMock();
+    const order: string[] = [];
+    startKeepalive({
+      alarms: alarms as unknown as typeof chrome.alarms,
+      ensureConnected: () => void order.push('connect'),
+      heartbeat: () => void order.push('heartbeat'),
+    });
+    alarms.fire('some-other-alarm');
+    expect(order).toEqual([]);
+    alarms.fire(KEEPALIVE_ALARM_NAME);
+    expect(order).toEqual(['connect', 'heartbeat']);
+  });
+
+  it('still beats when ensureConnected throws, and survives the heartbeat throwing', () => {
+    const { alarms } = makeAlarmsMock();
+    const heartbeat = vi.fn(() => {
+      throw new Error('send blew up');
+    });
+    startKeepalive({
+      alarms: alarms as unknown as typeof chrome.alarms,
+      ensureConnected: () => {
+        throw new Error('connect blew up');
+      },
+      heartbeat,
+    });
+    expect(() => alarms.fire(KEEPALIVE_ALARM_NAME)).not.toThrow();
+    alarms.fire(KEEPALIVE_ALARM_NAME);
+    expect(heartbeat).toHaveBeenCalledTimes(2);
+  });
 });
