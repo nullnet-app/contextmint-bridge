@@ -1861,6 +1861,69 @@ describe('renderPopup — bridge status dots', () => {
       expect(row('b1').querySelector('.bridge-state')?.textContent).toBe('Offline');
     });
   });
+
+  // mcp-host plan task X2: a standby the room says may serve can ask to.
+  describe('Serve from this browser (bridge-serve)', () => {
+    const row = (id: string) => container.querySelector(`[data-target-id="${id}"]`)!;
+    const button = (id: string) => row(id).querySelector<HTMLButtonElement>('.bridge-serve');
+    const standby = (canServe = true) =>
+      ({ role: 'standby', canServe, serving: { label: 'Chrome on Mac' } }) as const;
+
+    it('shows on a connected standby the room says may serve', () => {
+      withBridges({
+        targets: [{ id: 'b1', url: 'wss://h/b', enabled: true, connected: true, role: standby() }],
+        onServe: async () => {},
+      });
+      expect(button('b1')?.textContent).toBe('Serve from this browser');
+      expect(button('b1')?.disabled).toBe(false);
+    });
+
+    it('is absent on a serving link, an unconfirmed one, one with no bridge-role, and an offline one', () => {
+      withBridges({
+        targets: [
+          { id: 'serving', url: 'wss://h1/b', enabled: true, connected: true, role: { role: 'serving', canServe: true } },
+          { id: 'unconfirmed', url: 'wss://h2/b', enabled: true, connected: true, role: standby(false) },
+          { id: 'silent', url: 'wss://h3/b', enabled: true, connected: true },
+          { id: 'offline', url: 'wss://h4/b', enabled: true, connected: false, role: standby() },
+        ],
+        onServe: async () => {},
+      });
+      for (const id of ['serving', 'unconfirmed', 'silent', 'offline']) expect(button(id)).toBeNull();
+    });
+
+    it('is absent without an onServe handler', () => {
+      withBridges({ targets: [{ id: 'b1', url: 'wss://h/b', enabled: true, connected: true, role: standby() }] });
+      expect(button('b1')).toBeNull();
+    });
+
+    it('asks for its own row and no other, once, and disables itself', () => {
+      const onServe = vi.fn(async (_id: string) => {});
+      withBridges({
+        targets: [
+          { id: 'b1', url: 'wss://h1/b', enabled: true, connected: true, role: standby() },
+          { id: 'b2', url: 'wss://h2/b', enabled: true, connected: true, role: standby() },
+        ],
+        onServe,
+      });
+      button('b2')!.click();
+      button('b2')!.click();
+      expect(onServe).toHaveBeenCalledTimes(1);
+      expect(onServe).toHaveBeenCalledWith('b2');
+      expect(button('b2')!.disabled).toBe(true);
+      expect(button('b1')!.disabled).toBe(false);
+    });
+
+    it('stays disabled while an ask waits for the room (servePending)', () => {
+      const onServe = vi.fn(async (_id: string) => {});
+      withBridges({
+        targets: [{ id: 'b1', url: 'wss://h/b', enabled: true, connected: true, role: standby(), servePending: true }],
+        onServe,
+      });
+      expect(button('b1')!.disabled).toBe(true);
+      button('b1')!.click();
+      expect(onServe).not.toHaveBeenCalled();
+    });
+  });
 });
 
 /**

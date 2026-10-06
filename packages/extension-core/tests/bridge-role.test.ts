@@ -134,12 +134,6 @@ describe('advertising bridge-role', () => {
     expect(hello(lastSocket(LOCAL_URL)).accepts).not.toContain('bridge-role');
   });
 
-  // X2 adds `bridge-serve`; X1 does not, so no relay honours a serve claim yet.
-  it('does not advertise bridge-serve', () => {
-    reconcileRemoteLinks([A]);
-    lastSocket(A.url).open();
-    expect(hello(lastSocket(A.url)).accepts).not.toContain('bridge-serve');
-  });
 });
 
 describe('the role per remote link', () => {

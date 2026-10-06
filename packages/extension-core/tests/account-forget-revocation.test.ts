@@ -21,7 +21,7 @@ function area() {
 function remote(id: string, tokenId = 'tok'): Link {
   return { id: `remote:${id}`, kind: 'remote', url: 'wss://gateway.example/bridge', protocols: [], label: id,
     ws: null, reconnectAttempt: 0, nextAttemptAt: 0, sessionNonce: null, accountAttestations: new Map(),
-    closed: false, targetId: id, tokenId, refusal: null, notice: null, role: null, lastImmediateRedialAt: 0 };
+    closed: false, targetId: id, tokenId, refusal: null, notice: null, role: null, servePending: false, lastImmediateRedialAt: 0 };
 }
 
 afterEach(() => {

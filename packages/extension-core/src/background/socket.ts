@@ -43,6 +43,7 @@ import {
   ROOM_PING_FRAME,
   ROOM_PONG_FRAME,
   BRIDGE_ROLE_FRAME,
+  BRIDGE_SERVE_FRAME,
   roomFrameAccepted,
   roomFrameText,
   accountKeyId,
@@ -124,8 +125,9 @@ const REMOTE_RECONNECT_BACKOFF_MS = [1000, 2000, 5000, 15_000, 30_000, 60_000];
  * `peer-gone` only to an extension that lists it. Account identity frames,
  * the account-room heartbeat (`room-ping`, X3) and the room's word on whether
  * this browser serves the account (`bridge-role`, X1) are meaningful only on
- * configured remote credentials; loopback's advertised contract stays
- * unchanged.
+ * configured remote credentials, as is this browser's own ask to serve
+ * (`bridge-serve`, X2, extension → room: listing it tells the room this
+ * browser may send one); loopback's advertised contract stays unchanged.
  */
 const LOCAL_HELLO_ACCEPTS: readonly string[] = Object.freeze(['peer-gone']);
 const REMOTE_HELLO_ACCEPTS: readonly string[] = Object.freeze([
@@ -135,6 +137,7 @@ const REMOTE_HELLO_ACCEPTS: readonly string[] = Object.freeze([
   ACCOUNT_ATTEST_FRAME,
   ROOM_PING_FRAME,
   BRIDGE_ROLE_FRAME,
+  BRIDGE_SERVE_FRAME,
 ]);
 
 function helloAccepts(link: Link): readonly string[] {
@@ -228,8 +231,9 @@ function teardownLink(link: Link): void {
   }
   link.sessionNonce = null;
   // The role described the connection that just ended; the next one is told
-  // afresh on its hello.
+  // afresh on its hello. An ask to serve made on it ends with it.
   link.role = null;
+  link.servePending = false;
   if (dropped.length > 0) broadcastConnectionsChanged();
 }
 
@@ -288,8 +292,9 @@ function connectLink(link: Link): void {
     link.sessionNonce = sessionNonce;
     clearAccountAttestations(link);
     // A fresh hello: whatever a room said about the previous connection no
-    // longer describes this one.
+    // longer describes this one, and an ask made on it is not answered here.
     link.role = null;
+    link.servePending = false;
     const extHello: HelloFrameFromExtension = {
       type: 'hello',
       protocolVersion: PROTOCOL_VERSION,
@@ -597,9 +602,55 @@ function onBridgeRole(link: Link, frame: BridgeRoleFrame): void {
     frame.role === 'serving'
       ? { role: 'serving', canServe: frame.canServe }
       : { role: 'standby', canServe: frame.canServe, serving: { label: frame.serving.label } };
-  if (JSON.stringify(next) === JSON.stringify(link.role)) return;
+  // X2: any good bridge-role is the room's answer to a pending ask — it
+  // answers one whether or not it switched — so it re-enables the button
+  // even when the role itself did not move.
+  const answered = link.servePending;
+  link.servePending = false;
+  if (!answered && JSON.stringify(next) === JSON.stringify(link.role)) return;
   link.role = next;
   broadcastConnectionsChanged();
+}
+
+/**
+ * X2: "Serve from this browser" (mcp-host multi-browser spec §5.7, decisions
+ * M3 and M8). Sends the literal `{"type":"bridge-serve"}` on the ONE link the
+ * popup named, and returns whether it did.
+ *
+ * Only when the room has itself offered it: the link is remote and OPEN, its
+ * current connection's last `bridge-role` said `standby` with
+ * `canServe: true`, and no ask is already waiting for an answer. So:
+ *
+ * - **Never to today's gateway.** A relay that predates the frame never sends
+ *   `bridge-role`, so `link.role` stays null and nothing is sent.
+ * - **Never on loopback** (no room), a serving link, or one whose browser the
+ *   room says is not confirmed for the account.
+ * - **Gated on this link's hello.** The text comes from `roomFrameText` over
+ *   the same `accepts` the hello sent, so it is the exact bytes a relay
+ *   checks and only where advertised.
+ * - **Once per answer.** `servePending` holds the button disabled until the
+ *   room's next `bridge-role` (or the connection ends).
+ *
+ * The room decides. This grants nothing: a browser it does not consider
+ * eligible is ignored there, and which browser serves is the room's call.
+ */
+export function serveFromLink(linkId: string): boolean {
+  const link = links.get(linkId);
+  if (!link || link.kind !== 'remote' || link.closed) return false;
+  const ws = link.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  const role = link.role;
+  if (role === null || role.role !== 'standby' || role.canServe !== true) return false;
+  if (link.servePending) return false;
+  try {
+    ws.send(roomFrameText(helloAccepts(link), { type: BRIDGE_SERVE_FRAME }));
+  } catch (e) {
+    console.warn(`[fetchproxy] bridge-serve on ${link.label} failed:`, e);
+    return false;
+  }
+  link.servePending = true;
+  broadcastConnectionsChanged();
+  return true;
 }
 
 const accountTrust = new AccountTrustStore();
