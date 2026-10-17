@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.3](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.2...v1.7.3) (2026-10-17)
+
+
+### Bug Fixes
+
+* **deps:** bump @fetchproxy/protocol ([#106](https://github.com/nullnet-app/contextmint-bridge/issues/106)) ([edc4697](https://github.com/nullnet-app/contextmint-bridge/commit/edc46976d2f4e92eff0d2433029510ca13c6cb9f))
+
 ## [1.7.2](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.1...v1.7.2) (2026-10-06)
 
 
