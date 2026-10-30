@@ -105,8 +105,8 @@ describe('apple/project.yml: targets and identifiers (D2)', () => {
     expect(targets[app]?.dependencies).toEqual([{ target: appex, embed: true }]);
   });
 
-  it('targets macOS 27 and iOS 27', () => {
-    expect(project.options.deploymentTarget).toEqual({ macOS: '27.0', iOS: '27.0' });
+  it('targets macOS 27.2 and iOS 27.2', () => {
+    expect(project.options.deploymentTarget).toEqual({ macOS: '27.2', iOS: '27.2' });
   });
 
   it.each(MACS)('$name is Apple silicon only, like the rest of the fleet', ({ name }) => {
