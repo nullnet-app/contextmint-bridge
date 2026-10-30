@@ -23,11 +23,12 @@ name: ContextMintBridge
 options:
   bundleIdPrefix: app.nullnet
   deploymentTarget:
-    # The Safari every rule in tools/stage-extension.ts was proven on, and the
-    # extension manifest's strict_min_version. iOS 27 also covers
-    # SFSafariSettings.openExtensionsSettings (iOS 26.2+).
-    macOS: "27.0"
-    iOS: "27.0"
+    # The OS the build is made and tested on (Xcode 27.2 / 27.2 SDKs). It sits
+    # at or above the Safari every rule in tools/stage-extension.ts was proven
+    # on (the extension manifest's strict_min_version, 27.0). iOS 27 also
+    # covers SFSafariSettings.openExtensionsSettings (iOS 26.2+).
+    macOS: "27.2"
+    iOS: "27.2"
   createIntermediateGroups: true
   defaultConfig: Debug
 
