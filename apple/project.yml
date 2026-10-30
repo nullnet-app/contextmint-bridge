@@ -35,6 +35,20 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    # Code is MainActor unless it says otherwise (SE-0466): everything here but
+    # the appex's handler is UI. Approachable concurrency turns on the Swift 7
+    # concurrency features (InferIsolatedConformances,
+    # NonisolatedNonsendingByDefault) that go with that default.
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    # The rest of Swift 7's upcoming features that Swift 6 mode does not
+    # already imply (`swiftc -print-supported-features`), on now so the next
+    # language mode is a no-op here. ImmutableWeakCaptures has no Xcode
+    # setting, so it goes in as a flag.
+    SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+    SWIFT_UPCOMING_FEATURE_INTERNAL_IMPORTS_BY_DEFAULT: YES
+    SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
+    OTHER_SWIFT_FLAGS: $(inherited) -enable-upcoming-feature ImmutableWeakCaptures
     # The appex's pre-build phase runs npm in the repo, outside the derived-data
     # box that user-script sandboxing confines a phase to. Off for that phase.
     ENABLE_USER_SCRIPT_SANDBOXING: NO

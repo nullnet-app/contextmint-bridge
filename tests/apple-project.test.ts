@@ -148,6 +148,35 @@ describe('apple/project.yml: versions', () => {
   });
 });
 
+describe('apple/project.yml: Swift language mode and concurrency', () => {
+  const base = (): Record<string, unknown> => project.settings.base;
+
+  it('builds in Swift 6 mode, MainActor by default, with approachable concurrency', () => {
+    expect(base()['SWIFT_VERSION']).toBe('6.0');
+    expect(base()['SWIFT_DEFAULT_ACTOR_ISOLATION']).toBe('MainActor');
+    expect(base()['SWIFT_APPROACHABLE_CONCURRENCY']).toBe('YES');
+  });
+
+  it.each([
+    'SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY',
+    'SWIFT_UPCOMING_FEATURE_INTERNAL_IMPORTS_BY_DEFAULT',
+    'SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY',
+  ])('turns on %s (Swift 7, not implied by Swift 6 mode)', (setting) => {
+    expect(base()[setting]).toBe('YES');
+  });
+
+  it('turns on ImmutableWeakCaptures, which Xcode has no setting for', () => {
+    expect(String(base()['OTHER_SWIFT_FLAGS'])).toMatch(
+      /-enable-upcoming-feature ImmutableWeakCaptures/,
+    );
+  });
+
+  it.each(TARGETS)('$name inherits the project’s Swift settings, never its own', ({ name }) => {
+    for (const key of Object.keys(settingsOf(name)))
+      expect(key, name).not.toMatch(/^SWIFT_|^OTHER_SWIFT_FLAGS$/);
+  });
+});
+
 describe('apple/project.yml: signing', () => {
   it.each(TARGETS)('$name is unsigned unless a signed build asks', ({ name }) => {
     expect(settingsOf(name)['CODE_SIGNING_ALLOWED']).toBe('NO');
@@ -243,10 +272,17 @@ describe('apple/: the appex', () => {
 
   it('the handler answers nothing, and says why', () => {
     const swift = read('apple/Extension/SafariWebExtensionHandler.swift');
-    expect(swift).toMatch(/class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling/);
+    expect(swift).toMatch(
+      /nonisolated final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling/,
+    );
     expect(swift).toMatch(/completeRequest\(returningItems: (nil|\[\])/);
     expect(swift).not.toMatch(/SFExtensionMessageKey/);
     expect(swift).toMatch(/nativeMessaging/);
+  });
+
+  it('the handler opts out of the MainActor default: Safari calls it off the main thread', () => {
+    const swift = read('apple/Extension/SafariWebExtensionHandler.swift');
+    expect(swift).not.toMatch(/@MainActor|@unchecked|nonisolated\(unsafe\)/);
   });
 
   it('the stage script is executable, as the phase runs it directly', () => {
