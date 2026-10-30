@@ -189,7 +189,7 @@ jobs:
           set -euo pipefail
           XCODE_VERSION=$(xcodebuild -version | sed -n '1s/^Xcode //p')
           ACTIVE_XCODE_BUILD=$(xcodebuild -version | sed -n '2s/^Build version //p')
-          XCODE_BUILD="27A266a"
+          XCODE_BUILD="27B52"
           case "$XCODE_VERSION" in 27.*) ;; *)
             echo "::error::Expected Xcode 27, found $XCODE_VERSION"
             exit 1
