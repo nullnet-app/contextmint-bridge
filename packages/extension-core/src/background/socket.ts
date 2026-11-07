@@ -38,6 +38,8 @@ import {
   type InnerFrame,
   type EncryptedFrame,
   unavailableCapabilitiesHelloField,
+  extensionFeaturesHelloField,
+  EXTENSION_FEATURE_FETCH_BASE64,
   ACCOUNT_KEY_FRAME,
   ACCOUNT_ATTEST_FRAME,
   ROOM_PING_FRAME,
@@ -320,6 +322,12 @@ function connectLink(link: Link): void {
       // and advisory — the authority is `dispatch.ts`, which answers from its
       // own probe, never from anything on the wire.
       ...unavailableCapabilitiesHelloField(unavailableCapabilities(chrome)),
+      // fetchproxy#460: behaviours beyond protocol 4's base that this build
+      // serves — binary fetch (`responseType: 'base64'`, handlers/
+      // fetch-binary.ts), which needs only the worker's own `fetch` and so is
+      // advertised on every platform. Unsigned and advisory: a server trusts
+      // a binary answer on its `bodyEncoding` marker, not on this list.
+      ...extensionFeaturesHelloField([EXTENSION_FEATURE_FETCH_BASE64]),
     };
     ws.send(JSON.stringify(extHello));
     // The link is up: tell any open popup, whose bridge row otherwise keeps

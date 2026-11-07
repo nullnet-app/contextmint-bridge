@@ -176,6 +176,8 @@ describe('the extension hello and unavailable capabilities', () => {
     expect(Object.keys(hello).sort()).toEqual([
       'accepts',
       'extensionId',
+      // fetchproxy#460: the one deliberate addition to Chrome's hello.
+      'features',
       'identityEd25519Pub',
       'identityX25519Pub',
       'platform',
@@ -194,4 +196,14 @@ describe('the extension hello and unavailable capabilities', () => {
     const hello = await openHello();
     expect(hello.unavailableCapabilities).toEqual(['download']);
   });
+
+  it.each(['chrome', 'safari'] as const)(
+    'advertises fetch_base64 (binary fetch, fetchproxy#460) on %s',
+    async (p) => {
+      stubChrome(EVERY_API);
+      vi.stubGlobal('__FETCHPROXY_PLATFORM__', p);
+      const hello = await openHello();
+      expect(hello.features).toEqual(['fetch_base64']);
+    },
+  );
 });
