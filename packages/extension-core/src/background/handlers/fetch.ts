@@ -16,6 +16,7 @@ import { isCsrfSoftMiss, prefersCsrfTab } from '../../lib/csrf-soft-miss.js';
 import { sendToFirstResponsiveTab } from '../../lib/send-to-responsive-tab.js';
 import { sendInner } from '../send-inner.js';
 import { mcpCapabilities } from '../session-scope.js';
+import { runBinaryFetch } from './fetch-binary.js';
 
 export async function handleFetchRequest(
   mcpId: string,
@@ -68,6 +69,13 @@ export async function handleFetchRequest(
       op: 'fetch',
       error: `tabUrl ${req.init.tabUrl} not in domains [${domains.join(', ')}]`,
     });
+    return;
+  }
+  // fetchproxy#460: binary mode runs from THIS worker, not a tab — see
+  // fetch-binary.ts for why that is scoped no wider than the tab path. Both
+  // domain checks above have already run; the final URL is checked there.
+  if (req.init.responseType === 'base64') {
+    await handleBinaryFetch(mcpId, req, domains);
     return;
   }
   // 0.5.2+: iterate ALL matching tabs instead of `.find()`-ing the first
@@ -157,4 +165,47 @@ export async function handleFetchRequest(
       error: resp.error,
     });
   }
+}
+
+async function handleBinaryFetch(
+  mcpId: string,
+  req: InnerRequestFetch,
+  domains: string[],
+): Promise<void> {
+  // A binary fetch never runs in a page, so `inPage` cannot be honoured — and
+  // silently dropping a flag the caller set is how a request ends up running
+  // somewhere other than where it was asked to.
+  if (req.init.inPage === true) {
+    await sendInner(mcpId, {
+      type: 'response',
+      id: req.id,
+      ok: false,
+      op: 'fetch',
+      error: 'init.inPage cannot be combined with responseType "base64" (a binary fetch runs in the background, not a page)',
+    });
+    return;
+  }
+  const result = await runBinaryFetch(req.init, domains);
+  if (result.ok) {
+    await sendInner(mcpId, {
+      type: 'response',
+      id: req.id,
+      ok: true,
+      op: 'fetch',
+      status: result.status,
+      url: result.url,
+      body: result.body,
+      bodyEncoding: 'base64',
+      headers: result.headers,
+    });
+    return;
+  }
+  await sendInner(mcpId, {
+    type: 'response',
+    id: req.id,
+    ok: false,
+    op: 'fetch',
+    error: result.error,
+    ...(result.code !== undefined ? { code: result.code } : {}),
+  });
 }

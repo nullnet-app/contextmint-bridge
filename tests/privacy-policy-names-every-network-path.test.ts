@@ -32,6 +32,12 @@ describe('PRIVACY.md §4 names every network path', () => {
     expect(s4).toMatch(/only after you (start and )?approve Connect/i);
   });
 
+  it('names the binary downloads the background makes for an approved MCP (fetchproxy#460)', () => {
+    expect(s4).toMatch(/binary download/i);
+    expect(s4).toMatch(/background/i);
+    expect(s4).toMatch(/approved for that MCP server/i);
+  });
+
   it('says what the relay operator can see', () => {
     expect(s4).toMatch(/pair code/i);
     expect(s4).toMatch(/mcpId|MCP identifier/i);

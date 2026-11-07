@@ -135,6 +135,12 @@ the specific domains the user approved for that server, and anything outside
 them is refused before it reaches a tab. The broad declaration enables the
 mechanism; the per-server allowlist governs access.
 
+Host permission also lets the background service worker download a file an
+approved server asks for (a PDF, an office document) from a file host that
+sends no CORS headers. The same allowlist applies there, to the request URL
+and to the final URL after redirects; a download that ends anywhere else is
+refused before any of it is read.
+
 ---
 
 ## Single-Purpose Statement

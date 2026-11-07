@@ -182,6 +182,18 @@ unpacked, reload it, and make a real call from a fetchproxy-based MCP or `fpx`.
   `@fetchproxy/protocol`, from its own probe — never from anything on the wire.
   A new capability whose API can be absent in some browser MUST be added to
   `capabilities.ts`, or it is treated as always available.
+- **Binary fetch runs in the background, not a tab (fetchproxy#460).** A
+  `fetch` with `init.responseType: 'base64'` is served by
+  `background/handlers/fetch-binary.ts` from the worker's own `fetch`, where
+  `host_permissions` make CORS irrelevant — so that module is the ONLY scope
+  gate: the request URL and the FINAL URL after redirects must both be on the
+  MCP's declared domains (an off-domain final URL is cancelled unread and
+  named by host only), and the body is capped at `MAX_BINARY_RESPONSE_BYTES`
+  early on `content-length` and again while streaming, refused with
+  `code: 'response_too_large'`. `inPage` is refused in this mode. The hello
+  advertises it as `features: ['fetch_base64']` on every platform (it needs
+  only `fetch`); the answer's `bodyEncoding: 'base64'` marker is what a server
+  trusts. Text mode is untouched.
 - **A page load on an approved site wakes the background** (contextmint-bridge#32).
   Safari runs the background as an event page that a page load alone never
   wakes, so opening an MCP's site left a suspended background with no loopback
