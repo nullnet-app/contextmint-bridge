@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.4...v1.8.0) (2026-11-07)
+
+
+### Features
+
+* **extension-core:** serve binary fetch from the background for hosted file downloads ([#122](https://github.com/nullnet-app/contextmint-bridge/issues/122)) ([6d0ffe2](https://github.com/nullnet-app/contextmint-bridge/commit/6d0ffe2ec31231923ec22e99dfde2ddf37fd537a))
+
+
+### Bug Fixes
+
+* **deps:** bump @fetchproxy/protocol ([#120](https://github.com/nullnet-app/contextmint-bridge/issues/120)) ([b50dd82](https://github.com/nullnet-app/contextmint-bridge/commit/b50dd823968442ea7fb0db16d212f96119af8358))
+
 ## [1.7.4](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.3...v1.7.4) (2026-10-30)
 
 
