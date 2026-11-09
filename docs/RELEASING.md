@@ -56,16 +56,16 @@ ones that are missing, and it stays green.
    ```sh
    PROJECT_ID=contextmint-bridge-release   # any id
    gcloud projects create "$PROJECT_ID"
-   gcloud services enable chromewebstore.googleapis.com iamcredentials.googleapis.com --project="$PROJECT_ID"
+   gcloud services enable chromewebstore.googleapis.com iamcredentials.googleapis.com sts.googleapis.com iam.googleapis.com --project="$PROJECT_ID"
    ```
 
 2. **A service account with no roles.** The Chrome Web Store grants its
    access, not IAM:
 
    ```sh
-   gcloud iam service-accounts create cws-publisher --project="$PROJECT_ID" \
+   gcloud iam service-accounts create chrome-web-store-publisher --project="$PROJECT_ID" \
      --display-name="ContextMint Bridge Chrome Web Store publisher"
-   SA="cws-publisher@${PROJECT_ID}.iam.gserviceaccount.com"
+   SA="chrome-web-store-publisher@${PROJECT_ID}.iam.gserviceaccount.com"
    ```
 
 3. **A Workload Identity pool and provider** that admit only this repo's
