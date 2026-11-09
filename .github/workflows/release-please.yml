@@ -17,25 +17,31 @@ name: release-please
 #
 # Nothing in this repo is published to npm — every workspace is `private`,
 # and tests/release-workflow.test.ts fails if any workflow grows an
-# `npm publish`. The Chrome Web Store upload is a later, separate job.
+# `npm publish`. After the attach, the `chrome-web-store` job uploads the
+# Release's own Chrome zip (never a rebuild) to the Chrome Web Store and
+# submits it for review; it skips green until the owner has configured it
+# (docs/RELEASING.md). The App Store side is deploy-safari-app.yml.
 #
-# A green tag does not mean the zips are attached: the two jobs are
-# independent. Check the Release's assets; to finish a release whose tag
-# exists but whose zips never (or only partly) attached, dispatch this
-# workflow FROM MAIN with `republish_tag`.
+# A green tag does not mean the zips are attached, or that Chrome has the
+# release: the jobs are independent. Check the Release's assets and the
+# chrome-web-store job's notices; to finish a release whose tag exists but
+# whose zips never (or only partly) attached, or whose store upload failed,
+# dispatch this workflow FROM MAIN with `republish_tag`. Each job leaves what
+# is already done alone.
 
 on:
   push:
     branches: [main]
-  # `republish_tag` re-fires the attach job for a tag that ALREADY EXISTS —
-  # for a release whose tag and GitHub Release were cut but whose zips never
-  # (or only partly) attached. Blank on the ordinary path. It lives here rather than in the
+  # `republish_tag` re-fires the attach and Chrome Web Store jobs for a tag
+  # that ALREADY EXISTS — for a release whose tag and GitHub Release were cut
+  # but whose zips never (or only partly) attached, or whose store upload
+  # failed. Blank on the ordinary path. It lives here rather than in the
   # reusable workflow because a called workflow cannot declare its caller's
   # triggers.
   workflow_dispatch:
     inputs:
       republish_tag:
-        description: 'Existing tag to re-attach the extension zips to (e.g. v1.0.0). Blank = skip.'
+        description: 'Existing tag to re-attach the extension zips to and re-submit to the Chrome Web Store (e.g. v1.0.0). Blank = skip.'
         required: false
         type: string
         default: ''
@@ -251,3 +257,197 @@ jobs:
           for target in "${TARGETS[@]}"; do
             attach "$target"
           done
+
+  # Uploads the release's Chrome zip to the Chrome Web Store and submits it
+  # for review, through the v2 API
+  # (https://developer.chrome.com/docs/webstore/api, which supports service
+  # accounts). The one-time owner setup is docs/RELEASING.md §Chrome Web Store.
+  #
+  # The EXACT bytes the release serves: the zip is downloaded from the Release
+  # and checked against its published .sha256, never rebuilt (attach-extension
+  # explains why a rebuild is not the same zip). So this job checks nothing
+  # out and installs nothing.
+  #
+  # Same guard as attach-extension, for the same reason: `publish` covers the
+  # tag path AND a `republish_tag` dispatch, so a failed store upload is
+  # retried by dispatching this workflow FROM MAIN with the tag. attach-extension
+  # leaves the assets alone on that run, and this job finds where the store
+  # stands before doing anything (below).
+  #
+  # Auth is Workload Identity Federation: GitHub's OIDC token is exchanged for
+  # a short-lived access token of the service account the Chrome Web Store
+  # publisher has linked, scoped to the Chrome Web Store. No long-lived key or
+  # refresh token exists anywhere. Every identifier is a repo VARIABLE (none is
+  # a secret); until all four are set the job skips green with a notice, so a
+  # release before the owner's setup does not go red.
+  chrome-web-store:
+    needs: [release-please, attach-extension]
+    if: needs.release-please.outputs.publish == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+      CWS_ITEM_ID: ${{ vars.CWS_ITEM_ID }}
+    steps:
+      - name: Check the Chrome Web Store configuration
+        id: config
+        env:
+          CWS_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.CWS_WORKLOAD_IDENTITY_PROVIDER }}
+          CWS_SERVICE_ACCOUNT: ${{ vars.CWS_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in CWS_PUBLISHER_ID CWS_ITEM_ID CWS_WORKLOAD_IDENTITY_PROVIDER CWS_SERVICE_ACCOUNT; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::notice::Chrome Web Store upload skipped: set the repo variable(s) ${missing[*]} (one-time setup: docs/RELEASING.md, Chrome Web Store). Then dispatch this workflow from main with republish_tag to submit this release."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The asset and its digest as the Release serves them; `sha256sum -c`
+      # fails the job on any mismatch before a byte reaches the store.
+      - name: Download the release's Chrome zip
+        if: steps.config.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ZIP="contextmint-bridge-chrome-${VERSION}.zip"
+          gh release download "$RELEASE_TAG" --pattern "$ZIP" --pattern "$ZIP.sha256" --dir .
+          sha256sum -c "$ZIP.sha256"
+
+      # The access token is masked by the action, lives one hour at most, and
+      # carries only the Chrome Web Store scope. No credentials file is written.
+      - name: Authenticate to Google Cloud
+        id: auth
+        if: steps.config.outputs.ready == 'true'
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.CWS_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          access_token_lifetime: 1800s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      # fetchStatus first, so a re-run is a no-op: this version already
+      # published, newer in the store, or already submitted (PENDING_REVIEW /
+      # STAGED) is a notice. ANOTHER version in review or staged is a warning
+      # and nothing more: the store takes one submission at a time, and this
+      # job never cancels one (no cancelSubmission, rollback or skipReview
+      # anywhere). Otherwise: upload (polling while the store reports
+      # IN_PROGRESS), then publish with DEFAULT_PUBLISH, which submits for
+      # review and publishes on approval. Any non-2xx fails the job with
+      # Google's own message.
+      #
+      # The bearer token goes to curl from a 0600 header file (`-H @file`), so
+      # it is never on a command line or in the log, and the file is removed
+      # on exit.
+      - name: Upload to the Chrome Web Store and submit for review
+        if: steps.config.outputs.ready == 'true'
+        env:
+          CWS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+          POLL_SECONDS: "10"
+          POLL_LIMIT: "60"
+        run: |
+          set -euo pipefail
+          API="https://chromewebstore.googleapis.com"
+          ITEM="publishers/${CWS_PUBLISHER_ID}/items/${CWS_ITEM_ID}"
+          ZIP="contextmint-bridge-chrome-${VERSION}.zip"
+          AUTH="$RUNNER_TEMP/cws-auth-header"
+          RESP="$(mktemp -d)"
+          trap 'rm -rf "$AUTH" "$RESP"' EXIT
+          (umask 077; printf 'Authorization: Bearer %s\n' "$CWS_TOKEN" > "$AUTH")
+          unset CWS_TOKEN
+
+          # api METHOD URL OUT [curl args…]: the answer in OUT; any non-2xx
+          # (or no answer) fails the job with Google's message.
+          api() {
+            local method="$1" url="$2" out="$3" code msg
+            shift 3
+            if ! code=$(curl -sS -X "$method" -H "@$AUTH" -o "$out" -w '%{http_code}' "$@" "$url"); then
+              echo "::error::Chrome Web Store ${method} ${url#"$API"} got no answer."
+              exit 1
+            fi
+            case "$code" in
+              2??) ;;
+              *)
+                msg=$(jq -r '.error.message // empty' "$out" 2>/dev/null || true)
+                echo "::error::Chrome Web Store ${method} ${url#"$API"} answered HTTP ${code}: ${msg:-$(head -c 2000 "$out")}"
+                exit 1
+                ;;
+            esac
+          }
+          # newer A B: A is a later version than B.
+          newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }
+
+          api GET "$API/v2/$ITEM:fetchStatus" "$RESP/status.json"
+          PUBLISHED=$(jq -r '[.publishedItemRevisionStatus.distributionChannels[]?.crxVersion] | .[0] // empty' "$RESP/status.json")
+          SUBMITTED_STATE=$(jq -r '.submittedItemRevisionStatus.state // empty' "$RESP/status.json")
+          SUBMITTED=$(jq -r '[.submittedItemRevisionStatus.distributionChannels[]?.crxVersion] | .[0] // empty' "$RESP/status.json")
+          echo "Chrome Web Store: published ${PUBLISHED:-none}; submitted ${SUBMITTED:-none} ${SUBMITTED_STATE}"
+
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "::notice::Chrome Web Store already publishes ${VERSION}; nothing to upload."
+            exit 0
+          fi
+          if [ -n "$PUBLISHED" ] && newer "$PUBLISHED" "$VERSION"; then
+            echo "::notice::Chrome Web Store already publishes ${PUBLISHED}, newer than ${VERSION}; nothing to upload."
+            exit 0
+          fi
+          case "$SUBMITTED_STATE" in
+            PENDING_REVIEW|STAGED)
+              if [ "$SUBMITTED" = "$VERSION" ]; then
+                echo "::notice::Chrome Web Store already has ${VERSION} ${SUBMITTED_STATE}; nothing to upload."
+                exit 0
+              fi
+              echo "::warning::Chrome Web Store: ${VERSION} was not uploaded, because ${SUBMITTED:-another version} is ${SUBMITTED_STATE} and the store takes one submission at a time. This job never cancels a submission. Once that one is published (or rejected or cancelled in the Developer Dashboard), dispatch this workflow from main with republish_tag=v${VERSION}."
+              exit 0
+              ;;
+          esac
+
+          api POST "$API/upload/v2/$ITEM:upload" "$RESP/upload.json" \
+            -H 'Content-Type: application/zip' -T "$ZIP"
+          STATE=$(jq -r '.uploadState // empty' "$RESP/upload.json")
+          polls=0
+          while [ "$STATE" = IN_PROGRESS ] || [ "$STATE" = UPLOAD_IN_PROGRESS ]; do
+            if [ "$polls" -ge "$POLL_LIMIT" ]; then
+              echo "::error::Chrome Web Store upload of ${VERSION} is still IN_PROGRESS after ${polls} checks; not submitting. Re-run with republish_tag=v${VERSION} once the Developer Dashboard shows the package."
+              exit 1
+            fi
+            polls=$((polls + 1))
+            sleep "$POLL_SECONDS"
+            api GET "$API/v2/$ITEM:fetchStatus" "$RESP/poll.json"
+            STATE=$(jq -r '.lastAsyncUploadState // empty' "$RESP/poll.json")
+          done
+          if [ "$STATE" != SUCCEEDED ]; then
+            echo "::error::Chrome Web Store upload of ${VERSION} ended ${STATE:-without a state}: $(head -c 2000 "$RESP/upload.json")"
+            exit 1
+          fi
+          CRX=$(jq -r '.crxVersion // empty' "$RESP/upload.json")
+          if [ -n "$CRX" ] && [ "$CRX" != "$VERSION" ]; then
+            echo "::error::Chrome Web Store read version ${CRX} from ${ZIP}, not ${VERSION}; not submitting."
+            exit 1
+          fi
+
+          api POST "$API/v2/$ITEM:publish" "$RESP/publish.json" \
+            -H 'Content-Type: application/json' --data '{"publishType":"DEFAULT_PUBLISH"}'
+          jq -r '.warningInfo.warnings[]? | "::warning::Chrome Web Store: \(.reason): \(.description)"' "$RESP/publish.json"
+          RESULT=$(jq -r '.state // empty' "$RESP/publish.json")
+          echo "::notice::Chrome Web Store: ${VERSION} uploaded and submitted for review (${RESULT:-state not reported}); it publishes on approval."
+          {
+            echo "## Chrome Web Store"
+            echo
+            echo "**${VERSION}** uploaded and submitted for review: ${RESULT:-state not reported}."
+          } >> "$GITHUB_STEP_SUMMARY"

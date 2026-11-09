@@ -99,10 +99,12 @@ describe('release-please.yml', () => {
     expect(rp?.with?.republish_tag).toBe('${{ inputs.republish_tag }}');
   });
 
-  /** Jobs with a step that names a target's zip. */
+  /** Jobs with a step that builds a target's zip (chrome-web-store only downloads one). */
   const zipJobsFor = (target: string): string[] =>
     Object.entries(wf.jobs)
-      .filter(([, job]) => (job.steps ?? []).some((s) => (s.run ?? '').includes(zipName(target))))
+      .filter(([, job]) =>
+        (job.steps ?? []).some((s) => (s.run ?? '').includes(`zip -r "../../../${zipName(target)}"`)),
+      )
       .map(([name]) => name);
 
   it.each(TARGETS)('has exactly one job that builds the $label zip', ({ target }) => {
@@ -391,6 +393,410 @@ esac
         expect(r.status).not.toBe(0);
         expect(r.stderr).toContain(`carries ${lone}.sha256 but not ${lone}`);
         expect(uploads()).toEqual([]);
+      },
+    );
+  });
+});
+
+/**
+ * The Chrome Web Store job: after attach-extension, it uploads the EXACT zip
+ * the release carries (downloaded and checked against its .sha256, never
+ * rebuilt) through the v2 API and submits it for review. Until the owner has
+ * configured it, it skips green with a notice naming what is missing.
+ */
+describe('release-please.yml chrome-web-store job', () => {
+  const wf = workflow('release-please.yml');
+  const job = (wf.jobs['chrome-web-store'] ?? { steps: [] }) as Job & {
+    permissions?: Record<string, string>;
+    env?: Record<string, string>;
+  };
+  const steps = job.steps ?? [];
+  const named = (name: string): Step | undefined => steps.find((s) => s.name === name);
+  const config = named('Check the Chrome Web Store configuration');
+  const download = named("Download the release's Chrome zip");
+  const auth = steps.find((s) => (s.uses ?? '').startsWith('google-github-actions/auth@'));
+  const submit = named('Upload to the Chrome Web Store and submit for review');
+  const READY = `steps.${config?.id ?? '<no id>'}.outputs.ready == 'true'`;
+  const VARS = ['CWS_PUBLISHER_ID', 'CWS_ITEM_ID', 'CWS_WORKLOAD_IDENTITY_PROVIDER', 'CWS_SERVICE_ACCOUNT'];
+
+  it('runs after the zips are attached, on a publish, from main only', () => {
+    expect([job.needs].flat()).toEqual(expect.arrayContaining(['release-please', 'attach-extension']));
+    expect(job.if).toContain("needs.release-please.outputs.publish == 'true'");
+    expect(job.if).toContain("github.ref == 'refs/heads/main'");
+  });
+
+  it('is also driven by a republish_tag dispatch (publish covers both paths)', () => {
+    // `publish` is the reusable workflow's fold of release_created and
+    // republish_tag; release_created alone would leave a failed store upload
+    // with no retry.
+    expect(job.if).not.toContain('release_created');
+  });
+
+  it('reads contents and mints an OIDC token, nothing more', () => {
+    expect(job.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
+  });
+
+  it('never rebuilds: no checkout, no npm, no zip', () => {
+    expect(steps.some((s) => (s.uses ?? '').startsWith('actions/checkout@'))).toBe(false);
+    for (const s of steps) {
+      expect(s.run ?? '', s.name).not.toMatch(/\bnpm\b|zip -r/);
+    }
+  });
+
+  it('checks the configuration first, and every later step waits on it', () => {
+    expect(steps[0]).toBe(config);
+    expect(config?.id).toBeTruthy();
+    for (const s of steps.slice(1)) expect(s.if, s.name).toBe(READY);
+    for (const v of VARS) expect(config?.env?.[v] ?? job.env?.[v], v).toBe(`\${{ vars.${v} }}`);
+  });
+
+  it('downloads the release asset and its digest, and checks one against the other', () => {
+    const run = download?.run ?? '';
+    expect(run).toContain('gh release download "$RELEASE_TAG"');
+    expect(run).toContain('--pattern "$ZIP"');
+    expect(run).toContain('--pattern "$ZIP.sha256"');
+    expect(run).toContain('sha256sum -c "$ZIP.sha256"');
+    expect(download?.env?.RELEASE_TAG).toBe(TAG_REF);
+    expect(download?.env?.VERSION).toBe(VERSION_REF);
+    expect(steps.indexOf(download as Step)).toBeLessThan(steps.indexOf(submit as Step));
+  });
+
+  it('authenticates by Workload Identity Federation, pinned, scoped to the Chrome Web Store', () => {
+    expect(auth?.uses).toMatch(/^google-github-actions\/auth@v\d+\.\d+\.\d+$/);
+    expect(auth?.with).toMatchObject({
+      workload_identity_provider: '${{ vars.CWS_WORKLOAD_IDENTITY_PROVIDER }}',
+      service_account: '${{ vars.CWS_SERVICE_ACCOUNT }}',
+      token_format: 'access_token',
+      access_token_scopes: 'https://www.googleapis.com/auth/chromewebstore',
+      create_credentials_file: false,
+      export_environment_variables: false,
+    });
+    // No long-lived key anywhere.
+    expect(auth?.with).not.toHaveProperty('credentials_json');
+    expect(submit?.env?.CWS_TOKEN).toBe(`\${{ steps.${auth?.id ?? '<no id>'}.outputs.access_token }}`);
+  });
+
+  it('uses the v2 API and never cancels, rolls back or skips review', () => {
+    const run = submit?.run ?? '';
+    expect(run).toContain('https://chromewebstore.googleapis.com');
+    expect(run).toContain('/upload/v2/$ITEM:upload');
+    expect(run).toContain('/v2/$ITEM:fetchStatus');
+    expect(run).toContain('/v2/$ITEM:publish');
+    expect(run).not.toMatch(/cancelSubmission|rollback|setPublishedDeployPercentage|skipReview/);
+    expect(submit?.env?.VERSION).toBe(VERSION_REF);
+  });
+
+  describe('configuration check (executed)', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'cmb-cws-config-'));
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const check = (vars: Record<string, string>) => {
+      const out = join(dir, 'out');
+      writeFileSync(out, '');
+      const r = runStep(config?.run ?? 'exit 99', {
+        cwd: dir,
+        env: { GITHUB_OUTPUT: out, ...Object.fromEntries(VARS.map((v) => [v, ''])), ...vars },
+      });
+      return { ...r, out: readFileSync(out, 'utf8') };
+    };
+
+    it('skips green with a ::notice:: naming every unset variable', () => {
+      const r = check({});
+      expect(r.status).toBe(0);
+      expect(r.out).toBe('ready=false\n');
+      const notice = r.stdout.split('\n').find((l) => l.startsWith('::notice::')) ?? '';
+      for (const v of VARS) expect(notice, v).toContain(v);
+      expect(notice).toContain('docs/RELEASING.md');
+    });
+
+    it('names only what is missing', () => {
+      const r = check({ CWS_PUBLISHER_ID: 'pub', CWS_ITEM_ID: 'item', CWS_SERVICE_ACCOUNT: 'sa@x' });
+      expect(r.out).toBe('ready=false\n');
+      expect(r.stdout).toMatch(/::notice::.*CWS_WORKLOAD_IDENTITY_PROVIDER/);
+      expect(r.stdout).not.toMatch(/::notice::.*CWS_ITEM_ID/);
+    });
+
+    it('is ready once all four are set', () => {
+      const r = check(Object.fromEntries(VARS.map((v) => [v, 'x'])));
+      expect(r.status).toBe(0);
+      expect(r.out).toBe('ready=true\n');
+      expect(r.stdout).not.toMatch(/::notice::/);
+    });
+  });
+
+  describe("download (executed against a fake gh)", () => {
+    let dir: string;
+    let bin: string;
+    const ZIP = 'contextmint-bridge-chrome-1.9.0.zip';
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'cmb-cws-dl-'));
+      bin = join(dir, 'bin');
+      mkdirSync(bin);
+      mkdirSync(join(dir, 'published'));
+      mkdirSync(join(dir, 'work'));
+      writeFileSync(
+        join(bin, 'gh'),
+        `#!/usr/bin/env bash
+set -euo pipefail
+R=${JSON.stringify(dir)}
+echo "$*" >> "$R/gh.log"
+[ "$1 $2" = "release download" ] || { echo "fake gh: unexpected $*" >&2; exit 2; }
+shift 3
+dest=.
+pats=()
+while [ $# -gt 0 ]; do
+  case "$1" in --pattern) pats+=("$2"); shift 2 ;; --dir) dest="$2"; shift 2 ;; *) shift ;; esac
+done
+for p in "\${pats[@]}"; do
+  [ -f "$R/published/$p" ] || { echo "no asset $p" >&2; exit 1; }
+  cp "$R/published/$p" "$dest/"
+done
+`,
+      );
+      chmodSync(join(bin, 'gh'), 0o755);
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const publish = (zip: string, digestOf: string): void => {
+      writeFileSync(join(dir, 'published', ZIP), zip);
+      const digest = createHash('sha256').update(digestOf).digest('hex');
+      writeFileSync(join(dir, 'published', `${ZIP}.sha256`), `${digest}  ${ZIP}\n`);
+    };
+    const dl = () =>
+      runStep(download?.run ?? 'exit 99', {
+        cwd: join(dir, 'work'),
+        bin,
+        env: { GH_TOKEN: 'x', VERSION: '1.9.0', RELEASE_TAG: 'v1.9.0' },
+      });
+
+    it('takes the published zip when it matches the published digest', () => {
+      publish('the published zip', 'the published zip');
+      const r = dl();
+      expect(r.status, r.stderr).toBe(0);
+      expect(readFileSync(join(dir, 'work', ZIP), 'utf8')).toBe('the published zip');
+    });
+
+    it('refuses a zip that does not match its digest', () => {
+      publish('tampered', 'the published zip');
+      const r = dl();
+      expect(r.status).not.toBe(0);
+    });
+
+    it('fails when the release carries no Chrome zip', () => {
+      const r = dl();
+      expect(r.status).not.toBe(0);
+    });
+  });
+
+  describe('upload and submit (executed against a fake curl)', () => {
+    let dir: string;
+    let bin: string;
+    const TOKEN = 'ya29.not-a-real-token';
+    const ZIP = 'contextmint-bridge-chrome-1.9.0.zip';
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'cmb-cws-'));
+      bin = join(dir, 'bin');
+      mkdirSync(bin);
+      mkdirSync(join(dir, 'responses'));
+      mkdirSync(join(dir, 'work'));
+      mkdirSync(join(dir, 'tmp'));
+      writeFileSync(join(dir, 'work', ZIP), 'zip bytes');
+      // The Chrome Web Store in miniature. A response file is the HTTP status
+      // on its first line, then the body; `<op>.<n>` answers the n-th call.
+      writeFileSync(
+        join(bin, 'curl'),
+        `#!/usr/bin/env bash
+set -euo pipefail
+R=${JSON.stringify(dir)}
+out=/dev/null; method=GET; url=; upload=; data=; auth=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -w) shift 2 ;;
+    -X) method="$2"; shift 2 ;;
+    -T) upload="$2"; shift 2 ;;
+    -H) case "$2" in @*) auth="$(cat "\${2#@}")" ;; esac; shift 2 ;;
+    --data|-d) data="$2"; shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+op="\${url##*:}"
+n=$(( $(cat "$R/count.$op" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$R/count.$op"
+echo "$method $url upload=$upload data=$data" >> "$R/curl.log"
+echo "$auth" >> "$R/auth.log"
+f="$R/responses/$op.$n"
+[ -f "$f" ] || f="$R/responses/$op"
+head -1 "$f" | tr -d '\\n'
+tail -n +2 "$f" > "$out"
+`,
+      );
+      chmodSync(join(bin, 'curl'), 0o755);
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const respond = (op: string, status: number, body: unknown): void =>
+      writeFileSync(join(dir, 'responses', op), `${status}\n${JSON.stringify(body)}\n`);
+    const calls = (): string[] =>
+      existsSync(join(dir, 'curl.log'))
+        ? readFileSync(join(dir, 'curl.log'), 'utf8').split('\n').filter(Boolean)
+        : [];
+    const ops = (): string[] => calls().map((c) => (c.split(' ')[1] ?? '').split(':').at(-1) ?? '');
+    const status = (published?: string, submitted?: { state: string; version: string }) => ({
+      name: 'publishers/pub/items/item',
+      itemId: 'item',
+      ...(published
+        ? { publishedItemRevisionStatus: { state: 'PUBLISHED', distributionChannels: [{ deployPercentage: 100, crxVersion: published }] } }
+        : {}),
+      ...(submitted
+        ? { submittedItemRevisionStatus: { state: submitted.state, distributionChannels: [{ crxVersion: submitted.version }] } }
+        : {}),
+    });
+    const go = () =>
+      runStep(submit?.run ?? 'exit 99', {
+        cwd: join(dir, 'work'),
+        bin,
+        env: {
+          CWS_TOKEN: TOKEN,
+          CWS_PUBLISHER_ID: 'pub',
+          CWS_ITEM_ID: 'item',
+          VERSION: '1.9.0',
+          RUNNER_TEMP: join(dir, 'tmp'),
+          GITHUB_STEP_SUMMARY: join(dir, 'summary'),
+          POLL_SECONDS: '0',
+          POLL_LIMIT: '3',
+        },
+      });
+    const API = 'https://chromewebstore.googleapis.com';
+
+    it('uploads the zip, then submits it for review, with the bearer header from a file', () => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      respond('upload', 200, { itemId: 'item', crxVersion: '1.9.0', uploadState: 'SUCCEEDED' });
+      respond('publish', 200, { itemId: 'item', state: 'PENDING_REVIEW' });
+      const r = go();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(calls()).toEqual([
+        `GET ${API}/v2/publishers/pub/items/item:fetchStatus upload= data=`,
+        `POST ${API}/upload/v2/publishers/pub/items/item:upload upload=${ZIP} data=`,
+        `POST ${API}/v2/publishers/pub/items/item:publish upload= data={"publishType":"DEFAULT_PUBLISH"}`,
+      ]);
+      expect(readFileSync(join(dir, 'auth.log'), 'utf8').trim().split('\n')).toEqual(
+        Array(3).fill(`Authorization: Bearer ${TOKEN}`),
+      );
+      expect(r.stdout).toMatch(/^::notice::.*1\.9\.0.*PENDING_REVIEW/m);
+    });
+
+    it('never prints the token, and leaves no header file behind', () => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      respond('upload', 400, { error: { code: 400, message: 'boom' } });
+      const r = go();
+      expect(r.stdout + r.stderr).not.toContain(TOKEN);
+      expect(readdirSync(join(dir, 'tmp'))).toEqual([]);
+    });
+
+    it('polls an upload that is still in progress until it succeeds', () => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      writeFileSync(
+        join(dir, 'responses', 'fetchStatus.2'),
+        `200\n${JSON.stringify({ ...status('1.8.0'), lastAsyncUploadState: 'IN_PROGRESS' })}\n`,
+      );
+      writeFileSync(
+        join(dir, 'responses', 'fetchStatus.3'),
+        `200\n${JSON.stringify({ ...status('1.8.0'), lastAsyncUploadState: 'SUCCEEDED' })}\n`,
+      );
+      respond('upload', 200, { itemId: 'item', uploadState: 'IN_PROGRESS' });
+      respond('publish', 200, { itemId: 'item', state: 'PENDING_REVIEW' });
+      const r = go();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(ops()).toEqual(['fetchStatus', 'upload', 'fetchStatus', 'fetchStatus', 'publish']);
+    });
+
+    it('gives up on an upload that never finishes, without publishing', () => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      writeFileSync(
+        join(dir, 'responses', 'fetchStatus.2'),
+        `200\n${JSON.stringify({ ...status('1.8.0'), lastAsyncUploadState: 'IN_PROGRESS' })}\n`,
+      );
+      for (const n of [3, 4, 5]) {
+        writeFileSync(
+          join(dir, 'responses', `fetchStatus.${n}`),
+          `200\n${JSON.stringify({ ...status('1.8.0'), lastAsyncUploadState: 'IN_PROGRESS' })}\n`,
+        );
+      }
+      respond('upload', 200, { itemId: 'item', uploadState: 'IN_PROGRESS' });
+      const r = go();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(/^::error::.*still IN_PROGRESS/m);
+      expect(ops()).not.toContain('publish');
+    });
+
+    it.each([
+      { what: 'an API error', upload: [400, { error: { code: 400, message: 'Invalid version.' } }], expect: 'Invalid version.' },
+      { what: 'a FAILED upload', upload: [200, { uploadState: 'FAILED' }], expect: 'FAILED' },
+      { what: 'a package of the wrong version', upload: [200, { uploadState: 'SUCCEEDED', crxVersion: '1.8.9' }], expect: '1.8.9' },
+    ] as const)('fails on $what with Google’s answer, and never publishes', ({ upload, expect: message }) => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      respond('upload', upload[0], upload[1]);
+      const r = go();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(new RegExp(`^::error::.*${message.replace(/\./g, '\\.')}`, 'm'));
+      expect(ops()).toEqual(['fetchStatus', 'upload']);
+    });
+
+    it('fails on a publish error with Google’s message', () => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      respond('upload', 200, { crxVersion: '1.9.0', uploadState: 'SUCCEEDED' });
+      respond('publish', 403, { error: { code: 403, message: 'The caller does not have permission' } });
+      const r = go();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(/^::error::.*HTTP 403.*The caller does not have permission/m);
+    });
+
+    it('fails on a status error before uploading anything', () => {
+      respond('fetchStatus', 404, { error: { code: 404, message: 'Item not found.' } });
+      const r = go();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(/^::error::.*Item not found\./m);
+      expect(ops()).toEqual(['fetchStatus']);
+    });
+
+    it('surfaces publish warnings as ::warning::', () => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      respond('upload', 200, { crxVersion: '1.9.0', uploadState: 'SUCCEEDED' });
+      respond('publish', 200, {
+        state: 'PENDING_REVIEW',
+        warningInfo: { warnings: [{ reason: 'SOME_REASON', description: 'Something to look at.' }] },
+      });
+      const r = go();
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/^::warning::.*SOME_REASON.*Something to look at\./m);
+    });
+
+    it.each([
+      { what: 'already published', s: status('1.9.0') },
+      { what: 'newer in the store', s: status('2.0.0') },
+      { what: 'already in review', s: status('1.8.0', { state: 'PENDING_REVIEW', version: '1.9.0' }) },
+      { what: 'already approved and staged', s: status('1.8.0', { state: 'STAGED', version: '1.9.0' }) },
+    ])('skips with a ::notice:: when this version is $what', ({ s }) => {
+      respond('fetchStatus', 200, s);
+      const r = go();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^::notice::/m);
+      expect(ops()).toEqual(['fetchStatus']);
+    });
+
+    it.each(['PENDING_REVIEW', 'STAGED'])(
+      'never supersedes another version that is %s: warns with the remedy',
+      (state) => {
+        respond('fetchStatus', 200, status('1.8.0', { state, version: '1.8.5' }));
+        const r = go();
+        expect(r.status).toBe(0);
+        expect(r.stdout).toMatch(new RegExp(`^::warning::.*1\\.8\\.5 is ${state}.*republish_tag`, 'm'));
+        expect(ops()).toEqual(['fetchStatus']);
       },
     );
   });
@@ -746,6 +1152,7 @@ describe('deploy-safari-app.yml', () => {
       'The archive carries one version and the icon',
       'Export',
       'Upload to TestFlight via asc',
+      'Submit for App Review',
     ].map(named);
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -763,9 +1170,238 @@ describe('deploy-safari-app.yml', () => {
     expect(runOf('Install the workspaces').trim()).toBe('npm ci --ignore-scripts');
   });
 
-  it('uploads nothing but to TestFlight: no artifact, no App Store submission', () => {
+  it('uploads no artifact, and submits for App Review only after the TestFlight upload', () => {
     expect(steps.some((s) => (s.uses ?? '').startsWith('actions/upload-artifact'))).toBe(false);
-    expect(code).not.toMatch(/--submit\b|asc submit|review submit/);
+    const submit = named('Submit for App Review');
+    expect(submit).toBeGreaterThan(named('Upload to TestFlight via asc'));
+    // The only step that talks to App Review.
+    const probe = named("Verify the runner's Homebrew asc");
+    for (const [i, s] of steps.entries()) {
+      if (i !== submit && i !== probe) expect(s.run ?? '', s.name).not.toMatch(/review submit|versions (create|update)|localizations update/);
+    }
+    expect(runOf('Submit for App Review')).toContain('tools/app-review.ts plan');
+    expect(steps[submit]?.env?.['APP_REVIEW_SUBMIT']).toBe('${{ vars.APP_REVIEW_SUBMIT }}');
+  });
+
+  it('never cancels, releases or deletes anything, or changes an existing version’s release type', () => {
+    expect(code).not.toMatch(
+      /submissions-cancel|submissions-update|--canceled|versions release|versions delete|items-remove|--submit(?=\s|$)|asc submit/m,
+    );
+    const run = runOf('Submit for App Review');
+    expect(run).not.toMatch(/versions update[^\n]*--release-type/);
+    // A version this job CREATES is MANUAL, so the owner releases it by hand.
+    expect(run).toMatch(/versions create[^\n]*--release-type MANUAL/);
+  });
+
+  it('probes every asc subcommand and flag the workflow uses, before using any', () => {
+    const probe = runOf("Verify the runner's Homebrew asc");
+    const specs = new Map(
+      [...probe.matchAll(/^\s*"([a-z -]+)\|([^"]*)"/gm)].map((m) => [
+        m[1] ?? '',
+        new Set((m[2] ?? '').split(/\s+/).filter(Boolean)),
+      ]),
+    );
+    expect(specs.size).toBeGreaterThan(0);
+    const joined = code.replace(/\\\n\s*/g, ' ');
+    const invocations = [...joined.matchAll(/(?:^|[\s($])asc ([a-z][a-z -]*?)(?= --| "|$)([^\n|)]*)/gm)];
+    expect(invocations.length).toBeGreaterThan(5);
+    for (const m of invocations) {
+      const words = (m[1] ?? '').trim();
+      const key = [...specs.keys()].find((k) => words === k);
+      expect(key, `asc ${words} is not in the probe`).toBeDefined();
+      for (const flag of (m[2] ?? '').match(/--[a-z][a-z-]*/g) ?? []) {
+        expect(specs.get(key ?? '')?.has(flag), `asc ${words} ${flag} is not in the probe`).toBe(true);
+      }
+    }
+  });
+
+  it('lets the submission wait for the build, inside the job timeout', () => {
+    const run = runOf('Submit for App Review');
+    expect(run).toMatch(/review submit[^\n]*--wait/);
+    expect(job['timeout-minutes']).toBeGreaterThanOrEqual(90);
+  });
+
+  describe('Submit for App Review (executed against a fake asc)', () => {
+    let dir: string;
+    let bin: string;
+    const apple = (): string => join(dir, 'apple');
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'deploy-review-'));
+      bin = join(dir, 'bin');
+      mkdirSync(bin);
+      mkdirSync(join(apple(), 'tools'), { recursive: true });
+      mkdirSync(join(apple(), 'build'));
+      mkdirSync(join(dir, 'tmp'));
+      writeFileSync(
+        join(apple(), 'tools', 'app-review.ts'),
+        readFileSync(join(ROOT, 'apple', 'tools', 'app-review.ts')),
+      );
+      writeFileSync(
+        join(dir, 'CHANGELOG.md'),
+        '# Changelog\n\n## [1.9.0](https://x/compare/v1.8.0...v1.9.0) (2026-11-20)\n\n\n### Features\n\n* **extension-core:** a new thing ([#130](https://x/issues/130)) ([abc1234](https://x/commit/abc1234))\n\n## 1.8.0 (2026-11-07)\n\n* old\n',
+      );
+      writeFileSync(join(apple(), 'build', 'publish.json'), JSON.stringify({ publish: { buildId: 'BUILD-9' } }));
+      writeFileSync(join(dir, 'build.json'), JSON.stringify({ data: { id: 'BUILD-9' } }));
+      writeFileSync(
+        join(dir, 'localizations.json'),
+        JSON.stringify({
+          data: [
+            { id: 'L-en', attributes: { locale: 'en-US', whatsNew: null } },
+            { id: 'L-ja', attributes: { locale: 'ja', whatsNew: null } },
+          ],
+        }),
+      );
+      // App Store Connect in miniature: what each read returns, and a log of
+      // every call, arguments joined with spaces, newlines shown as ¶.
+      writeFileSync(
+        join(bin, 'asc'),
+        `#!/usr/bin/env bash
+set -euo pipefail
+R=${JSON.stringify(dir)}
+printf '%s' "$*" | tr '\\n' '¶' >> "$R/asc.log"; echo >> "$R/asc.log"
+case "$1 $2" in
+  "builds info") cat "$R/build.json" ;;
+  "versions list") cat "$R/versions.json" ;;
+  "versions create") echo '{"data":{"id":"NEW"}}' ;;
+  "versions update") echo '{"data":{"id":"updated"}}' ;;
+  "localizations list") cat "$R/localizations.json" ;;
+  "localizations update") echo '{"data":{}}' ;;
+  "review submit") echo '{"submissionId":"S1"}' ;;
+  *) echo "fake asc: unexpected $*" >&2; exit 2 ;;
+esac
+`,
+      );
+      chmodSync(join(bin, 'asc'), 0o755);
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const v = (id: string, versionString: string, state: string) => ({
+      id,
+      attributes: { versionString, platform: 'MAC_OS', appVersionState: state, createdDate: `2026-${id}` },
+    });
+    const versionsAre = (...rows: object[]): void =>
+      writeFileSync(join(dir, 'versions.json'), JSON.stringify({ data: rows }));
+    const log = (): string[] =>
+      existsSync(join(dir, 'asc.log'))
+        ? readFileSync(join(dir, 'asc.log'), 'utf8').split('\n').filter(Boolean)
+        : [];
+    const mutations = (): string[] =>
+      log().filter((l) => !/^(builds info|versions list|localizations list) /.test(l));
+    const submitRun = (env: Record<string, string> = {}) =>
+      runStep(runOf('Submit for App Review'), {
+        cwd: apple(),
+        bin,
+        env: {
+          APP_ID: '6819349214',
+          ASC_PLATFORM: 'MAC_OS',
+          LABEL: 'macOS',
+          BUILD_NUMBER: '4203',
+          MARKETING_VERSION: '1.9.0',
+          APP_REVIEW_SUBMIT: '',
+          RUNNER_TEMP: join(dir, 'tmp'),
+          ...env,
+        },
+      });
+    const SUBMIT = (versionId: string): string =>
+      `review submit --app 6819349214 --version-id ${versionId} --build-id BUILD-9 --platform MAC_OS --wait --timeout 20m --confirm --output json`;
+
+    it('resolves this run’s exact build, by version, build number and platform', () => {
+      versionsAre(v('11-01', '1.9.0', 'PREPARE_FOR_SUBMISSION'));
+      const r = submitRun();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(log()[0]).toBe(
+        'builds info --app 6819349214 --build-number 4203 --platform MAC_OS --version 1.9.0 --output json',
+      );
+      expect(log()[1]).toBe('versions list --app 6819349214 --platform MAC_OS --paginate --output json');
+    });
+
+    it('renames the editable version, fills What’s New from the changelog (English only), and submits', () => {
+      versionsAre(v('11-01', '1.8.0', 'PREPARE_FOR_SUBMISSION'), v('10-01', '1.7.4', 'READY_FOR_DISTRIBUTION'));
+      const r = submitRun();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(mutations()).toEqual([
+        'versions update --version-id 11-01 --version 1.9.0 --output json',
+        'localizations update --id L-en --whats-new Features¶- extension-core: a new thing --output json',
+        SUBMIT('11-01'),
+      ]);
+      expect(log()).toContain('localizations list --version 11-01 --output json');
+      expect(r.stdout).toMatch(/^::notice::.*ja/m);
+      expect(r.stdout).toMatch(/^::notice::macOS 1\.9\.0 \(build 4203\) submitted for App Review/m);
+    });
+
+    it('creates the version when none is editable: MANUAL, the live version’s metadata, no old What’s New', () => {
+      versionsAre(v('11-01', '1.8.0', 'READY_FOR_DISTRIBUTION'));
+      const r = submitRun();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(mutations()).toEqual([
+        'versions create --app 6819349214 --version 1.9.0 --platform MAC_OS --release-type MANUAL --copy-metadata-from 1.8.0 --copy-fields description,keywords,marketingUrl,promotionalText,supportUrl --output json',
+        'localizations update --id L-en --whats-new Features¶- extension-core: a new thing --output json',
+        SUBMIT('NEW'),
+      ]);
+    });
+
+    it('leaves What’s New alone on a first release (App Store Connect takes none)', () => {
+      versionsAre(v('11-01', '1.9.0', 'PREPARE_FOR_SUBMISSION'));
+      const r = submitRun();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(mutations()).toEqual([SUBMIT('11-01')]);
+      expect(r.stdout).toMatch(/^::notice::.*never been released/m);
+    });
+
+    it('does not rewrite What’s New that already says the same', () => {
+      versionsAre(v('11-01', '1.9.0', 'PREPARE_FOR_SUBMISSION'), v('10-01', '1.8.0', 'READY_FOR_DISTRIBUTION'));
+      writeFileSync(
+        join(dir, 'localizations.json'),
+        JSON.stringify({ data: [{ id: 'L-en', attributes: { locale: 'en-US', whatsNew: 'Features\n- extension-core: a new thing' } }] }),
+      );
+      const r = submitRun();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(mutations()).toEqual([SUBMIT('11-01')]);
+    });
+
+    it.each(['WAITING_FOR_REVIEW', 'IN_REVIEW', 'PENDING_DEVELOPER_RELEASE'])(
+      'is a read-only no-op when 1.9.0 is already %s',
+      (state) => {
+        versionsAre(v('11-01', '1.9.0', state));
+        const r = submitRun();
+        expect(r.status, r.stdout + r.stderr).toBe(0);
+        expect(r.stdout).toMatch(/^::notice::/m);
+        expect(mutations()).toEqual([]);
+      },
+    );
+
+    it('warns, and changes nothing, when an older version is still in review', () => {
+      versionsAre(v('11-01', '1.8.0', 'WAITING_FOR_REVIEW'));
+      const r = submitRun();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^::warning::macOS 1\.9\.0 was not submitted.*1\.8\.0 is WAITING_FOR_REVIEW/m);
+      expect(mutations()).toEqual([]);
+    });
+
+    it('APP_REVIEW_SUBMIT=false turns it off before any App Store Connect call', () => {
+      const r = submitRun({ APP_REVIEW_SUBMIT: 'false' });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/^::notice::.*APP_REVIEW_SUBMIT=false/m);
+      expect(log()).toEqual([]);
+    });
+
+    it('refuses a build App Store Connect does not report for this version and number', () => {
+      writeFileSync(join(dir, 'build.json'), JSON.stringify({ data: null }));
+      versionsAre(v('11-01', '1.9.0', 'PREPARE_FOR_SUBMISSION'));
+      const r = submitRun();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(/^::error::.*build 4203/m);
+      expect(mutations()).toEqual([]);
+    });
+
+    it('refuses when that build is not the one this run uploaded', () => {
+      writeFileSync(join(dir, 'build.json'), JSON.stringify({ data: { id: 'SOMEONE-ELSES' } }));
+      versionsAre(v('11-01', '1.9.0', 'PREPARE_FOR_SUBMISSION'));
+      const r = submitRun();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(/^::error::.*SOMEONE-ELSES.*BUILD-9/m);
+      expect(mutations()).toEqual([]);
+    });
   });
 
   it('always destroys the signing material and build products, last', () => {
