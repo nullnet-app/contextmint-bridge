@@ -79,6 +79,16 @@ manifest carry one version. A tag without
 `packages/extension-safari` (v1.0.0) attaches Chrome only. If an attach fails
 part-way, dispatch the workflow from main with `republish_tag`: assets already
 there are left alone and the missing ones are added. Nothing is published to npm.
+After the attach, the `chrome-web-store` job downloads the Release's Chrome zip
+(checked against its `.sha256`, never rebuilt), uploads it through the Chrome Web
+Store API v2 and publishes it (`DEFAULT_PUBLISH`: submitted for review, live on
+approval). It authenticates by Workload Identity Federation as the service
+account linked to the CWS publisher, from four repo VARIABLES
+(`CWS_PUBLISHER_ID`, `CWS_ITEM_ID`, `CWS_WORKLOAD_IDENTITY_PROVIDER`,
+`CWS_SERVICE_ACCOUNT`), and skips green with a notice while any is unset. It
+reads `fetchStatus` first, so a re-run (and `republish_tag`, which drives it too)
+never re-uploads a version the store already has, and it never cancels another
+version's review. Setup, state tables and recovery: `docs/RELEASING.md`.
 release-please never rewrites inter-workspace ranges, so extension-chrome depends
 on extension-core as `"*"` — a pinned range would stop matching the workspace
 after a bump and send `npm ci` to the registry for a package that is never
@@ -94,9 +104,20 @@ manually with the owner's App Store profiles by exact name (never
 number is that workflow's `run_number*100+run_attempt`. Before signing,
 `apple/tools/testflight-preflight.ts` names every missing App Store Connect
 item, profile or certificate at once, and it refuses an archive whose app,
-appex or `manifest.json` disagrees with the tag. App Store submission stays
-manual. A green tag does not mean a TestFlight build: check the run, or
-`asc builds list --profile Nullnet`.
+appex or `manifest.json` disagrees with the tag. After the upload, "Submit for
+App Review" submits that exact build (resolved by version + build number +
+platform, never "latest"); `apple/tools/app-review.ts` decides what to do from
+the platform's version states (rename the editable version, or create one
+MANUAL; skip with a notice if this version is already with Apple; skip with a
+warning, never cancelling, if another is) and renders What's New from this
+release's CHANGELOG.md section, set only once the app has been released on that
+platform. It never releases, cancels or deletes, and never changes an existing
+version's release type: releasing an approved version is the owner's. Repo
+variable `APP_REVIEW_SUBMIT=false` turns submission off (unset = on). Every asc
+subcommand and flag the workflow uses must be in its "Verify the runner's
+Homebrew asc" probe (`tests/release-workflow.test.ts` enforces it). A green tag
+does not mean a TestFlight build or a submission: check the run's notices, or
+`asc versions list --app 6819349214`.
 
 ## Icons
 

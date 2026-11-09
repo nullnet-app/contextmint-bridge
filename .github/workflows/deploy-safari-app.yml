@@ -1,5 +1,6 @@
 # Deploy the ContextMint Bridge Safari app (apple/) to TestFlight, iOS and
-# macOS, on every release tag: archive, sign, export, upload. Plan
+# macOS, on every release tag: archive, sign, export, upload, then submit the
+# uploaded build for App Review. Plan
 # docs/superpowers/plans/2026-10-05-safari-extension-standalone.md, Task 5
 # (decisions D1–D3, owner steps O1–O4).
 #
@@ -32,10 +33,14 @@
 # both platforms (separate TestFlight trains). A re-run of a failed job gets a
 # fresh number; `build_number` overrides it on a manual dispatch.
 #
-# Uploads to TestFlight only. App Store submission stays a manual step in App
-# Store Connect (plan O6). Never runs on a pull request: it is the tag push (or
-# a dispatch) on the `testflight` environment, whose deployment policy allows
-# main and v* tags only.
+# After the upload, "Submit for App Review" submits THIS run's build
+# (apple/tools/app-review.ts decides what to do; docs/RELEASING.md has the
+# state-by-state table). It is on unless the repo variable APP_REVIEW_SUBMIT is
+# `false`, and it never cancels a submission, releases a version or changes an
+# existing version's release type: releasing an approved version stays the
+# owner's manual step (plan O6). Never runs on a pull request: it is the tag
+# push (or a dispatch) on the `testflight` environment, whose deployment policy
+# allows main and v* tags only.
 #
 # The runner is the org's ONE shared, non-ephemeral self-hosted Mac, so Xcode
 # is selected with DEVELOPER_DIR (never `sudo xcode-select`), builds go to a
@@ -68,7 +73,7 @@ jobs:
     name: testflight (${{ matrix.label }})
     runs-on: [self-hosted, macOS]
     environment: testflight
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       # Each platform ships on its own: an iOS failure never cancels macOS.
       fail-fast: false
@@ -235,7 +240,13 @@ jobs:
           missing=0
           for spec in \
             "apps list|--bundle-id --output" \
-            "versions list|--app --platform --limit --output" \
+            "versions list|--app --platform --limit --paginate --output" \
+            "versions create|--app --version --platform --release-type --copy-metadata-from --copy-fields --output" \
+            "versions update|--version-id --version --output" \
+            "builds info|--app --build-number --platform --version --output" \
+            "localizations list|--version --output" \
+            "localizations update|--id --whats-new --output" \
+            "review submit|--app --version --version-id --build-id --platform --wait --timeout --confirm --output" \
             "profiles list|--profile-type --include --paginate --output" \
             "profiles download|--id --output" \
             "testflight groups list|--app --output" \
@@ -535,6 +546,107 @@ jobs:
             --wait \
             --output json | tee build/publish.json
 
+      # App Review, for THIS run's build (docs/RELEASING.md §App Review). On
+      # unless the repo variable APP_REVIEW_SUBMIT is `false`; that decision,
+      # and which version to submit, are tools/app-review.ts's
+      # (tests/apple-app-review.test.ts). This step only runs asc.
+      #
+      # The build is resolved exactly, by version + build number + platform,
+      # and must be the one `asc publish testflight` reported uploading, never
+      # "latest". Then: this version already with Apple is a notice (a re-run
+      # changes nothing); another version with Apple is a warning naming it
+      # and the manual remedy, because Apple takes one submission per platform
+      # and this job never cancels one; otherwise the platform's editable
+      # version is renamed to this release, or one is created (MANUAL release,
+      # the live version's metadata copied, its What's New not), What's New is
+      # set from this release's CHANGELOG.md section for English locales once
+      # the app has been released on the platform, and the build is submitted.
+      #
+      # Nothing here releases a version, changes an existing version's release
+      # type, cancels a submission or deletes anything: the owner releases by
+      # hand after approval.
+      - name: Submit for App Review
+        timeout-minutes: 30
+        env:
+          APP_ID: ${{ steps.pre.outputs.app_id }}
+          ASC_PLATFORM: ${{ matrix.asc_platform }}
+          LABEL: ${{ matrix.label }}
+          BUILD_NUMBER: ${{ steps.ver.outputs.build }}
+          MARKETING_VERSION: ${{ steps.ver.outputs.marketing }}
+          APP_REVIEW_SUBMIT: ${{ vars.APP_REVIEW_SUBMIT }}
+        run: |
+          set -euo pipefail
+          REVIEW="$RUNNER_TEMP/review"
+          mkdir -p "$REVIEW" build
+          OUT="$REVIEW/decision"
+          : > "$OUT"
+          decided() { sed -n "s/^$1=//p" "$OUT" | tail -n 1; }
+
+          node tools/app-review.ts enabled --asc-platform="$ASC_PLATFORM" \
+            --submit="$APP_REVIEW_SUBMIT" --github-output="$OUT"
+          [ "$(decided enabled)" = true ] || exit 0
+
+          BUILD_ID=$(asc builds info --app "$APP_ID" --build-number "$BUILD_NUMBER" --platform "$ASC_PLATFORM" --version "$MARKETING_VERSION" --output json \
+            | jq -r '.data.id // empty')
+          if [ -z "$BUILD_ID" ]; then
+            echo "::error::App Store Connect reports no $LABEL build $BUILD_NUMBER of $MARKETING_VERSION for app $APP_ID; not submitting anything for App Review."
+            exit 1
+          fi
+          UPLOADED=$(jq -r '.publish.buildId // .buildId // empty' build/publish.json 2>/dev/null || true)
+          if [ -n "$UPLOADED" ] && [ "$UPLOADED" != "$BUILD_ID" ]; then
+            echo "::error::App Store Connect resolves $LABEL build $BUILD_NUMBER to $BUILD_ID, but this run uploaded $UPLOADED; not submitting anything for App Review."
+            exit 1
+          fi
+          trap 'echo "::error::$LABEL $MARKETING_VERSION (build $BUILD_NUMBER, $BUILD_ID) is on TestFlight, but its App Review submission stopped at the command above. Nothing was cancelled or released. Re-run this job (it uploads a fresh build and submits that), or finish by hand: asc review submit --app $APP_ID --version $MARKETING_VERSION --platform $ASC_PLATFORM --build-id $BUILD_ID --confirm"' ERR
+
+          asc versions list --app "$APP_ID" --platform "$ASC_PLATFORM" --paginate --output json > "$REVIEW/versions.json"
+          node tools/app-review.ts plan --asc-platform="$ASC_PLATFORM" --version="$MARKETING_VERSION" \
+            --app="$APP_ID" --build-id="$BUILD_ID" --versions="$REVIEW/versions.json" --github-output="$OUT"
+          [ "$(decided action)" = submit ] || exit 0
+
+          VERSION_ID="$(decided version_id)"
+          if [ "$(decided create)" = true ]; then
+            COPY=()
+            if [ -n "$(decided copy_from)" ]; then
+              COPY=(--copy-metadata-from "$(decided copy_from)" --copy-fields "description,keywords,marketingUrl,promotionalText,supportUrl")
+            fi
+            VERSION_ID=$(asc versions create --app "$APP_ID" --version "$MARKETING_VERSION" --platform "$ASC_PLATFORM" --release-type MANUAL ${COPY[@]+"${COPY[@]}"} --output json \
+              | jq -r '.data.id // .id // empty')
+            if [ -z "$VERSION_ID" ]; then
+              echo "::error::asc versions create reported no version id for $LABEL $MARKETING_VERSION."
+              exit 1
+            fi
+            echo "Created $LABEL $MARKETING_VERSION ($VERSION_ID)."
+          elif [ "$(decided rename)" = true ]; then
+            asc versions update --version-id "$VERSION_ID" --version "$MARKETING_VERSION" --output json > /dev/null
+            echo "Renamed $VERSION_ID to $MARKETING_VERSION."
+          fi
+
+          if [ "$(decided released_before)" = true ]; then
+            node tools/app-review.ts whats-new --version="$MARKETING_VERSION" --changelog=../CHANGELOG.md --out="$REVIEW/whats-new.txt"
+            if [ -s "$REVIEW/whats-new.txt" ]; then
+              asc localizations list --version "$VERSION_ID" --output json > "$REVIEW/localizations.json"
+              # The changelog is English: other locales are left as they are.
+              OTHERS=$(jq -r '[.data[] | .attributes.locale // "" | select(startswith("en") | not)] | join(", ")' "$REVIEW/localizations.json")
+              if [ -n "$OTHERS" ]; then
+                echo "::notice::$LABEL $MARKETING_VERSION: What's New left as it is for $OTHERS (CHANGELOG.md is English)."
+              fi
+              jq -r --rawfile text "$REVIEW/whats-new.txt" \
+                '.data[] | select((.attributes.locale // "") | startswith("en")) | select((.attributes.whatsNew // "") != $text) | .id' \
+                "$REVIEW/localizations.json" > "$REVIEW/whats-new-ids.txt"
+              while IFS= read -r LOCALIZATION_ID; do
+                asc localizations update --id "$LOCALIZATION_ID" --whats-new "$(cat "$REVIEW/whats-new.txt")" --output json > /dev/null
+                echo "What's New set on $LOCALIZATION_ID."
+              done < "$REVIEW/whats-new-ids.txt"
+            fi
+          else
+            echo "::notice::$LABEL has never been released, so What's New stays empty (App Store Connect takes none on a first version)."
+          fi
+
+          asc review submit --app "$APP_ID" --version-id "$VERSION_ID" --build-id "$BUILD_ID" --platform "$ASC_PLATFORM" --wait --timeout 20m --confirm --output json \
+            | tee build/review.json
+          echo "::notice::$LABEL $MARKETING_VERSION (build $BUILD_NUMBER) submitted for App Review. The release type stays MANUAL: release it in App Store Connect once Apple approves."
+
       - name: Summary
         if: always()
         env:
@@ -551,6 +663,10 @@ jobs:
               STATE=$(jq -r '.publish.processingState // .processingState // empty' build/publish.json)
               echo
               echo "**Build ID:** \`$BUILD_ID\` — **State:** $STATE"
+            fi
+            if [ -f build/review.json ]; then
+              echo
+              echo "**App Review:** submitted (release type MANUAL)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
