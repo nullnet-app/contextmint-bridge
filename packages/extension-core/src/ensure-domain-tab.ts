@@ -148,6 +148,16 @@ export function __resetRelayGroupForTests(): void {
   inFlight.clear();
 }
 
+/**
+ * Which granted domains get a tab. An MCP may name a subset in its hello's
+ * `tabDomains`, for domains it declares only to capture traffic another site's
+ * tab generates. Filtering the GRANTED list means the hello can narrow what is
+ * opened but never add to it.
+ */
+export function domainsToOpen(granted: readonly string[], tabDomains?: readonly string[]): string[] {
+  return tabDomains === undefined ? [...granted] : granted.filter((d) => tabDomains.includes(d));
+}
+
 export function ensureDomainTab(domain: string): Promise<EnsureDomainTabResult> {
   // Validated before the latch: an invalid domain is the caller's bug and must
   // reject every time, never be cached or shared with an unrelated call.
