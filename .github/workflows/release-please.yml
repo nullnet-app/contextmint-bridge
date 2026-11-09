@@ -420,6 +420,12 @@ jobs:
           api POST "$API/upload/v2/$ITEM:upload" "$RESP/upload.json" \
             -H 'Content-Type: application/zip' -T "$ZIP"
           STATE=$(jq -r '.uploadState // empty' "$RESP/upload.json")
+          # LAST is the newest answer about this upload: the :upload reply, or
+          # the latest fetchStatus poll once the upload went async. The state,
+          # the version check and the failure message all read from it, so an
+          # upload that finishes later is checked exactly like one that
+          # finishes at once.
+          LAST="$RESP/upload.json"
           polls=0
           while [ "$STATE" = IN_PROGRESS ] || [ "$STATE" = UPLOAD_IN_PROGRESS ]; do
             if [ "$polls" -ge "$POLL_LIMIT" ]; then
@@ -429,14 +435,21 @@ jobs:
             polls=$((polls + 1))
             sleep "$POLL_SECONDS"
             api GET "$API/v2/$ITEM:fetchStatus" "$RESP/poll.json"
-            STATE=$(jq -r '.lastAsyncUploadState // empty' "$RESP/poll.json")
+            LAST="$RESP/poll.json"
+            STATE=$(jq -r '.lastAsyncUploadState // empty' "$LAST")
           done
           if [ "$STATE" != SUCCEEDED ]; then
-            echo "::error::Chrome Web Store upload of ${VERSION} ended ${STATE:-without a state}: $(head -c 2000 "$RESP/upload.json")"
+            echo "::error::Chrome Web Store upload of ${VERSION} ended ${STATE:-without a state}: $(head -c 2000 "$LAST")"
             exit 1
           fi
-          CRX=$(jq -r '.crxVersion // empty' "$RESP/upload.json")
-          if [ -n "$CRX" ] && [ "$CRX" != "$VERSION" ]; then
+          CRX=$(jq -r '.crxVersion // empty' "$LAST")
+          if [ -z "$CRX" ]; then
+            # Not a failure: attach-extension already refused to zip a
+            # manifest whose version is not the release's, and the zip was
+            # checked against the release's .sha256 above. Say it, though —
+            # silence here reads as "the store confirmed the version".
+            echo "::notice::Chrome Web Store did not report the uploaded version; relying on the release's own manifest check for ${VERSION}."
+          elif [ "$CRX" != "$VERSION" ]; then
             echo "::error::Chrome Web Store read version ${CRX} from ${ZIP}, not ${VERSION}; not submitting."
             exit 1
           fi

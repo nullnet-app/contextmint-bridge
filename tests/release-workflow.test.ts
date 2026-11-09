@@ -715,6 +715,40 @@ tail -n +2 "$f" > "$out"
       expect(ops()).toEqual(['fetchStatus', 'upload', 'fetchStatus', 'fetchStatus', 'publish']);
     });
 
+    const asyncUpload = (final: Record<string, unknown>): void => {
+      respond('fetchStatus', 200, status('1.8.0'));
+      writeFileSync(
+        join(dir, 'responses', 'fetchStatus.2'),
+        `200\n${JSON.stringify({ ...status('1.8.0'), ...final })}\n`,
+      );
+      respond('upload', 200, { itemId: 'item', uploadState: 'IN_PROGRESS' });
+      respond('publish', 200, { itemId: 'item', state: 'PENDING_REVIEW' });
+    };
+
+    it('checks the version the LAST poll reports when an upload finishes later', () => {
+      asyncUpload({ lastAsyncUploadState: 'SUCCEEDED', crxVersion: '1.8.9' });
+      const r = go();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(/^::error::.*read version 1\.8\.9/m);
+      expect(ops()).not.toContain('publish');
+    });
+
+    it('quotes the poll answer, not the first upload answer, when a later upload FAILS', () => {
+      asyncUpload({ lastAsyncUploadState: 'FAILED', itemError: [{ error_detail: 'manifest-marker' }] });
+      const r = go();
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toMatch(/^::error::.*ended FAILED.*manifest-marker/m);
+      expect(ops()).not.toContain('publish');
+    });
+
+    it('says so when the store reports no version for a later upload, and still submits', () => {
+      asyncUpload({ lastAsyncUploadState: 'SUCCEEDED' });
+      const r = go();
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^::notice::.*did not report the uploaded version/m);
+      expect(ops()).toEqual(['fetchStatus', 'upload', 'fetchStatus', 'publish']);
+    });
+
     it('gives up on an upload that never finishes, without publishing', () => {
       respond('fetchStatus', 200, status('1.8.0'));
       writeFileSync(
