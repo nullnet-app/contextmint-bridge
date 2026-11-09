@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.8.0...v1.9.0) (2026-11-09)
+
+
+### Features
+
+* **extension-core:** open tabs only for the domains an MCP names ([#127](https://github.com/nullnet-app/contextmint-bridge/issues/127)) ([60552ae](https://github.com/nullnet-app/contextmint-bridge/commit/60552ae5098b69a2f4ef9ca7945c3e31b212c784))
+
+
+### Documentation
+
+* **release:** list every Google API the Chrome Web Store setup needs ([#125](https://github.com/nullnet-app/contextmint-bridge/issues/125)) ([6bdddad](https://github.com/nullnet-app/contextmint-bridge/commit/6bdddad4981cc39ed26f513d24e28d4fc51d3df9))
+
 ## [1.8.0](https://github.com/nullnet-app/contextmint-bridge/compare/v1.7.4...v1.8.0) (2026-11-07)
 
 
