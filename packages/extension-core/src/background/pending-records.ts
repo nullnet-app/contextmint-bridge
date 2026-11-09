@@ -54,6 +54,8 @@ interface PendingRecordBase {
  */
 export interface PendingPairRecord extends PendingRecordBase {
   kind: 'pair';
+  /** The hello's `tabDomains`, for the tabs opened once this pair is approved. Not scope. */
+  tabDomains?: string[];
   /** Remote account-linked MCPs with no verified attestation show a warning. */
   vouched?: false;
   /**

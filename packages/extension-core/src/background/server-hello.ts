@@ -41,7 +41,7 @@ import {
 
 import type { ChromeApi } from '../chrome-api.js';
 import { unavailableCapabilities } from '../capabilities.js';
-import { ensureDomainTab } from '../ensure-domain-tab.js';
+import { domainsToOpen, ensureDomainTab } from '../ensure-domain-tab.js';
 import { signWithExtensionIdentity } from '../extension-identity.js';
 import { loadDismissedScopeHashes } from '../vault-records.js';
 import { scopeHash, type AccountScope } from '../lib/scope.js';
@@ -481,7 +481,7 @@ export async function onServerHello(
     mcpIdentityHash.set(result.mcpId, toHex(await sha256(fromB64(hello.identityX25519Pub))));
     if (result.kind === 'account-silent') mcpAccountDerivedDomains.set(result.mcpId, [...result.domains]);
     broadcastConnectionsChanged();
-    for (const d of result.domains) {
+    for (const d of domainsToOpen(result.domains, hello.tabDomains)) {
       void ensureDomainTab(d).catch(() => {
         /* fire-and-forget */
       });
@@ -733,6 +733,7 @@ export async function onServerHello(
     // the long-term key — that fallback IS the v3 derivation.
     sessionPubs: { [result.mcpId]: result.sessionPub },
     domains: [...result.domains],
+    ...(hello.tabDomains !== undefined ? { tabDomains: [...hello.tabDomains] } : {}),
     capabilities: [...result.capabilities],
     cookieKeys: [...result.cookieKeys],
     localStorageKeys: [...result.localStorageKeys],

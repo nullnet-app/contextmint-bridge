@@ -34,7 +34,7 @@ import {
   type ReadyFrame,
 } from '@fetchproxy/protocol';
 import { unavailableCapabilities } from '../capabilities.js';
-import { ensureDomainTab } from '../ensure-domain-tab.js';
+import { domainsToOpen, ensureDomainTab } from '../ensure-domain-tab.js';
 import { signWithExtensionIdentity } from '../extension-identity.js';
 import { recordDismissedScopeHash } from '../vault-records.js';
 import { enc } from '../lib/text.js';
@@ -238,7 +238,7 @@ export async function onApproval(record: AnyPendingRecord): Promise<void> {
       sendOnLink(link, JSON.stringify(ready));
     }
     // Ensure domain tabs for the approved domains (once for the group).
-    for (const d of approved.domains) {
+    for (const d of domainsToOpen(approved.domains, approved.tabDomains)) {
       void ensureDomainTab(d).catch(() => {
         /* noop */
       });
