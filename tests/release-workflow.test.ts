@@ -1286,13 +1286,16 @@ describe('deploy-safari-app.yml', () => {
         }),
       );
       // App Store Connect in miniature: what each read returns, and a log of
-      // every call, arguments joined with spaces, newlines shown as ¶.
+      // every call, arguments joined with spaces, newlines shown as a literal
+      // \\n. ASCII on purpose: GNU tr (CI's Linux runner) maps bytes, not
+      // characters, so a multi-byte marker came out as a broken byte there
+      // while passing on macOS.
       writeFileSync(
         join(bin, 'asc'),
         `#!/usr/bin/env bash
 set -euo pipefail
 R=${JSON.stringify(dir)}
-printf '%s' "$*" | tr '\\n' '¶' >> "$R/asc.log"; echo >> "$R/asc.log"
+printf '%s' "$*" | awk 'BEGIN { ORS = "" } NR > 1 { print "\\\\n" } { print }' >> "$R/asc.log"; echo >> "$R/asc.log"
 case "$1 $2" in
   "builds info") cat "$R/build.json" ;;
   "versions list") cat "$R/versions.json" ;;
@@ -1355,7 +1358,7 @@ esac
       expect(r.status, r.stdout + r.stderr).toBe(0);
       expect(mutations()).toEqual([
         'versions update --version-id 11-01 --version 1.9.0 --output json',
-        'localizations update --id L-en --whats-new Features¶- extension-core: a new thing --output json',
+        'localizations update --id L-en --whats-new Features\\n- extension-core: a new thing --output json',
         SUBMIT('11-01'),
       ]);
       expect(log()).toContain('localizations list --version 11-01 --output json');
@@ -1369,7 +1372,7 @@ esac
       expect(r.status, r.stdout + r.stderr).toBe(0);
       expect(mutations()).toEqual([
         'versions create --app 6819349214 --version 1.9.0 --platform MAC_OS --release-type MANUAL --copy-metadata-from 1.8.0 --copy-fields description,keywords,marketingUrl,promotionalText,supportUrl --output json',
-        'localizations update --id L-en --whats-new Features¶- extension-core: a new thing --output json',
+        'localizations update --id L-en --whats-new Features\\n- extension-core: a new thing --output json',
         SUBMIT('NEW'),
       ]);
     });
